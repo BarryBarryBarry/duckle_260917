@@ -255,28 +255,54 @@ pub fn execute_with(
         .min(plan.claimable_count())
         .max(1);
     let requires_artifact = work.requires_artifact();
+    // The file is the authority from here on, so it has to exist before the
+    // first worker reads it back. The executor's own copy is a cache of what it
+    // last saw there, never the thing it writes from.
+    let _ = backfill::save(workspace, &plan);
+    let id = plan.id.clone();
     let shared = Arc::new(Mutex::new(plan));
 
     std::thread::scope(|scope| {
         for _ in 0..workers {
             let shared = Arc::clone(&shared);
             let workspace = workspace.to_path_buf();
+            let id = id.clone();
             scope.spawn(move || loop {
                 // Claim one slice under the lock and mark it running on disk
                 // before starting, so a crash leaves it `running` for the next
                 // start to reconcile rather than looking untouched.
+                //
+                // Claimed against the FILE, not against what this process last
+                // wrote: a cancel or a retry from the console, MCP or the CLI
+                // lands there, and a claim taken from memory would both miss it
+                // and then overwrite it.
                 let claimed = {
                     let mut plan = shared.lock().unwrap_or_else(|p| p.into_inner());
-                    // #326: an ordered chain adds a predecessor requirement
-                    // to the same claim, so a link whose predecessor has not
-                    // landed is passed over rather than run out of order.
-                    let Some(idx) = (0..plan.partitions.len()).find(|i| plan.claimable(*i)) else {
-                        return;
-                    };
-                    plan.partitions[idx].state = State::Running;
-                    plan.partitions[idx].attempts += 1;
-                    let _ = backfill::save(&workspace, &plan);
-                    (idx, plan.partitions[idx].clone())
+                    let taken = backfill::update(&workspace, &id, |disk| {
+                        // #326: an ordered chain adds a predecessor requirement
+                        // to the same claim, so a link whose predecessor has not
+                        // landed is passed over rather than run out of order.
+                        let idx = (0..disk.partitions.len()).find(|i| disk.claimable(*i))?;
+                        disk.partitions[idx].state = State::Running;
+                        disk.partitions[idx].attempts += 1;
+                        Some((idx, disk.partitions[idx].clone()))
+                    });
+                    match taken {
+                        Ok((fresh, Some(got))) => {
+                            *plan = fresh;
+                            got
+                        }
+                        // Nothing left to claim: finished, or cancelled while
+                        // this worker was busy.
+                        Ok((fresh, None)) => {
+                            *plan = fresh;
+                            return;
+                        }
+                        // A workspace that cannot record progress must not do
+                        // hours of work it will be unable to remember - the
+                        // same stance runlock takes for a run.
+                        Err(_) => return,
+                    }
                 };
                 let (idx, slice) = claimed;
                 // #295: this exact slice of this exact release may already have
@@ -303,20 +329,23 @@ pub fn execute_with(
                 });
                 if let Some((other, prior)) = done_already {
                     let mut plan = shared.lock().unwrap_or_else(|p| p.into_inner());
-                    let p = &mut plan.partitions[idx];
-                    p.state = State::Succeeded;
-                    p.run_id = prior.run_id.clone();
-                    p.artifact = prior.artifact.clone();
-                    p.finished_at = Some(chrono::Utc::now().to_rfc3339());
-                    p.error = None;
                     let told = SliceOutcome {
                         key: slice.key.clone(),
-                        run_id: prior.run_id,
+                        run_id: prior.run_id.clone(),
                         error: None,
                         reused_from: Some(other),
-                        artifact: prior.artifact,
+                        artifact: prior.artifact.clone(),
                     };
-                    let _ = backfill::save(&workspace, &plan);
+                    if let Ok((fresh, ())) = backfill::update(&workspace, &id, |disk| {
+                        let p = &mut disk.partitions[idx];
+                        p.state = State::Succeeded;
+                        p.run_id = prior.run_id;
+                        p.artifact = prior.artifact;
+                        p.finished_at = Some(chrono::Utc::now().to_rfc3339());
+                        p.error = None;
+                    }) {
+                        *plan = fresh;
+                    }
                     drop(plan);
                     on_slice(told);
                     continue;
@@ -324,45 +353,59 @@ pub fn execute_with(
                 let outcome = work.run(&slice);
                 {
                     let mut plan = shared.lock().unwrap_or_else(|p| p.into_inner());
-                    let p = &mut plan.partitions[idx];
-                    p.finished_at = Some(chrono::Utc::now().to_rfc3339());
-                    match outcome {
+                    // Decided BEFORE the write rather than inside it, so a
+                    // ledger that could not be updated still leaves the caller
+                    // told what happened.
+                    let finished_at = Some(chrono::Utc::now().to_rfc3339());
+                    // `set_artifact` is an Option of an Option on purpose: the
+                    // failure arms leave whatever the slice already carried
+                    // alone, and only success replaces it.
+                    let (state, run_id, set_artifact, error) = match outcome {
                         // #306, the rule that is easy to get wrong: the query
                         // finishing is not the slice succeeding. A slice that
                         // must commit an output and did not is a FAILURE, not a
                         // success with nothing to show - because the difference
                         // between them is a retry that redoes the work and a
                         // retry that skips it.
-                        Ok(Done { run_id, artifact }) if requires_artifact && artifact.is_none() => {
-                            p.state = State::Failed;
-                            p.run_id = Some(run_id);
-                            p.error = Some(
+                        Ok(Done { run_id, artifact }) if requires_artifact && artifact.is_none() => (
+                            State::Failed,
+                            Some(run_id),
+                            None,
+                            Some(
                                 "the read finished but no output was committed, so there is                                  nothing to reuse and the slice is not done"
                                     .to_string(),
-                            );
-                        }
+                            ),
+                        ),
                         Ok(Done { run_id, artifact }) => {
-                            p.state = State::Succeeded;
-                            p.run_id = Some(run_id);
-                            p.artifact = artifact;
-                            p.error = None;
+                            (State::Succeeded, Some(run_id), Some(artifact), None)
                         }
-                        Err((run_id, e)) => {
-                            p.state = State::Failed;
-                            p.run_id = run_id;
-                            p.error = Some(e);
-                        }
-                    }
-                    // Copied out before the save, so the callback does not
-                    // hold a borrow of the plan while it is written.
+                        Err((run_id, e)) => (State::Failed, run_id, None, Some(e)),
+                    };
                     let told = SliceOutcome {
                         key: slice.key.clone(),
-                        run_id: p.run_id.clone(),
-                        error: p.error.clone(),
+                        run_id: run_id.clone(),
+                        error: error.clone(),
                         reused_from: None,
-                        artifact: p.artifact.clone(),
+                        artifact: match &set_artifact {
+                            Some(a) => a.clone(),
+                            None => slice.artifact.clone(),
+                        },
                     };
-                    let _ = backfill::save(&workspace, &plan);
+                    // Onto the file, which may have been cancelled or retried
+                    // since this slice was claimed. Only this slice's fields
+                    // are touched, so such an edit survives.
+                    if let Ok((fresh, ())) = backfill::update(&workspace, &id, |disk| {
+                        let p = &mut disk.partitions[idx];
+                        p.finished_at = finished_at;
+                        p.state = state;
+                        p.run_id = run_id;
+                        p.error = error;
+                        if let Some(a) = set_artifact {
+                            p.artifact = a;
+                        }
+                    }) {
+                        *plan = fresh;
+                    }
                     drop(plan);
                     // Outside the lock: a caller printing a line, or writing to
                     // a socket, must not hold up the other workers.
@@ -375,9 +418,16 @@ pub fn execute_with(
     let mut plan = Arc::try_unwrap(shared)
         .map(|m| m.into_inner().unwrap_or_else(|p| p.into_inner()))
         .unwrap_or_else(|arc| arc.lock().unwrap_or_else(|p| p.into_inner()).clone());
-    plan.pid = None;
-    let _ = backfill::save(workspace, &plan);
-    plan
+    // Clearing the pid is the only change here, so it goes through the file
+    // too: returning this process's copy would hand the caller a plan without
+    // whatever was cancelled or retried while it ran.
+    match backfill::update(workspace, &id, |disk| disk.pid = None) {
+        Ok((fresh, ())) => fresh,
+        Err(_) => {
+            plan.pid = None;
+            plan
+        }
+    }
 }
 
 /// One partition: an ordinary durable run with the slice's parameters bound.
@@ -674,6 +724,74 @@ mod tests {
             requires,
             fail: fail.map(str::to_string),
         }
+    }
+
+    /// Work that cancels the backfill from outside while the executor runs,
+    /// doing exactly what the console's cancel action does.
+    struct Canceller {
+        workspace: PathBuf,
+        id: String,
+        ran: AtomicUsize,
+    }
+
+    impl SliceWork for Canceller {
+        fn run(&self, slice: &PartitionRun) -> Result<Done, (Option<String>, String)> {
+            if self.ran.fetch_add(1, Ordering::SeqCst) == 0 {
+                // serve.rs's "cancel": load, mark the open slices, save.
+                let mut plan = backfill::load(&self.workspace, &self.id).expect("load");
+                plan.cancel();
+                plan.pid = None;
+                backfill::save(&self.workspace, &plan).expect("save");
+            }
+            Ok(Done {
+                run_id: format!("run-{}", slice.key),
+                artifact: None,
+            })
+        }
+        fn requires_artifact(&self) -> bool {
+            false
+        }
+    }
+
+    /// A cancel written while the backfill runs has to stick.
+    ///
+    /// The executor took the plan into memory once and wrote the WHOLE document
+    /// back on every slice transition, without ever reading the file again. So
+    /// an operator's cancel - or a retry, from the console, MCP or the CLI -
+    /// was reverted by the next slice that finished, and the executor carried
+    /// on claiming slices it had been told to stop taking. Cancelling while it
+    /// runs is the only time anyone cancels.
+    ///
+    /// `cancel` moves every open slice to `cancelled` and `is_claimable` is
+    /// `requested` alone, so the workers stop of their own accord the moment
+    /// they read the file. Nothing else was needed; they simply never read it.
+    #[test]
+    fn a_cancel_written_during_a_run_is_not_reverted_by_the_next_slice() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut plan = slices(&["a", "b", "c", "d"]);
+        // One worker, so the count below is exact rather than a race.
+        plan.max_concurrent = 1;
+        let id = plan.id.clone();
+        let w = Canceller {
+            workspace: tmp.path().to_path_buf(),
+            id,
+            ran: AtomicUsize::new(0),
+        };
+
+        let out = execute_with(tmp.path(), plan, true, &w, &|_| {});
+
+        assert_eq!(
+            w.ran.load(Ordering::SeqCst),
+            1,
+            "the executor kept claiming slices after being cancelled: {:?}",
+            out.counts()
+        );
+        assert_eq!(
+            out.partitions.iter().filter(|p| p.state == State::Cancelled).count(),
+            3,
+            "the cancel was overwritten by the executor's own snapshot: {:?}",
+            out.counts()
+        );
     }
 
     /// #306, the rule Louis named: "the query completed" is not "the slice

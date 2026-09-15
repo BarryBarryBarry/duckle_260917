@@ -493,6 +493,30 @@ pub fn save(workspace: &Path, backfill: &Backfill) -> Result<(), String> {
     std::fs::rename(&tmp, path_for(workspace, &backfill.id)).map_err(|e| e.to_string())
 }
 
+/// Apply a change to the plan ON DISK, under the store lock.
+///
+/// The executor used to hold the whole plan in memory for the life of a run and
+/// write it back on every slice transition, never reading the file again. A
+/// cancel or a retry written meanwhile by the console, MCP or the CLI was
+/// therefore reverted by the next slice that finished - and while it runs is
+/// the only time anyone cancels a backfill. The file is the authority: this
+/// reads it, applies the change and writes it back while holding the lock, so a
+/// concurrent edit is merged rather than overwritten.
+///
+/// Keyed per backfill, so two of them never wait on each other, and under the
+/// nested `store` group so a pipeline run cannot block it or be blocked by it.
+pub fn update<T>(
+    workspace: &Path,
+    id: &str,
+    f: impl FnOnce(&mut Backfill) -> T,
+) -> Result<(Backfill, T), String> {
+    let _guard = crate::runlock::lock_store(workspace, &format!("backfill-{id}"))?;
+    let mut plan = load(workspace, id)?;
+    let out = f(&mut plan);
+    save(workspace, &plan)?;
+    Ok((plan, out))
+}
+
 pub fn load(workspace: &Path, id: &str) -> Result<Backfill, String> {
     let path = path_for(workspace, id);
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
