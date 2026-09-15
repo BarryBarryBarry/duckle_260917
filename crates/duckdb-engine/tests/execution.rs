@@ -146,6 +146,60 @@ fn a_tagged_column_is_masked_in_the_preview_a_run_returns() {
     );
 }
 
+#[test]
+fn restricted_install_is_refused_in_batched_and_per_stage_runs() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    let policy = tmp.path().join("policy.yaml");
+    std::fs::write(
+        &policy,
+        "mode: enforce\nnetwork:\n  allowedDomains:\n    - api.example\n",
+    )
+    .unwrap();
+    std::env::set_var("DUCKLE_POLICY_FILE", &policy);
+
+    let d = doc(
+        json!([
+            node(
+                "q1",
+                "code.sql",
+                json!({
+                    "pureSql": true,
+                    "sql": "INSTALL duckle_no_such_ext_xyz; CREATE OR REPLACE VIEW q1 AS SELECT 1 AS a;"
+                })
+            ),
+            node(
+                "k1",
+                "snk.csv",
+                json!({ "path": out_path(tmp.path(), "out.csv"), "hasHeader": true })
+            )
+        ]),
+        json!([main_edge("e1", "q1", "k1")]),
+    );
+
+    let batched = engine.execute_pipeline(&d);
+    let per_stage = engine.execute_pipeline_with_events(&d, Some("k1"), None, |_| {});
+    std::env::remove_var("DUCKLE_POLICY_FILE");
+
+    for result in [batched, per_stage] {
+        assert_eq!(
+            result.status, "error",
+            "unexpected success: {:?}",
+            result.error
+        );
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("INSTALL is disabled"),
+            "wrong refusal: {:?}",
+            result.error
+        );
+    }
+}
+
 fn main_edge(id: &str, source: &str, target: &str) -> Value {
     json!({ "id": id, "source": source, "target": target, "data": { "connectionType": "main" } })
 }
