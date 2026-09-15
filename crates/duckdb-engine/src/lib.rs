@@ -2400,8 +2400,12 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::PdfSource(spec)) => {
                         self.run_pdf_source(&db_path, &secret_prefix, spec)
                     }
-            Some(RuntimeSpec::HtmlSource(spec)) => self.run_html_source(&db_path, spec),
-            Some(RuntimeSpec::XmlSource(spec)) => self.run_xml_source(&db_path, spec, &mut artifacts),
+            Some(RuntimeSpec::HtmlSource(spec)) => {
+                self.run_html_source(&db_path, &secret_prefix, spec)
+            }
+            Some(RuntimeSpec::XmlSource(spec)) => {
+                self.run_xml_source(&db_path, &secret_prefix, spec, &mut artifacts)
+            }
                     Some(RuntimeSpec::XmlSink(spec)) => self.run_xml_sink(&db_path, spec),
                     Some(RuntimeSpec::AvroSink(spec)) => self.run_avro_sink(&db_path, spec),
                     Some(RuntimeSpec::QvdSink(spec)) => self.run_qvd_sink(&db_path, spec),
@@ -5031,11 +5035,15 @@ pub(crate) fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), E
         .arg("-c")
         .arg(sql)
         .output()
-        .map_err(|e| EngineError::Query(format!("duckdb CLI for rest source: {}", e)))?;
+        .map_err(|e| EngineError::Query(format!("duckdb CLI: {}", e)))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        // Named for the helper, not for one of its callers. This started as the
+        // rest source's own materialize and now has nine callers - an artifact
+        // list, a spill, the output cache, the finalizers - so saying "rest
+        // source" sent anyone reading a failed cache restore to the wrong node.
         return Err(EngineError::Query(format!(
-            "rest source materialize failed: {}",
+            "duckdb statement failed: {}",
             stderr.chars().take(500).collect::<String>()
         )));
     }

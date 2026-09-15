@@ -6321,17 +6321,24 @@ impl DuckdbEngine {
         // Per node, so two artifact-reading nodes in one pipeline cannot
         // overwrite each other's list.
         let list = format!("duckle_artifacts_{}", metric_ident(tag));
+        // The prefix goes HERE and nowhere else in this walk. This is the one
+        // statement that reads the upstream view, so it is the one that can
+        // resolve an `s3://` scan and therefore the one that needs the
+        // credentials; every stage is a fresh CLI session, so a secret created
+        // for some other invocation is already gone. Reading the list back
+        // touches only the local table written just below it.
         crate::apply_duckdb_sql(
             &self.bin,
             db,
             &format!(
-                "CREATE OR REPLACE TABLE {} AS SELECT row_number() OVER () AS duckle_rn, * FROM {}",
+                "{}CREATE OR REPLACE TABLE {} AS SELECT row_number() OVER () AS duckle_rn, * FROM {}",
+                secret_prefix,
                 plan::quote_ident(&list),
                 plan::quote_ident(view)
             ),
         )?;
 
-        let result = self.drain_artifact_list(db, secret_prefix, input, &list, &mut visit);
+        let result = self.drain_artifact_list(db, input, &list, &mut visit);
         // Dropped whether the walk succeeded or not: the list is scratch, and
         // leaving it behind would grow the run database every time.
         let _ = crate::apply_duckdb_sql(
@@ -6342,10 +6349,13 @@ impl DuckdbEngine {
         result
     }
 
+    /// Reads back the table `for_each_artifact_input` just wrote, which is
+    /// local to the run database. No credentials are taken, because none are
+    /// needed and a parameter that is threaded here is one an author can
+    /// mistake for the place the remote read happens.
     fn drain_artifact_list(
         &self,
         db: &Path,
-        secret_prefix: &str,
         input: &plan::ArtifactInput,
         list: &str,
         visit: &mut impl FnMut(ResolvedArtifact) -> Result<(), EngineError>,
@@ -6358,8 +6368,7 @@ impl DuckdbEngine {
             let rows = self.run_rows(
                 Some(db),
                 &format!(
-                    "{}SELECT * FROM {} WHERE duckle_rn > {} AND duckle_rn <= {} ORDER BY duckle_rn",
-                    secret_prefix,
+                    "SELECT * FROM {} WHERE duckle_rn > {} AND duckle_rn <= {} ORDER BY duckle_rn",
                     plan::quote_ident(list),
                     offset,
                     offset + batch_size
@@ -8414,6 +8423,7 @@ impl DuckdbEngine {
     pub(crate) fn run_html_source(
         &self,
         db: &Path,
+        secret_prefix: &str,
         spec: &HtmlSourceSpec,
     ) -> Result<String, EngineError> {
         self.check_cancelled()?;
@@ -8648,7 +8658,7 @@ impl DuckdbEngine {
             Ok(next)
         };
         if from_upstream {
-            self.for_each_artifact_input(db, "", &spec.input, &spec.node_id, |a| {
+            self.for_each_artifact_input(db, secret_prefix, &spec.input, &spec.node_id, |a| {
                 handle(&a.uri, &a.sha256, &a.row).map(|_| ())
             })?;
         } else {
@@ -8877,6 +8887,7 @@ impl DuckdbEngine {
     pub(crate) fn run_xml_source(
         &self,
         db: &Path,
+        secret_prefix: &str,
         spec: &XmlSourceSpec,
         artifacts: &mut Vec<crate::ArtifactRef>,
     ) -> Result<String, EngineError> {
@@ -8945,7 +8956,7 @@ impl DuckdbEngine {
             // bounded-parts machinery from #283 then bounds the WHOLE corpus
             // rather than each file, so a million small documents cannot do
             // what one huge document already could not.
-            self.for_each_artifact_input(db, "", &spec.input, &spec.node_id, |artifact| {
+            self.for_each_artifact_input(db, secret_prefix, &spec.input, &spec.node_id, |artifact| {
                 let (uri, source_sha, upstream_row) =
                     (&artifact.uri, &artifact.sha256, &artifact.row);
                 self.check_cancelled()?;
@@ -23167,5 +23178,67 @@ mod source_path_of_tests {
         // Only a single-letter prefix is a drive. A key that legitimately
         // contains a colon keeps it.
         assert_eq!(source_path_of("s3://bucket/odd:name/f.txt"), "odd:name/f.txt");
+    }
+}
+
+#[cfg(test)]
+mod artifact_input_tests {
+    use super::*;
+
+    /// The prefix carries the pipeline's cloud credentials, and every stage is
+    /// a fresh CLI session, so it belongs on whichever statement does the
+    /// remote read.
+    ///
+    /// #282 moved the corpus list out of memory and into a table, and put the
+    /// prefix on the read of that LOCAL scratch table - which needs nothing -
+    /// while leaving the statement that materialises the upstream view bare.
+    /// That is the statement that resolves an `s3://` read. The resolver it
+    /// replaced, `resolve_artifact_inputs`, still has it the right way round,
+    /// so this is a rule that stayed correct in one twin and was lost in the
+    /// other.
+    ///
+    /// An ATTACH stands in for a secret: session-scoped in exactly the same
+    /// way, and local, so the view is unreadable without the prefix and
+    /// readable with it.
+    #[test]
+    fn the_prefix_reaches_the_statement_that_reads_the_upstream_view() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.exists())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN to a duckdb CLI to run");
+            return;
+        };
+        let engine = DuckdbEngine::new(bin.clone());
+        let tmp = tempfile::tempdir().unwrap();
+        let side = tmp.path().join("side.db");
+        let run = tmp.path().join("run.db");
+        let posix = |p: &std::path::Path| p.to_string_lossy().replace('\\', "/");
+
+        // The upstream relation sits behind something only the prefix opens.
+        crate::apply_duckdb_sql(&bin, &side, "CREATE TABLE t AS SELECT 'file:///a.pdf' AS uri")
+            .unwrap();
+        let prefix = format!("ATTACH '{}' AS side; ", posix(&side));
+        crate::apply_duckdb_sql(
+            &bin,
+            &run,
+            &format!("{prefix}CREATE VIEW v AS SELECT * FROM side.t"),
+        )
+        .unwrap();
+
+        let input = plan::ArtifactInput {
+            from_view: Some("v".into()),
+            ..Default::default()
+        };
+        let mut seen: Vec<String> = Vec::new();
+        let n = engine
+            .for_each_artifact_input(&run, &prefix, &input, "n1", |a| {
+                seen.push(a.uri);
+                Ok(())
+            })
+            .expect("the upstream view must be readable with the prefix the pipeline was given");
+        assert_eq!(n, 1);
+        assert_eq!(seen, vec!["file:///a.pdf".to_string()]);
     }
 }

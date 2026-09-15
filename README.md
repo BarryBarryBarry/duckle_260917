@@ -2740,6 +2740,14 @@ Local file access is untouched. Where an operator genuinely needs DuckDB-native
 remote reads, `network.allowDuckdbExternalIo: true` in the server policy returns
 them, along with the boundary they cost.
 
+One thing is refused with or without a policy: a **dot-command**, a line in a SQL
+body beginning with `.`. The DuckDB CLI intercepts those and runs them itself, so
+no DuckDB setting and no component deny reaches them - `.shell` and `.system` run
+a program, `.read` reads any file the process can and `.output` writes one, which
+is the `code.shell` capability by another route. Duckle generates none, and no
+valid SQL statement begins with a dot, so there is nothing to weigh and they are
+refused outright.
+
 **Prefixes match at a boundary, not as strings.** An allowed path of
 `/var/lake/dev` does not admit `/var/lake/development`, and an allowed
 `s3://co-development` does not admit `s3://co-development-prod`.
@@ -2755,7 +2763,7 @@ could switch the boundary off from inside the thing being bounded.
 
 A policy file that is named and cannot be read **refuses the run**. Falling back
 to "no policy" would mean a typo in the environment silently removes the
-boundary. With no policy configured at all, nothing changes.
+boundary. With no policy configured at all, nothing else changes.
 
 ### Catch the run that looks fine and is not (`qa.baseline`)
 
