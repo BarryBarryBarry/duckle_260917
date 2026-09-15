@@ -29,11 +29,18 @@ fn split_line(line: &str) -> Option<(&str, &str)> {
 }
 
 /// Return every well-formed accepted contract, in file order.
-pub fn list(path: &Path) -> Result<Vec<(String, String)>, String> {
-    let text = match std::fs::read_to_string(path) {
+///
+/// Takes the workspace, not the store file, so that every entry point names the
+/// same thing. `accept` has to take the workspace anyway to lock it, and a
+/// module where one function wants a directory and its neighbours want a file
+/// is an invitation to pass the wrong one - both are `&Path`, so nothing would
+/// say so.
+pub fn list(workspace: &Path) -> Result<Vec<(String, String)>, String> {
+    let store = path(workspace);
+    let text = match std::fs::read_to_string(&store) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Err(e) => return Err(format!("{}: {e}", store.display())),
     };
     Ok(text
         .lines()
@@ -47,8 +54,8 @@ pub fn list(path: &Path) -> Result<Vec<(String, String)>, String> {
 }
 
 /// Return the accepted fingerprint for one schema root.
-pub fn accepted(path: &Path, uri: &str) -> Option<String> {
-    list(path)
+pub fn accepted(workspace: &Path, uri: &str) -> Option<String> {
+    list(workspace)
         .ok()?
         .into_iter()
         .find_map(|(known_uri, fingerprint)| (known_uri == uri).then_some(fingerprint))
@@ -58,11 +65,22 @@ pub fn accepted(path: &Path, uri: &str) -> Option<String> {
 ///
 /// The old value is returned for the audit record. A missing value means this
 /// is the first explicit acceptance for the URI.
-pub fn accept(path: &Path, uri: &str, fingerprint: &str) -> Result<Option<String>, String> {
-    let existing = match std::fs::read_to_string(path) {
+pub fn accept(workspace: &Path, uri: &str, fingerprint: &str) -> Result<Option<String>, String> {
+    // Before the read, because the whole read-modify-write is the critical
+    // section: the rebuilt file is derived from a snapshot, so a second writer
+    // that read the same snapshot publishes a store that never contained this
+    // line, and this call still returns Ok for it. Measured at 8 threads: seven
+    // reported success and one line survived.
+    //
+    // A nested "store" key, so it cannot be blocked by a pipeline run holding
+    // its own lock, and the run lock cannot be blocked by this. That also makes
+    // the fixed temp name below safe, since only one writer is ever inside.
+    let _guard = crate::runlock::lock_store(workspace, "xsd-contracts")?;
+    let store = path(workspace);
+    let existing = match std::fs::read_to_string(&store) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Err(e) => return Err(format!("{}: {e}", store.display())),
     };
     let previous = existing.lines().find_map(|line| {
         let trimmed = line.trim();
@@ -84,7 +102,7 @@ pub fn accept(path: &Path, uri: &str, fingerprint: &str) -> Result<Option<String
         .map(str::to_string)
         .collect();
     lines.push(format!("{uri} {fingerprint}"));
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = store.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
     // Temp then rename, so a reader sees the whole old store or the whole new
@@ -93,14 +111,14 @@ pub fn accept(path: &Path, uri: &str, fingerprint: &str) -> Result<Option<String
     // URI, reached by a different route. The engine records a contract at run
     // time while an operator can be accepting one from the CLI, so the two
     // really can meet.
-    let tmp = path.with_extension("tmp");
+    let tmp = store.with_extension("tmp");
     std::fs::write(&tmp, lines.join("\n") + "\n")
         .map_err(|e| format!("{}: {e}", tmp.display()))?;
     // Windows rename REPLACES, which is what this needs; it is not the
     // remove-then-rename that would leave a window with no file at all.
-    std::fs::rename(&tmp, path).map_err(|e| {
+    std::fs::rename(&tmp, &store).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        format!("{}: {e}", path.display())
+        format!("{}: {e}", store.display())
     })?;
     Ok(previous)
 }
@@ -120,19 +138,19 @@ mod tests {
     #[test]
     fn a_uri_containing_a_space_is_found_again() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = tmp.path().join("xsd_contracts");
+        let ws = tmp.path();
         let uri = "C:/my schemas/order v2.xsd";
 
-        accept(&store, uri, "abc123").expect("accepted");
+        accept(ws, uri, "abc123").expect("accepted");
         assert_eq!(
-            accepted(&store, uri).as_deref(),
+            accepted(ws, uri).as_deref(),
             Some("abc123"),
             "a contract that cannot be read back is a fail-open"
         );
 
         // And it is one entry, not two: the replace has to match it as well.
-        accept(&store, uri, "def456").expect("re-accepted");
-        let all = list(&store).expect("listed");
+        accept(ws, uri, "def456").expect("re-accepted");
+        let all = list(ws).expect("listed");
         assert_eq!(all.len(), 1, "the replace did not match its own line: {all:?}");
         assert_eq!(all[0], (uri.to_string(), "def456".to_string()));
     }
@@ -142,11 +160,11 @@ mod tests {
     #[test]
     fn the_previous_fingerprint_survives_a_spaced_uri() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = tmp.path().join("xsd_contracts");
+        let ws = tmp.path();
         let uri = "/srv/xsd files/a.xsd";
-        assert_eq!(accept(&store, uri, "one").expect("first"), None);
+        assert_eq!(accept(ws, uri, "one").expect("first"), None);
         assert_eq!(
-            accept(&store, uri, "two").expect("second").as_deref(),
+            accept(ws, uri, "two").expect("second").as_deref(),
             Some("one"),
             "an audit record that cannot name what it replaced is not a record"
         );
@@ -164,45 +182,117 @@ mod tests {
     #[test]
     fn replacing_the_store_leaves_no_temp_file_behind() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = tmp.path().join("xsd_contracts");
-        accept(&store, "a.xsd", "one").expect("a");
-        accept(&store, "b.xsd", "two").expect("b");
+        let ws = tmp.path();
+        accept(ws, "a.xsd", "one").expect("a");
+        accept(ws, "b.xsd", "two").expect("b");
 
-        let stray: Vec<String> = std::fs::read_dir(tmp.path())
+        // The store shares `.duckle` with the lock this now takes, so the check
+        // is for a leftover temp specifically rather than for an empty
+        // directory - which would have started failing on the lock itself and
+        // said nothing about the temp file.
+        let dir = path(ws).parent().expect("the store has a parent").to_path_buf();
+        let stray: Vec<String> = std::fs::read_dir(&dir)
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n != "xsd_contracts")
+            .filter(|n| n.ends_with(".tmp"))
             .collect();
         assert!(stray.is_empty(), "left a temp file behind: {stray:?}");
-        assert_eq!(list(&store).expect("listed").len(), 2);
+        assert_eq!(list(ws).expect("listed").len(), 2);
+    }
+
+    /// The store lands where every other surface looks for it.
+    ///
+    /// `accept` takes a workspace and `path` derives the file, and both are
+    /// `&Path`, so a caller handing over the store file instead compiles and
+    /// then writes `<store>/.duckle/xsd_contracts` that nothing reads. Nothing
+    /// else in the module would notice: the round-trip tests pass either way,
+    /// because they would be consistently wrong.
+    #[test]
+    fn accept_writes_the_file_the_other_surfaces_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        accept(tmp.path(), "a.xsd", "aa").expect("accepted");
+        let store = path(tmp.path());
+        assert!(
+            store.is_file(),
+            "accept wrote somewhere else; {} does not exist",
+            store.display()
+        );
     }
 
     #[test]
     fn accepts_one_uri_without_disturbing_comments_or_other_contracts() {
         let temp = tempfile::tempdir().unwrap();
-        let file = temp.path().join(".duckle/xsd_contracts");
+        let ws = temp.path();
+        let file = path(ws);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "# keep\na.xsd old\nb.xsd other\n").unwrap();
 
-        assert_eq!(accept(&file, "a.xsd", "new").unwrap(), Some("old".into()));
+        assert_eq!(accept(ws, "a.xsd", "new").unwrap(), Some("old".into()));
         assert_eq!(
-            list(&file).unwrap(),
+            list(ws).unwrap(),
             vec![
                 ("b.xsd".into(), "other".into()),
                 ("a.xsd".into(), "new".into())
             ]
         );
-        assert!(std::fs::read_to_string(file)
+        assert!(std::fs::read_to_string(&file)
             .unwrap()
             .starts_with("# keep\n"));
+    }
+
+    /// Acceptances that happen at the same moment must all survive.
+    ///
+    /// `accept` reads the whole store, rebuilds it without the URI it is
+    /// replacing, appends its own line and renames the result over the file.
+    /// Nothing holds the store still between the read and the rename, so a
+    /// second writer working from the same snapshot publishes a file that never
+    /// contained the first one's line. The loser still returns `Ok`, and on the
+    /// CLI path its caller writes an audit record for an acceptance that is not
+    /// in the store.
+    ///
+    /// The loss is fail-open where it counts: the next run finds no contract
+    /// for that URI, takes the first-sight branch, and records whatever
+    /// fingerprint it sees now - which under `xsdChangePolicy: fail` is exactly
+    /// the substitution the feature exists to refuse.
+    ///
+    /// Same shape as
+    /// `schedules::tests::the_store_survives_writers_running_at_the_same_time`,
+    /// because it is the same bug and the same fix.
+    #[test]
+    fn contracts_accepted_at_the_same_moment_all_survive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let ws = ws.clone();
+                std::thread::spawn(move || {
+                    accept(&ws, &format!("s{i}.xsd"), &format!("{i:064}")).is_ok()
+                })
+            })
+            .collect();
+        // `is_ok` rather than `expect`: without the lock the shared temp name
+        // can also make a rename fail, and panicking there would report that
+        // instead of the count, which is the property under test.
+        let reported = threads
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .filter(|ok| *ok)
+            .count();
+
+        let survived = list(&ws).expect("listed").len();
+        assert_eq!(
+            survived, 8,
+            "{reported} acceptances reported success but {survived} are in the store"
+        );
     }
 
     #[test]
     fn a_missing_store_is_an_empty_store() {
         let temp = tempfile::tempdir().unwrap();
-        let file = temp.path().join("missing");
-        assert!(list(&file).unwrap().is_empty());
-        assert_eq!(accepted(&file, "a.xsd"), None);
+        let ws = temp.path().join("missing");
+        assert!(list(&ws).unwrap().is_empty());
+        assert_eq!(accepted(&ws, "a.xsd"), None);
     }
 }

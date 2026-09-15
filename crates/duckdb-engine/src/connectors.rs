@@ -20753,14 +20753,19 @@ pub(crate) fn xsd_contract_fingerprint(docs: &[(String, String)]) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Where a workspace remembers the schema contracts it has accepted.
+/// The workspace whose accepted schema contracts apply.
 ///
 /// `None` when there is no workspace, exactly like [`known_hosts_path`]: with
 /// nowhere to remember, the check degrades to the old accept-anything
 /// behaviour rather than refusing every run.
-pub(crate) fn xsd_contracts_path() -> Option<std::path::PathBuf> {
-    let ws = std::env::var("DUCKLE_WORKSPACE").ok().filter(|s| !s.is_empty())?;
-    Some(crate::xsd_contract::path(std::path::Path::new(&ws)))
+///
+/// This is the workspace and not the store file, because every `xsd_contract`
+/// entry point takes the workspace - accepting one has to lock it.
+fn xsd_workspace() -> Option<std::path::PathBuf> {
+    std::env::var("DUCKLE_WORKSPACE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
 }
 
 /// The contract already accepted for this schema root, if any.
@@ -20768,15 +20773,16 @@ pub(crate) fn xsd_contracts_path() -> Option<std::path::PathBuf> {
 /// One `<uri> <fingerprint>` per line, `#` for comments. Greppable, and a line
 /// can be deleted by hand - which is the whole escape hatch when a publisher
 /// legitimately reissues a schema.
-pub(crate) fn read_xsd_contract(path: &std::path::Path, uri: &str) -> Option<String> {
-    crate::xsd_contract::accepted(path, uri)
+pub(crate) fn read_xsd_contract(workspace: &std::path::Path, uri: &str) -> Option<String> {
+    crate::xsd_contract::accepted(workspace, uri)
 }
 
 /// Accept a contract. Best-effort: a workspace that cannot be written still
 /// runs, because failing a run over bookkeeping would be a worse failure than
-/// the one being prevented.
-fn record_xsd_contract(path: &std::path::Path, uri: &str, fingerprint: &str) {
-    let _ = crate::xsd_contract::accept(path, uri, fingerprint);
+/// the one being prevented. That now covers a workspace whose store lock is
+/// held by somebody else for longer than the wait allows.
+fn record_xsd_contract(workspace: &std::path::Path, uri: &str, fingerprint: &str) {
+    let _ = crate::xsd_contract::accept(workspace, uri, fingerprint);
 }
 
 /// #315: hold the parser contract still, or say plainly that it moved.
@@ -20799,14 +20805,14 @@ pub(crate) fn check_xsd_contract(
     if policy.eq_ignore_ascii_case("allow") {
         return Ok(());
     }
-    let path = match xsd_contracts_path() {
-        Some(p) => p,
+    let ws = match xsd_workspace() {
+        Some(w) => w,
         None => return Ok(()),
     };
-    let accepted = match read_xsd_contract(&path, uri) {
+    let accepted = match read_xsd_contract(&ws, uri) {
         Some(a) => a,
         None => {
-            record_xsd_contract(&path, uri, fingerprint);
+            record_xsd_contract(&ws, uri, fingerprint);
             return Ok(());
         }
     };
@@ -20821,14 +20827,14 @@ pub(crate) fn check_xsd_contract(
              change to the parser itself and not only to a file. It is also what a \
              legitimate reissue looks like. To accept it, delete the line for {uri} from \
              {} and the next run will record the new one.",
-            path.display()
+            crate::xsd_contract::path(&ws).display()
         )));
     }
     eprintln!(
         "duckle: xsd: the schema set behind {uri} changed ({accepted} -> {fingerprint}); \
          accepting it because changePolicy is warn. Set it to fail to require approval."
     );
-    record_xsd_contract(&path, uri, fingerprint);
+    record_xsd_contract(&ws, uri, fingerprint);
     Ok(())
 }
 
@@ -20977,7 +20983,7 @@ pub(crate) fn verify_sftp_host_key(
 /// #315: a schema set is a parser contract, and it must not move unnoticed.
 #[cfg(test)]
 mod xsd_contract_tests {
-    use super::{check_xsd_contract, read_xsd_contract, xsd_contract_fingerprint, xsd_contracts_path};
+    use super::{check_xsd_contract, read_xsd_contract, xsd_contract_fingerprint};
 
     // DUCKLE_WORKSPACE is process-wide, so these take the SAME lock every other
     // workspace-env test takes. A private mutex here would only serialise these
@@ -21032,9 +21038,8 @@ mod xsd_contract_tests {
         let fp = xsd_contract_fingerprint(&set(&[("schemas/company.xsd", "aa")]));
         assert!(check_xsd_contract(uri, &fp, "fail").is_ok(), "first sight must not refuse");
 
-        let path = xsd_contracts_path().expect("workspace");
         assert_eq!(
-            read_xsd_contract(&path, uri).as_deref(),
+            read_xsd_contract(tmp.path(), uri).as_deref(),
             Some(fp.as_str()),
             "it has to be remembered, or every run is a first run"
         );
@@ -21060,9 +21065,8 @@ mod xsd_contract_tests {
         assert!(err.contains(uri), "must name the schema: {err}");
         assert!(err.contains("xsd_contracts"), "must say where to accept it: {err}");
 
-        let path = xsd_contracts_path().expect("workspace");
         assert_eq!(
-            read_xsd_contract(&path, uri).as_deref(),
+            read_xsd_contract(tmp.path(), uri).as_deref(),
             Some(first.as_str()),
             "a refused change must NOT be recorded, or the next run passes silently"
         );
@@ -21084,14 +21088,13 @@ mod xsd_contract_tests {
         let moved = xsd_contract_fingerprint(&set(&[("schemas/a.xsd", "bb")]));
         check_xsd_contract(uri, &moved, "warn").expect("warn must not refuse");
 
-        let path = xsd_contracts_path().expect("workspace");
         assert_eq!(
-            read_xsd_contract(&path, uri).as_deref(),
+            read_xsd_contract(tmp.path(), uri).as_deref(),
             Some(moved.as_str()),
             "warn accepts, so the new contract is what is remembered"
         );
         // And exactly one line for the uri, not two.
-        let text = std::fs::read_to_string(&path).unwrap();
+        let text = std::fs::read_to_string(crate::xsd_contract::path(tmp.path())).unwrap();
         assert_eq!(
             text.lines().filter(|l| l.starts_with(uri)).count(),
             1,
@@ -21111,9 +21114,8 @@ mod xsd_contract_tests {
 
         let uri = "schemas/b.xsd";
         check_xsd_contract(uri, "anything", "allow").expect("allow never refuses");
-        let path = xsd_contracts_path().expect("workspace");
         assert!(
-            read_xsd_contract(&path, uri).is_none(),
+            read_xsd_contract(tmp.path(), uri).is_none(),
             "allow must not write a contract somebody did not ask for"
         );
 

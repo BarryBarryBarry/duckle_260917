@@ -92,7 +92,7 @@ pub fn run() -> ExitCode {
     }
     let path = duckle_duckdb_engine::xsd_contract::path(&args.workspace);
     match args.verb.as_str() {
-        "list" => match duckle_duckdb_engine::xsd_contract::list(&path) {
+        "list" => match duckle_duckdb_engine::xsd_contract::list(&args.workspace) {
             Ok(entries) => {
                 if args.json {
                     let rows: Vec<_> = entries
@@ -144,7 +144,7 @@ pub fn run() -> ExitCode {
                 eprintln!("duckle-runner xsd accept: --reason may not contain newlines");
                 return ExitCode::from(2);
             }
-            let previous = match duckle_duckdb_engine::xsd_contract::accept(&path, uri, fingerprint)
+            let previous = match duckle_duckdb_engine::xsd_contract::accept(&args.workspace, uri, fingerprint)
             {
                 Ok(previous) => previous,
                 Err(e) => {
