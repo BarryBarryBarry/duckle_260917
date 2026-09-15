@@ -146,60 +146,6 @@ fn a_tagged_column_is_masked_in_the_preview_a_run_returns() {
     );
 }
 
-#[test]
-fn restricted_install_is_refused_in_batched_and_per_stage_runs() {
-    let engine = engine_or_skip!();
-    let _env = env_guard();
-    let tmp = tempfile::tempdir().unwrap();
-    let policy = tmp.path().join("policy.yaml");
-    std::fs::write(
-        &policy,
-        "mode: enforce\nnetwork:\n  allowedDomains:\n    - api.example\n",
-    )
-    .unwrap();
-    std::env::set_var("DUCKLE_POLICY_FILE", &policy);
-
-    let d = doc(
-        json!([
-            node(
-                "q1",
-                "code.sql",
-                json!({
-                    "pureSql": true,
-                    "sql": "INSTALL duckle_no_such_ext_xyz; CREATE OR REPLACE VIEW q1 AS SELECT 1 AS a;"
-                })
-            ),
-            node(
-                "k1",
-                "snk.csv",
-                json!({ "path": out_path(tmp.path(), "out.csv"), "hasHeader": true })
-            )
-        ]),
-        json!([main_edge("e1", "q1", "k1")]),
-    );
-
-    let batched = engine.execute_pipeline(&d);
-    let per_stage = engine.execute_pipeline_with_events(&d, Some("k1"), None, |_| {});
-    std::env::remove_var("DUCKLE_POLICY_FILE");
-
-    for result in [batched, per_stage] {
-        assert_eq!(
-            result.status, "error",
-            "unexpected success: {:?}",
-            result.error
-        );
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("INSTALL is disabled"),
-            "wrong refusal: {:?}",
-            result.error
-        );
-    }
-}
-
 fn main_edge(id: &str, source: &str, target: &str) -> Value {
     json!({ "id": id, "source": source, "target": target, "data": { "connectionType": "main" } })
 }
@@ -4668,7 +4614,7 @@ fn rest_source_to_shapefile_writes_prj() {
 
     // Serve one GET with a JSON array of points (flat lng/lat).
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -4742,7 +4688,7 @@ fn snk_webhook_posts_one_request_per_row() {
 
     let handle = std::thread::spawn(move || {
         // Accept exactly 2 connections; close each after one round-trip.
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -4919,7 +4865,7 @@ fn snk_clickhouse_emits_jsoneachrow_to_insert_endpoint() {
     let port = listener.local_addr().unwrap().port();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -5087,7 +5033,7 @@ fn src_elastic_paginates_via_search_after() {
     let cap = captured.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -5170,7 +5116,7 @@ fn src_elastic_paginates_via_from_size() {
     let cap = captured.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -5252,7 +5198,7 @@ fn src_rest_paginates_via_offset() {
     let cap = captured.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(3) {
+        for stream in incoming_bounded(&listener, 3) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -5320,7 +5266,7 @@ fn src_rest_errors_when_maxpages_truncates() {
 
     let full_page = br#"[{"id":1},{"id":2}]"#;
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -5389,7 +5335,7 @@ fn src_rest_paginates_via_page_number() {
     let cap = captured.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(3) {
+        for stream in incoming_bounded(&listener, 3) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -5464,7 +5410,7 @@ fn src_rest_paginates_via_link_header() {
     let nu = next_url.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -5541,7 +5487,7 @@ fn src_rest_fetches_and_walks_cursor_pages() {
     let cap = captured.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -5625,7 +5571,7 @@ fn src_snowflake_walks_partitions() {
     let rc = request_count.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -5712,7 +5658,7 @@ fn src_snowflake_gzip_partition_and_typed_columns() {
     let request_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let rc = request_count.clone();
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -5815,7 +5761,7 @@ fn src_databricks_follows_chunk_links() {
     let rc = request_count.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -5891,7 +5837,7 @@ fn src_snowflake_materializes_inline_result_set() {
     let response_len = response_body.len();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -5961,7 +5907,7 @@ fn src_databricks_materializes_inline_result_set() {
     let response_len = response_body.len();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -6032,7 +5978,7 @@ fn snk_databricks_posts_multirow_insert() {
     let port = listener.local_addr().unwrap().port();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -6131,7 +6077,7 @@ fn snk_snowflake_jwt_auth_signs_request() {
     let handle = std::thread::spawn(move || {
         // Two requests now: the auto-create CREATE TABLE, then the INSERT.
         // Both carry the same JWT auth, so asserting on the first is fine.
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -6244,7 +6190,7 @@ fn snk_snowflake_jwt_uses_account_locator_for_privatelink() {
     let port = listener.local_addr().unwrap().port();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -6337,7 +6283,7 @@ fn snk_snowflake_overwrite_truncates_before_inserting() {
     let port = listener.local_addr().unwrap().port();
     let handle = std::thread::spawn(move || {
         // Three now: CREATE, TRUNCATE, INSERT.
-        for stream in listener.incoming().take(3) {
+        for stream in incoming_bounded(&listener, 3) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -6435,7 +6381,7 @@ fn snk_snowflake_posts_multirow_insert() {
 
     let handle = std::thread::spawn(move || {
         // Two requests now: the auto-create CREATE TABLE, then the INSERT.
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -6532,7 +6478,7 @@ fn snk_elastic_emits_ndjson_bulk_pairs() {
     let port = listener.local_addr().unwrap().port();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -6594,7 +6540,7 @@ fn snk_milvus_injects_collection_name_alongside_data() {
     let port = listener.local_addr().unwrap().port();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -6654,7 +6600,7 @@ fn snk_pinecone_wraps_batch_in_vectors_key() {
     let port = listener.local_addr().unwrap().port();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -6730,7 +6676,7 @@ fn snk_rest_batches_rows_into_one_request() {
     let url = format!("http://{}/batch", addr);
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -9060,7 +9006,7 @@ fn serve_n_json(
     let port = listener.local_addr().unwrap().port();
     let (tx, rx) = mpsc::channel::<String>();
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(n) {
+        for stream in incoming_bounded(&listener, n) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -9655,7 +9601,7 @@ fn src_qdrant_walks_scroll_pages_and_flattens_payload() {
     let cap = captured.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -9743,7 +9689,7 @@ fn src_weaviate_paginates_via_after_cursor() {
     let cap = captured.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -9829,7 +9775,7 @@ fn src_milvus_paginates_via_offset() {
     let cap = captured.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -11053,7 +10999,7 @@ fn xf_ai_classify_constrains_to_supplied_categories() {
     let handle = std::thread::spawn(move || {
         // 3 requests, one per row; alternate category replies.
         let replies = ["positive", "negative", "BOGUS_CATEGORY"];
-        for (idx, stream) in listener.incoming().take(3).enumerate() {
+        for (idx, stream) in incoming_bounded(&listener, 3).enumerate() {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -11279,7 +11225,7 @@ fn an_expanded_field_never_overwrites_an_upstream_column() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let Ok(mut stream) = stream else { break };
             stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
             let mut buf = [0u8; 8192];
@@ -11358,7 +11304,7 @@ fn an_inference_budget_stops_the_run_before_a_partial_dataset_is_published() {
     let handle = std::thread::spawn(move || {
         // Offer more than the ceiling allows. If the budget leaks, the extra
         // connections are there to be taken and the count assertion catches it.
-        for stream in listener.incoming().take(5) {
+        for stream in incoming_bounded(&listener, 5) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -11459,7 +11405,7 @@ fn xf_ai_llm_calls_chat_completions_with_template() {
     let cap = captured.clone();
     let handle = std::thread::spawn(move || {
         // Accept 2 connections (one per row).
-        for (idx, stream) in listener.incoming().take(2).enumerate() {
+        for (idx, stream) in incoming_bounded(&listener, 2).enumerate() {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -12126,7 +12072,7 @@ fn src_odata_follows_nextlink_across_pages() {
     let nu = next_url.clone();
 
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -13424,7 +13370,8 @@ fn src_rest_single_object_response_yields_one_row() {
     let port = listener.local_addr().unwrap().port();
     let body = br#"{"latitude":52.52,"longitude":13.41,"current_weather":{"temperature":11.3,"windspeed":9.2}}"#;
     let handle = std::thread::spawn(move || {
-        if let Some(Ok(mut stream)) = listener.incoming().next() {
+        for stream in incoming_bounded(&listener, 1) {
+            let Ok(mut stream) = stream else { break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
             let mut chunk = [0u8; 4096];
@@ -13772,7 +13719,7 @@ fn sf_mock_server(
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind sf mock");
     let port = listener.local_addr().unwrap().port();
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -14200,7 +14147,7 @@ fn sf_mock_server_oauth(
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind sf oauth mock");
     let port = listener.local_addr().unwrap().port();
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -14408,7 +14355,7 @@ fn sf_bulk_mock_server(cfg: BulkMock) -> (u16, std::sync::mpsc::Receiver<Vec<u8>
     // Detached: serves up to 64 requests and dies with the test process, so a
     // test never has to know the exact request count to avoid a join hang.
     std::thread::spawn(move || {
-        for stream in listener.incoming().take(64) {
+        for stream in incoming_bounded(&listener, 64) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -14767,7 +14714,7 @@ fn sf_bulk_query_mock_server(cfg: BulkQueryMock) -> (u16, std::sync::mpsc::Recei
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind sf bulk query mock");
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        for stream in listener.incoming().take(64) {
+        for stream in incoming_bounded(&listener, 64) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -15567,7 +15514,7 @@ fn a_cursor_does_not_advance_past_a_parent_that_failed() {
     let asked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let seen = asked.clone();
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(8) {
+        for stream in incoming_bounded(&listener, 8) {
             let Ok(mut stream) = stream else { break };
             stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
             let mut buf = [0u8; 4096];
@@ -15657,7 +15604,7 @@ fn the_incremental_mark_reaches_the_request_and_advances_only_on_success() {
     let asked = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let seen = asked.clone();
     let handle = std::thread::spawn(move || {
-        for (idx, stream) in listener.incoming().take(2).enumerate() {
+        for (idx, stream) in incoming_bounded(&listener, 2).enumerate() {
             let Ok(mut stream) = stream else { break };
             stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
             let mut buf = Vec::new();
@@ -15759,7 +15706,7 @@ fn rest_fan_out_runs_parent_requests_concurrently() {
     let (f, pk) = (in_flight.clone(), peak.clone());
     let handle = std::thread::spawn(move || {
         let mut workers = Vec::new();
-        for stream in listener.incoming().take(8) {
+        for stream in incoming_bounded(&listener, 8) {
             let Ok(mut stream) = stream else { break };
             let (f, pk) = (f.clone(), pk.clone());
             workers.push(std::thread::spawn(move || {
@@ -15853,7 +15800,7 @@ fn a_checkpointed_parent_is_not_requested_twice() {
     let served = Arc::new(AtomicUsize::new(0));
     let count = served.clone();
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(3) {
+        for stream in incoming_bounded(&listener, 3) {
             let Ok(mut stream) = stream else { break };
             stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
             let mut chunk = [0u8; 4096];
@@ -15998,7 +15945,7 @@ fn a_failed_parent_becomes_a_reject_row_instead_of_ending_the_run() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(3) {
+        for stream in incoming_bounded(&listener, 3) {
             let Ok(mut stream) = stream else { break };
             stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
             let mut buf = Vec::new();
@@ -16310,7 +16257,7 @@ fn a_pagination_walk_cut_short_by_a_failure_is_incomplete() {
     let served = Arc::new(AtomicUsize::new(0));
     let count = served.clone();
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(4) {
+        for stream in incoming_bounded(&listener, 4) {
             let Ok(mut stream) = stream else { break };
             stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
             let mut buf = [0u8; 4096];
@@ -16391,7 +16338,7 @@ fn src_html_follows_the_next_page_link() {
     let served = Arc::new(AtomicUsize::new(0));
     let (seen, count) = (asked.clone(), served.clone());
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(4) {
+        for stream in incoming_bounded(&listener, 4) {
             let Ok(mut stream) = stream else { break };
             stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
             let mut buf = [0u8; 4096];
@@ -18306,7 +18253,7 @@ fn changed_emits_a_row_only_when_the_remote_fingerprint_moves() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
     let server = std::thread::spawn(move || {
-        for (i, stream) in listener.incoming().take(3).enumerate() {
+        for (i, stream) in incoming_bounded(&listener, 3).enumerate() {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(std::time::Duration::from_millis(300))).ok();
             let mut buf = [0u8; 2048];
@@ -18549,7 +18496,7 @@ fn stub_s3(replies: Vec<String>) -> (u16, std::sync::mpsc::Receiver<(String, Str
     let port = listener.local_addr().unwrap().port();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        for (i, stream) in listener.incoming().take(replies.len()).enumerate() {
+        for (i, stream) in incoming_bounded(&listener, replies.len()).enumerate() {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -18914,7 +18861,7 @@ fn artifact_copy_cannot_escape_the_destination_prefix() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -19318,7 +19265,7 @@ fn src_pdf_fetches_a_remote_document_and_leaves_no_spool_behind() {
     let port = listener.local_addr().unwrap().port();
     let served = bytes.clone();
     std::thread::spawn(move || {
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,
@@ -20728,40 +20675,6 @@ fn clearing_a_baseline_lets_the_next_run_start_the_history_again() {
     assert_eq!(r.status, "ok", "a cleared baseline cannot refuse anything: {:?}", r.error);
 }
 
-/// The same permission that withholds a watermark edit withholds this one. An
-/// accept is a change to what the environment considers normal, so a locked
-/// down environment must not let it through any surface.
-#[test]
-fn accepting_a_baseline_obeys_the_state_mutation_policy() {
-    use duckle_duckdb_engine::baseline;
-    let _env = env_guard();
-    let tmp = tempfile::tempdir().unwrap();
-    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
-    let ws = tmp.path();
-    let dir = ws.join("state").join("p").join("baselines");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("n.json"), r#"{"profiles":[{"row_count":10}]}"#).unwrap();
-    std::fs::write(
-        dir.join("n.observed.json"),
-        r#"{"at":"2026-08-28T00:00:00Z","status":"violation","violations":[],"profile":{"row_count":1}}"#,
-    )
-    .unwrap();
-
-    let policy = ws.join("server-policy.yaml");
-    std::fs::write(&policy, "mode: enforce\nstate:\n  allowMutation: false\n").unwrap();
-    std::env::set_var("DUCKLE_POLICY_FILE", &policy);
-
-    let accept = baseline::accept(ws, "p", "n", 10);
-    let clear = baseline::clear(ws, "p", "n");
-    std::env::remove_var("DUCKLE_POLICY_FILE");
-
-    assert!(accept.is_err(), "accept walked past state.allowMutation");
-    assert!(clear.is_err(), "clear walked past state.allowMutation");
-    // And the refusal is real: the history is untouched.
-    let still = std::fs::read_to_string(dir.join("n.json")).unwrap();
-    assert!(still.contains("\"row_count\":10"), "the accepted history changed: {still}");
-}
-
 // ---------------------------------------------------------------------------
 // #282 - src.xml on the shared ArtifactInput contract. A corpus of documents
 // named by an upstream relation, rather than one configured path.
@@ -21101,6 +21014,68 @@ fn a_corpus_larger_than_one_batch_is_read_completely_and_exactly_once() {
 // transforms. The GUI already offered the fields on all three; only llm read
 // them, which is a setting that looks like it works and does nothing.
 // ---------------------------------------------------------------------------
+
+/// How long one accept in [`incoming_bounded`] waits before giving up.
+const ACCEPT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// `incoming_bounded(&listener, n)` with a deadline on each accept.
+///
+/// A stub-server thread that a test JOINS must always terminate. Plain
+/// `.take(n)` waits forever for the nth connection, so a run where the engine
+/// made fewer requests than the stub expected - a timed-out page under load,
+/// a retry that did not happen - did NOT fail that test's assertion. It hung
+/// the whole binary at zero CPU, after every other test had printed ok, which
+/// is indistinguishable from "still running". Two suite runs were lost to it
+/// here, on a different test each time.
+///
+/// With a deadline the same run fails `assert_eq!(req_count, n)` instead,
+/// which names the test and says what happened.
+///
+/// Yields `io::Result<TcpStream>` exactly as `incoming()` does, and is lazy:
+/// the nth connection is accepted only once the body has answered the (n-1)th,
+/// which is what the pagination stubs depend on.
+fn incoming_bounded(listener: &std::net::TcpListener, n: usize) -> BoundedIncoming<'_> {
+    listener.set_nonblocking(true).ok();
+    BoundedIncoming { listener, left: n }
+}
+
+struct BoundedIncoming<'a> {
+    listener: &'a std::net::TcpListener,
+    left: usize,
+}
+
+impl Iterator for BoundedIncoming<'_> {
+    type Item = std::io::Result<std::net::TcpStream>;
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.left == 0 {
+            return None;
+        }
+        let deadline = std::time::Instant::now() + ACCEPT_TIMEOUT;
+        loop {
+            match self.listener.accept() {
+                Ok((stream, _)) => {
+                    self.left -= 1;
+                    // Windows hands back a socket that inherited the listener's
+                    // non-blocking mode, which would make every set_read_timeout
+                    // below it a no-op and every read return WouldBlock.
+                    stream.set_nonblocking(false).ok();
+                    return Some(Ok(stream));
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        self.left = 0;
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(e) => {
+                    self.left = 0;
+                    return Some(Err(e));
+                }
+            }
+        }
+    }
+}
 
 /// Read headers then exactly Content-Length more, so a reply never races the
 /// request body still being written.
@@ -21739,7 +21714,7 @@ fn an_incremental_cursor_in_a_header_reaches_the_request() {
     let seen = asked.clone();
     let handle = std::thread::spawn(move || {
         // One request, so one accept: waiting for more would block the join.
-        for stream in listener.incoming().take(1) {
+        for stream in incoming_bounded(&listener, 1) {
             let Ok(mut stream) = stream else { break };
             stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
             let mut buf = [0u8; 4096];
@@ -21915,7 +21890,7 @@ fn a_wired_reject_port_binds_when_no_parent_failed() {
 
     // Every request succeeds. Nothing should ever reach the reject port.
     let handle = std::thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
+        for stream in incoming_bounded(&listener, 2) {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(Duration::from_millis(250))).ok();
             stream.set_nodelay(true).ok();
@@ -22191,7 +22166,7 @@ fn manticore_stub(bodies: Vec<String>) -> (u16, std::sync::mpsc::Receiver<Vec<u8
     let port = listener.local_addr().unwrap().port();
     let count = bodies.len();
     std::thread::spawn(move || {
-        for (i, stream) in listener.incoming().take(count).enumerate() {
+        for (i, stream) in incoming_bounded(&listener, count).enumerate() {
             let mut stream = match stream {
                 Ok(s) => s,
                 Err(_) => break,

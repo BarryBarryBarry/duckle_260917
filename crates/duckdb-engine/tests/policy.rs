@@ -422,3 +422,103 @@ fn an_allowed_host_is_still_reachable() {
     assert_eq!(resp.status(), 200);
     assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+/// #346: an INSTALL in a pure-SQL body is refused on BOTH execution paths.
+///
+/// Moved here from `tests/execution.rs`, where it set `DUCKLE_POLICY_FILE`
+/// with a bare `set_var` and held it across two whole pipeline runs. That
+/// variable is process-wide and `env_guard()` there only excludes the handful
+/// of tests that take the same mutex, so every REST test that ran in the window
+/// had its pipeline refused with "reaches 127.0.0.1, which is not an allowed
+/// domain". Those tests answer a stub server with `.take(n)`, so a refused
+/// pipeline made no request at all and the stub waited for a connection that
+/// was never coming - which did not fail them, it HUNG the whole binary. The
+/// bare `remove_var` made it worse: a failed assertion left the policy set for
+/// everything after it.
+///
+/// This is the file header's rule, and it is why this binary exists.
+#[test]
+fn restricted_install_is_refused_in_batched_and_per_stage_runs() {
+    let _serial = serialised();
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let policy = tmp.path().join("server-policy.yaml");
+    std::fs::write(
+        &policy,
+        "mode: enforce\nnetwork:\n  allowedDomains:\n    - api.example\n",
+    )
+    .unwrap();
+    let _env = PolicyEnv::set(&policy);
+
+    let d = doc(
+        json!([
+            node(
+                "q1",
+                "code.sql",
+                json!({
+                    "pureSql": true,
+                    "sql": "INSTALL duckle_no_such_ext_xyz; CREATE OR REPLACE VIEW q1 AS SELECT 1 AS a;"
+                })
+            ),
+            node(
+                "k1",
+                "snk.csv",
+                json!({ "path": out_path(tmp.path(), "out.csv"), "hasHeader": true })
+            )
+        ]),
+        json!([main_edge("e1", "q1", "k1")]),
+    );
+
+    let batched = engine.execute_pipeline(&d);
+    let per_stage = engine.execute_pipeline_with_events(&d, Some("k1"), None, |_| {});
+
+    for result in [batched, per_stage] {
+        assert_eq!(
+            result.status, "error",
+            "unexpected success: {:?}",
+            result.error
+        );
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("INSTALL is disabled"),
+            "wrong refusal: {:?}",
+            result.error
+        );
+    }
+}
+
+/// The same permission that withholds a watermark edit withholds this one. An
+/// accept is a change to what the environment considers normal, so a locked
+/// down environment must not let it through any surface.
+///
+/// Moved here for the same reason as the test above: it set both
+/// `DUCKLE_POLICY_FILE` and `DUCKLE_WORKSPACE`, and a process-wide workspace
+/// pointed at a tempdir is at least as disruptive to a concurrent test as a
+/// policy is.
+#[test]
+fn accepting_a_baseline_obeys_the_state_mutation_policy() {
+    use duckle_duckdb_engine::baseline;
+    let _serial = serialised();
+    let (tmp, _env) = setup("mode: enforce\nstate:\n  allowMutation: false\n");
+    let ws = tmp.path();
+    let dir = ws.join("state").join("p").join("baselines");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("n.json"), r#"{"profiles":[{"row_count":10}]}"#).unwrap();
+    std::fs::write(
+        dir.join("n.observed.json"),
+        r#"{"at":"2026-08-28T00:00:00Z","status":"violation","violations":[],"profile":{"row_count":1}}"#,
+    )
+    .unwrap();
+
+    let accept = baseline::accept(ws, "p", "n", 10);
+    let clear = baseline::clear(ws, "p", "n");
+
+    assert!(accept.is_err(), "accept walked past state.allowMutation");
+    assert!(clear.is_err(), "clear walked past state.allowMutation");
+    // And the refusal is real: the history is untouched.
+    let still = std::fs::read_to_string(dir.join("n.json")).unwrap();
+    assert!(still.contains("\"row_count\":10"), "the accepted history changed: {still}");
+}
