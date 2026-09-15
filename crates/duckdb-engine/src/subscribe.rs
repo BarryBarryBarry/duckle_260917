@@ -163,11 +163,40 @@ pub fn deliveries(workspace: &Path) -> BTreeMap<String, Delivery> {
         .unwrap_or_default()
 }
 
+/// Change the delivery ledger under the store lock.
+///
+/// Every mutator goes through this. Reading the whole map, changing one key and
+/// writing it all back loses whichever writer read first, and the ledger has
+/// three writers in this file plus a retention pass in another process - so a
+/// lock on one of them would be no lock at all.
+///
+/// What a lost record costs: `pending` derives what is owed from (subscription
+/// x event) MINUS what is recorded, so a delivery whose record vanished is owed
+/// again, and the consumer runs a second time for a publication it has already
+/// had. That is the duplicate the delivery id exists to prevent.
+///
+/// Holding it also makes `save_deliveries`' fixed temp name safe, since only
+/// one writer is ever inside the window.
+pub fn update_deliveries<T>(
+    workspace: &Path,
+    f: impl FnOnce(&mut BTreeMap<String, Delivery>) -> T,
+) -> Result<T, String> {
+    let _guard = crate::runlock::lock_store(workspace, "deliveries")?;
+    let mut all = deliveries(workspace);
+    let out = f(&mut all);
+    save_deliveries(workspace, &all)?;
+    Ok(out)
+}
+
 /// Write the delivery ledger, atomically.
 ///
 /// Temp then rename, never unlink first: a reader must see the previous
 /// complete ledger or the new one, and a ledger that is briefly absent is one
 /// the pump would treat as "nothing has ever been delivered".
+///
+/// Atomic against a READER only. A second WRITER is held off by
+/// [`update_deliveries`], which every mutator uses; this stays public for test
+/// setup, which has no concurrency to worry about.
 pub fn save_deliveries(workspace: &Path, all: &BTreeMap<String, Delivery>) -> Result<(), String> {
     let path = deliveries_path(workspace);
     if let Some(dir) = path.parent() {
@@ -365,9 +394,9 @@ pub fn pending(workspace: &Path, now: &str) -> Vec<Delivery> {
 
 /// Record what happened to a delivery.
 pub fn record(workspace: &Path, delivery: Delivery) -> Result<(), String> {
-    let mut all = deliveries(workspace);
-    all.insert(delivery.delivery_id.clone(), delivery);
-    save_deliveries(workspace, &all)
+    update_deliveries(workspace, |all| {
+        all.insert(delivery.delivery_id.clone(), delivery);
+    })
 }
 
 /// Deliveries that failed and can be tried again.
@@ -388,25 +417,25 @@ pub fn record(workspace: &Path, delivery: Delivery) -> Result<(), String> {
 /// retry, which would be the one way this could cause the duplicate run the
 /// delivery id exists to prevent.
 pub fn retry_failed(workspace: &Path, only: Option<&[String]>) -> Result<usize, String> {
-    let mut all = deliveries(workspace);
-    let doomed: Vec<String> = all
-        .values()
-        .filter(|d| d.state == DeliveryState::Failed)
-        .filter(|d| {
-            only.is_none_or(|ids| {
-                ids.iter().any(|i| i == &d.delivery_id || i == &d.subscription_id)
+    // Chosen and removed inside the lock, so a delivery that FAILED between the
+    // read and the write is not silently left behind, and a delivery recorded
+    // meanwhile is not dropped by writing back a map that predates it.
+    update_deliveries(workspace, |all| {
+        let doomed: Vec<String> = all
+            .values()
+            .filter(|d| d.state == DeliveryState::Failed)
+            .filter(|d| {
+                only.is_none_or(|ids| {
+                    ids.iter().any(|i| i == &d.delivery_id || i == &d.subscription_id)
+                })
             })
-        })
-        .map(|d| d.delivery_id.clone())
-        .collect();
-    if doomed.is_empty() {
-        return Ok(0);
-    }
-    for id in &doomed {
-        all.remove(id);
-    }
-    save_deliveries(workspace, &all)?;
-    Ok(doomed.len())
+            .map(|d| d.delivery_id.clone())
+            .collect();
+        for id in &doomed {
+            all.remove(id);
+        }
+        doomed.len()
+    })
 }
 
 pub fn failed(workspace: &Path) -> Vec<Delivery> {
@@ -1156,10 +1185,21 @@ pub fn retain(all: &BTreeMap<String, Delivery>, before: &str) -> (Vec<Delivery>,
 }
 
 /// Rewrite the delivery ledger to exactly this set.
+///
+/// Under the lock, so this cannot interleave with a `record` mid-write - both
+/// stage through the same `deliveries.json.tmp`, and two writers in that file
+/// at once publish a blend of the two.
+///
+/// It does NOT make the retention pass atomic. `retention::apply_ledgers`
+/// decides across the delivery AND materialization ledgers together and only
+/// then writes, so a delivery recorded between that decision and this call is
+/// not in `kept` and is dropped. Closing that needs the lock held across the
+/// decision in `apply_ledgers`, which in turn needs a writer that does not take
+/// it again - the lock is not reentrant.
 pub fn keep_only(workspace: &Path, kept: &[Delivery]) -> Result<(), String> {
-    let map: BTreeMap<String, Delivery> =
-        kept.iter().map(|d| (d.delivery_id.clone(), d.clone())).collect();
-    save_deliveries(workspace, &map)
+    update_deliveries(workspace, |all| {
+        *all = kept.iter().map(|d| (d.delivery_id.clone(), d.clone())).collect();
+    })
 }
 
 #[cfg(test)]
@@ -1215,6 +1255,50 @@ mod retention_rules {
         let (kept, dropped) = retain(&all, "2026-06-01T00:00:00Z");
         assert!(dropped.is_empty(), "an undated record is not evidence that it is old");
         assert_eq!(kept.len(), 1);
+    }
+
+    /// Deliveries recorded at the same moment must all be remembered.
+    ///
+    /// `record` reads the whole ledger, inserts one key and writes the whole
+    /// map back. Two recorded concurrently each read before the other wrote,
+    /// and the second save dropped the first one's key - the same failure
+    /// `alerts` documents for alert state and fixed with this lock.
+    ///
+    /// A dropped record is not a lost note: `pending` derives what is owed from
+    /// (subscription x event) MINUS what is recorded, so a delivery whose
+    /// record vanished is owed again, and the consumer pipeline runs a second
+    /// time for a publication it has already had - the duplicate the delivery
+    /// id exists to prevent.
+    ///
+    /// Same shape as
+    /// `schedules::tests::the_store_survives_writers_running_at_the_same_time`.
+    #[test]
+    fn deliveries_recorded_at_the_same_moment_all_survive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let ws = ws.clone();
+                std::thread::spawn(move || {
+                    record(&ws, d(&format!("dl-{i}"), DeliveryState::Delivered, "2026-09-01T00:00:00Z"))
+                        .is_ok()
+                })
+            })
+            .collect();
+        let reported = threads
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .filter(|ok| *ok)
+            .count();
+
+        let back = deliveries(&ws);
+        assert_eq!(
+            back.len(),
+            8,
+            "{reported} deliveries were recorded but {} are in the ledger",
+            back.len()
+        );
     }
 
     #[test]
