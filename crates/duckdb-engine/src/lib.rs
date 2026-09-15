@@ -548,7 +548,7 @@ impl DuckdbEngine {
     /// stdout. Cancellation-aware: polls the child and kills it if a
     /// cancel was requested.
     fn run(&self, db: Option<&Path>, sql: &str, json: bool) -> Result<String, EngineError> {
-        crate::policy::refuse_install_if_restricted(sql).map_err(EngineError::Query)?;
+        crate::policy::refuse_unsafe_sql(sql).map_err(EngineError::Query)?;
         if !self.bin.exists() {
             return Err(EngineError::Config(format!(
                 "DuckDB engine isn't installed (expected at {}). Open Setup to install it.",
@@ -3253,7 +3253,7 @@ impl DuckdbEngine {
         // DEFAULT one open. A pure-SQL stage carries its body verbatim, so an
         // INSTALL in one really did download an extension under an enforcing
         // policy until this line existed.
-        if let Err(e) = crate::policy::refuse_install_if_restricted(&batched_sql) {
+        if let Err(e) = crate::policy::refuse_unsafe_sql(&batched_sql) {
             return RunResult::failed(total_start, e);
         }
 
@@ -5005,7 +5005,7 @@ pub(crate) fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), E
     use std::process::Command;
     // The third CLI entry point, reached from the connectors and the output
     // cache. Same reason as the other two.
-    crate::policy::refuse_install_if_restricted(sql).map_err(EngineError::Query)?;
+    crate::policy::refuse_unsafe_sql(sql).map_err(EngineError::Query)?;
     let mut cmd = Command::new(bin);
     #[cfg(windows)]
     {
