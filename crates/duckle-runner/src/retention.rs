@@ -210,6 +210,18 @@ pub fn plan_ledgers(
     policy: &Policy,
 ) -> (Vec<LedgerPrune>, std::collections::BTreeSet<String>) {
     let d = decide(workspace, policy);
+    (
+        report(policy, &d),
+        duckle_duckdb_engine::materialize::referenced_runs(&d.kept_events, &d.kept_deliveries),
+    )
+}
+
+/// The rows one decision implies, for the preview and for the prune alike.
+///
+/// Shared for the same reason `decide` is. The preview and the prune describing
+/// the same decision in different words is the drift this module keeps having
+/// to close, and building the rows in only one of them is how it comes back.
+fn report(policy: &Policy, d: &Decision) -> Vec<LedgerPrune> {
     let mut out = Vec::new();
     if let Some(days) = policy.deliveries_days {
         out.push(LedgerPrune {
@@ -231,10 +243,7 @@ pub fn plan_ledgers(
             ),
         });
     }
-    (
-        out,
-        duckle_duckdb_engine::materialize::referenced_runs(&d.kept_events, &d.kept_deliveries),
-    )
+    out
 }
 
 /// What a prune would leave behind, computed ONCE.
@@ -301,27 +310,51 @@ fn decide(workspace: &Path, policy: &Policy) -> Decision {
 }
 
 /// Carry out a ledger prune by rewriting each ledger to what survived.
+///
+/// What comes back is what HAPPENED, not what was planned. Both writers return
+/// a `Result` and both used to be dropped with `let _ =`, so a prune that wrote
+/// nothing still answered with the forecast and audited it as a removal. That
+/// is no longer a disk-error-only concern: the delivery ledger takes a store
+/// lock now, so a pump holding it is an ordinary operational reason to fail.
 pub fn apply_ledgers(workspace: &Path, policy: &Policy) -> Vec<LedgerPrune> {
     use duckle_duckdb_engine::{materialize, subscribe};
-    let (planned, _) = plan_ledgers(workspace, policy);
-    if planned.iter().all(|p| p.records == 0) {
-        return planned;
-    }
-    // The SAME decision the plan reported, not a second one worked out here.
-    // Recomputing is how the two drifted: a rule added to the planner was not
-    // added to the writer, so the dry run and the prune disagreed about what
-    // survived - the one thing a dry run must never do.
+    // ONE decision, for the writes AND for what is reported. `plan_ledgers`
+    // working out its own was the drift the comment on `decide` warns about,
+    // reintroduced one level up: two reads standing side by side are not one
+    // decision just because they usually agree.
     let d = decide(workspace, policy);
-    if policy.deliveries_days.is_some() {
-        let _ = subscribe::keep_only(workspace, &d.kept_deliveries);
+    let mut rows = report(policy, &d);
+    if rows.iter().all(|p| p.records == 0) {
+        return rows;
     }
-    if policy.materializations_days.is_some() {
-        let _ = materialize::keep_only(workspace, &d.kept_events);
+    for row in rows.iter_mut() {
+        let wrote = match row.category.as_str() {
+            "deliveries" => subscribe::keep_only(workspace, &d.kept_deliveries),
+            "materializations" => materialize::keep_only(workspace, &d.kept_events),
+            // Not unreachable-by-luck: a category added to `report` and not
+            // here would otherwise report a removal nobody performed, which is
+            // the exact defect this function was fixed for.
+            other => Err(format!("no writer for ledger category {other:?}")),
+        };
+        if let Err(e) = wrote {
+            // Say so, and report nothing removed. A prune is idempotent and
+            // runs again, so skipping one costs nothing - but a SILENT skip
+            // reads as "nothing was old enough", and a workspace whose prune
+            // never once succeeds grows without bound, which is the thing this
+            // exists to prevent. (`alerts::update_state` makes the opposite
+            // call for its own lock and is right to: it records a side effect
+            // that already happened and has no later retry.)
+            eprintln!("duckle: retention: {} not pruned: {e}", row.category);
+            row.kept += row.records;
+            row.records = 0;
+            row.reason = format!("not pruned: {e}");
+        }
     }
     // AC5: a prune is auditable, and that has to cover the ledgers too. Records
     // removed without a trace are exactly the ones an operator would later have
-    // to reason about from their absence.
-    let removed: Vec<String> = planned
+    // to reason about from their absence. Built from what was written, so the
+    // audit cannot claim a removal that did not happen.
+    let removed: Vec<String> = rows
         .iter()
         .filter(|p| p.records > 0)
         .map(|p| format!("{} {}", p.records, p.category))
@@ -334,7 +367,7 @@ pub fn apply_ledgers(workspace: &Path, policy: &Policy) -> Vec<LedgerPrune> {
             Some(format!("removed {}", removed.join(", "))),
         );
     }
-    planned
+    rows
 }
 
 fn file_age_days(p: &Path, now: SystemTime) -> Option<u64> {
@@ -824,6 +857,78 @@ mod reference_aware {
         assert!(
             materialize::read(ws.path()).is_empty(),
             "and nothing retained still needs the publication"
+        );
+    }
+
+    /// A prune that could not write must not report that it did.
+    ///
+    /// `apply_ledgers` built its answer from `plan_ledgers` - a FORECAST - and
+    /// dropped both writers' `Result` with `let _ =`. So a prune that wrote
+    /// nothing still printed "removed N record(s)" and wrote an audit line
+    /// saying so, and with `--json` the operator was handed the forecast under
+    /// a `"dryRun": false` object without the prune result reaching them at
+    /// all. That is the mode a cron uses.
+    ///
+    /// Now easier to hit than it was: the delivery ledger takes a store lock,
+    /// so a pump holding it is an ordinary operational reason for the write to
+    /// fail, not just a disk error.
+    ///
+    /// The failure here is made by putting a DIRECTORY where the writer stages
+    /// its temp file, which fails fast and deterministically - holding the
+    /// store lock would work too but costs the full five second wait.
+    #[test]
+    fn a_ledger_prune_that_could_not_write_reports_nothing_removed() {
+        let ws = tempfile::tempdir().unwrap();
+        let old = "2026-01-01T00:00:00Z";
+        let mut ledger = std::collections::BTreeMap::new();
+        ledger.insert(
+            "dlv-1".to_string(),
+            subscribe::Delivery {
+                delivery_id: "dlv-1".into(),
+                subscription_id: "s1".into(),
+                event_id: "mat-1".into(),
+                pipeline_id: "consumer".into(),
+                state: subscribe::DeliveryState::Delivered,
+                attempts: 1,
+                last_error: None,
+                run_id: Some("run-c".into()),
+                at: old.into(),
+                parameters: Default::default(),
+                parameter_error: None,
+            },
+        );
+        subscribe::save_deliveries(ws.path(), &ledger).unwrap();
+
+        // The writer stages through `<ledger>.tmp`; a directory there cannot be
+        // written over, so the save fails while the READ still sees the record.
+        let staging = subscribe::deliveries_path(ws.path()).with_extension("json.tmp");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let policy = Policy { deliveries_days: Some(1), ..Default::default() };
+        let out = apply_ledgers(ws.path(), &policy);
+
+        let row = out
+            .iter()
+            .find(|l| l.category == "deliveries")
+            .expect("a deliveries row");
+        assert_eq!(
+            row.records, 0,
+            "a prune that wrote nothing reported {} removed: {}",
+            row.records, row.reason
+        );
+        assert!(
+            row.reason.contains("not pruned"),
+            "the row has to say why nothing went: {}",
+            row.reason
+        );
+        // And the record really is still there, which is what makes the old
+        // answer a lie rather than a rounding difference.
+        assert_eq!(subscribe::deliveries(ws.path()).len(), 1, "the record was not removed");
+        let audit = ws.path().join("logs").join("audit.ndjson");
+        let text = std::fs::read_to_string(&audit).unwrap_or_default();
+        assert!(
+            !text.contains("deliveries"),
+            "a prune that removed nothing must not be audited as one that did: {text}"
         );
     }
 

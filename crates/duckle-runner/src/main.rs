@@ -2738,21 +2738,7 @@ fn run_retention() -> ExitCode {
             // still inside the horizon as well as the ones that are not.
             let (ledgers, _) = retention::plan_ledgers(&workspace, &policy);
             let bytes: u64 = plan.iter().map(|r| r.bytes).sum();
-            if json_out {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({
-                        "schemaVersion": report::SCHEMA_VERSION,
-                        "command": "retention.prune",
-                        "dryRun": dry_run,
-                        "files": plan.len(),
-                        "bytes": bytes,
-                        "removals": plan,
-                        "ledgers": ledgers,
-                    }))
-                    .unwrap_or_default()
-                );
-            } else {
+            if !json_out {
                 for r in &plan {
                     println!("{:<10} {:>10}  {}  ({})", r.category, r.bytes, r.path, r.reason);
                 }
@@ -2765,19 +2751,46 @@ fn run_retention() -> ExitCode {
                     );
                 }
             }
-            if dry_run {
-                if !json_out {
-                    println!("dry run: nothing was deleted");
+            // The JSON is emitted AFTER the work, and carries what was actually
+            // done. It used to be printed first, so a real prune handed back
+            // the FORECAST inside an object saying `"dryRun": false` - and the
+            // prune's own answer never reached the operator at all, in the one
+            // mode a cron reads.
+            let done = match dry_run {
+                true => None,
+                false => {
+                    let (n, freed) = retention::apply(&workspace, &plan);
+                    Some((n, freed, retention::apply_ledgers(&workspace, &policy)))
                 }
-                return ExitCode::from(0);
-            }
-            let (n, freed) = retention::apply(&workspace, &plan);
-            let pruned = retention::apply_ledgers(&workspace, &policy);
-            if !json_out {
-                println!("removed {n} file(s), {freed} bytes");
-                for l in &pruned {
-                    if l.records > 0 {
-                        println!("removed {} {} record(s)", l.records, l.category);
+            };
+            if json_out {
+                let (files, size, rows) = match &done {
+                    Some((n, freed, pruned)) => (*n, *freed, pruned),
+                    None => (plan.len(), bytes, &ledgers),
+                };
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "schemaVersion": report::SCHEMA_VERSION,
+                        "command": "retention.prune",
+                        "dryRun": dry_run,
+                        "files": files,
+                        "bytes": size,
+                        "removals": plan,
+                        "ledgers": rows,
+                    }))
+                    .unwrap_or_default()
+                );
+            } else {
+                match &done {
+                    None => println!("dry run: nothing was deleted"),
+                    Some((n, freed, pruned)) => {
+                        println!("removed {n} file(s), {freed} bytes");
+                        for l in pruned {
+                            if l.records > 0 {
+                                println!("removed {} {} record(s)", l.records, l.category);
+                            }
+                        }
                     }
                 }
             }
