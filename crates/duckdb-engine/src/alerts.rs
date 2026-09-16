@@ -989,12 +989,25 @@ mod tests {
 
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let missing = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let unreadable = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let reader = {
-            let (p, stop, missing) = (p.clone(), stop.clone(), missing.clone());
+            let (p, stop) = (p.clone(), stop.clone());
+            let (missing, unreadable) = (missing.clone(), unreadable.clone());
             std::thread::spawn(move || {
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    if !p.exists() {
-                        missing.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    // NOT `Path::exists()`. That is `metadata().is_ok()`, so it
+                    // answers false for a file it merely could not ASK about -
+                    // a sharing violation while the directory entry is being
+                    // replaced, a scanner holding the file - and this test
+                    // would then report an absence that never happened. Only
+                    // NotFound is the thing being asserted about; anything else
+                    // is counted apart so a failure says which it was.
+                    if let Err(e) = std::fs::metadata(&p) {
+                        match e.kind() {
+                            std::io::ErrorKind::NotFound => &missing,
+                            _ => &unreadable,
+                        }
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                 }
             })
@@ -1009,7 +1022,8 @@ mod tests {
         assert_eq!(
             missing.load(std::sync::atomic::Ordering::Relaxed),
             0,
-            "the alert state was observably absent during a write"
+            "the alert state was observably absent during a write ({} reads could not be answered at all)",
+            unreadable.load(std::sync::atomic::Ordering::Relaxed)
         );
     }
 }
