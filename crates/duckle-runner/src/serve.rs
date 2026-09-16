@@ -307,6 +307,23 @@ pub fn run() -> Result<(), String> {
             slices.join(", ")
         );
     }
+    // #325: and the third reconciler that had no caller. A publication whose
+    // event append failed is a gap in an index, not lost work - the run record
+    // carries everything the event does. But nothing rebuilt it, so the
+    // warning history.rs prints ("will not be seen until the log is
+    // reconciled") named a recovery that never came, and the downstream
+    // consumer simply never ran. Bounded by the sweep watermark, so it rebuilds
+    // gaps without putting back what retention removed.
+    let rebuilt = duckle_duckdb_engine::materialize::reconcile(
+        &workspace,
+        &discover_pipelines(&workspace).into_iter().map(|(_, id, _)| id).collect::<Vec<_>>(),
+    );
+    if !rebuilt.is_empty() {
+        eprintln!(
+            "duckle: {} publication event(s) were missing from the log and have been rebuilt",
+            rebuilt.len()
+        );
+    }
 
     // Decide who may use this console before binding anything. An exposed bind
     // with no credential does not refuse to start any more - it comes up
@@ -502,6 +519,23 @@ pub fn run_web() -> Result<(), String> {
             "duckle: {} backfill(s) had slices still marked running and are now interrupted: {}",
             slices.len(),
             slices.join(", ")
+        );
+    }
+    // #325: and the third reconciler that had no caller. A publication whose
+    // event append failed is a gap in an index, not lost work - the run record
+    // carries everything the event does. But nothing rebuilt it, so the
+    // warning history.rs prints ("will not be seen until the log is
+    // reconciled") named a recovery that never came, and the downstream
+    // consumer simply never ran. Bounded by the sweep watermark, so it rebuilds
+    // gaps without putting back what retention removed.
+    let rebuilt = duckle_duckdb_engine::materialize::reconcile(
+        &workspace,
+        &discover_pipelines(&workspace).into_iter().map(|(_, id, _)| id).collect::<Vec<_>>(),
+    );
+    if !rebuilt.is_empty() {
+        eprintln!(
+            "duckle: {} publication event(s) were missing from the log and have been rebuilt",
+            rebuilt.len()
         );
     }
     // The editor writes files, edits connections and runs pipelines, so it is

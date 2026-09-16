@@ -342,7 +342,18 @@ pub fn apply_ledgers(workspace: &Path, policy: &Policy) -> Vec<LedgerPrune> {
     for row in rows.iter_mut() {
         let wrote = match row.category.as_str() {
             "deliveries" => subscribe::keep_only(workspace, &d.kept_deliveries),
-            "materializations" => materialize::keep_only(workspace, &d.kept_events),
+            // The horizon goes down with the write, and only if the write
+            // succeeded. `materialize::reconcile` rebuilds an event from the
+            // run record behind it, and run history keeps records by count
+            // while this prunes by age - so without knowing how far the sweep
+            // reached, the reconciler would read a surviving record, find no
+            // event, and put back the publication just removed.
+            "materializations" => materialize::keep_only(workspace, &d.kept_events).and_then(|()| {
+                match policy.materializations_days {
+                    Some(days) => materialize::record_pruned_before(workspace, &horizon(days)),
+                    None => Ok(()),
+                }
+            }),
             // Not unreachable-by-luck: a category added to `report` and not
             // here would otherwise report a removal nobody performed, which is
             // the exact defect this function was fixed for.
@@ -942,6 +953,48 @@ mod reference_aware {
             !text.contains("deliveries"),
             "a prune that removed nothing must not be audited as one that did: {text}"
         );
+    }
+
+    /// A prune tells the reconciler how far it swept, so what it removed does
+    /// not come straight back.
+    ///
+    /// The two halves of this live in different crates and neither is wrong on
+    /// its own: retention prunes the event log by AGE, and run history keeps
+    /// records by COUNT, so the record behind a pruned event is still sitting
+    /// there. `materialize::reconcile` reads that record, finds no event, and
+    /// concludes the append was lost - putting back a publication somebody
+    /// deliberately removed. `subscribe::pending` then owes its delivery again
+    /// and the consumer runs a second time on old data.
+    ///
+    /// Measured before the watermark existed: reconcile re-added it every time.
+    #[test]
+    fn a_prune_tells_the_reconciler_how_far_it_swept() {
+        use duckle_duckdb_engine::materialize;
+        let ws = tempfile::tempdir().unwrap();
+        publish(ws.path(), "run-1", "2026-09-04");
+        assert_eq!(materialize::read(ws.path()).len(), 1, "the publication is on the log");
+        assert_eq!(materialize::pruned_before(ws.path()), None, "nothing swept yet");
+
+        // Everything is older than a zero-day horizon, so the prune takes it.
+        let policy = Policy { materializations_days: Some(0), ..Default::default() };
+        let rows = apply_ledgers(ws.path(), &policy);
+        assert!(
+            rows.iter().any(|r| r.category == "materializations" && r.records == 1),
+            "the prune did not report removing the event: {rows:?}"
+        );
+        assert!(materialize::read(ws.path()).is_empty(), "the event was not removed");
+        assert!(
+            materialize::pruned_before(ws.path()).is_some(),
+            "a prune that swept the log did not say how far"
+        );
+
+        // The run record outlived its event, exactly as it does in production.
+        let rebuilt = materialize::reconcile(ws.path(), &["producer".to_string()]);
+        assert!(
+            rebuilt.is_empty(),
+            "the reconciler put back what the prune removed: {rebuilt:?}"
+        );
+        assert!(materialize::read(ws.path()).is_empty(), "the log was rebuilt from swept history");
     }
 
     /// A bare prune still removes nothing, ledgers included.

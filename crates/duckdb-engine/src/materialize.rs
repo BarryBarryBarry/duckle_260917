@@ -95,6 +95,51 @@ pub fn log_path(workspace: &Path) -> PathBuf {
     workspace.join(".duckle").join("materializations.ndjson")
 }
 
+/// How far back retention has already swept the log.
+///
+/// Beside the log, because it is only meaningful about that file.
+fn pruned_before_path(workspace: &Path) -> PathBuf {
+    workspace.join(".duckle").join("materializations.pruned")
+}
+
+/// The horizon retention has pruned this log to, if it ever has.
+///
+/// [`reconcile`] rebuilds an event from the run record it was derived from, and
+/// run history keeps records BY COUNT while retention prunes events BY AGE. So
+/// a rarely-run pipeline's records outlive their events, and without this the
+/// reconciler cannot tell an event that was never appended from one that was
+/// deliberately swept - it re-adds the swept one, `subscribe::pending` owes its
+/// delivery again, and the consumer runs a second time on old data. That is the
+/// duplicate the delivery id exists to prevent, so the reconciler would trade a
+/// rare lost event for a routine duplicate run.
+///
+/// `None` means nothing has been pruned yet, and then there is nothing to
+/// mistake: every gap is a real one.
+pub fn pruned_before(workspace: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(pruned_before_path(workspace)).ok()?;
+    let horizon = text.trim();
+    (!horizon.is_empty()).then(|| horizon.to_string())
+}
+
+/// Record that the log has been swept of everything committed before `horizon`.
+///
+/// Only ever moves forward. A prune with an earlier horizon than one already
+/// recorded must not widen what the reconciler will resurrect, and the two can
+/// arrive out of order - the horizon comes from the policy, and an operator can
+/// run one prune with a shorter retention than the last.
+pub fn record_pruned_before(workspace: &Path, horizon: &str) -> Result<(), String> {
+    if pruned_before(workspace).is_some_and(|known| known.as_str() >= horizon) {
+        return Ok(());
+    }
+    let path = pruned_before_path(workspace);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("pruned.tmp");
+    std::fs::write(&tmp, horizon).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Whether this run published anything.
 ///
 /// The same predicate the catalog's freshness uses, reused rather than
@@ -207,10 +252,17 @@ pub fn reconcile(workspace: &Path, pipelines: &[String]) -> Vec<Event> {
         .into_iter()
         .map(|e| (e.pipeline_id, e.run_id, e.committed_at))
         .collect();
+    // Never look past what retention has already swept. Without this the
+    // reconciler cannot tell a gap from a deliberate removal, and re-adding a
+    // swept event makes its delivery owed again - see [`pruned_before`].
+    let swept = pruned_before(workspace);
     let mut added = Vec::new();
     for pipeline in pipelines {
         for record in crate::history::load_run_history(workspace, pipeline) {
             let Some(event) = event_of(Some(workspace), pipeline, &record) else { continue };
+            if swept.as_deref().is_some_and(|before| event.committed_at.as_str() < before) {
+                continue;
+            }
             if known.contains(&(
                 event.pipeline_id.clone(),
                 event.run_id.clone(),
@@ -384,6 +436,82 @@ mod emitted_once {
         // same publication is the same event.
         assert!(reconcile(ws.path(), &["nightly".to_string()]).is_empty());
         assert_eq!(read(ws.path()).len(), 1, "reconciling twice duplicated an event");
+    }
+
+    /// What retention swept must stay swept.
+    ///
+    /// Retention prunes the log by AGE; run history keeps records by COUNT, so
+    /// a rarely-run pipeline's record outlives its event. Without the watermark
+    /// the reconciler reads that record, finds no matching event, and concludes
+    /// the append was lost - re-adding a publication somebody deliberately
+    /// removed. `subscribe::pending` then owes its delivery again and the
+    /// consumer runs a second time on old data.
+    ///
+    /// Measured before the watermark existed: reconcile re-added the pruned
+    /// event, every time.
+    #[test]
+    fn what_retention_swept_is_not_resurrected() {
+        let ws = tempfile::tempdir().unwrap();
+        append_run_record(ws.path(), "nightly", published("run-1", "/lake/orders")).unwrap();
+        let committed = read(ws.path())[0].committed_at.clone();
+
+        // Exactly what a prune does: rewrite the log without it, and say how
+        // far it swept. The run record stays behind either way.
+        keep_only(ws.path(), &[]).unwrap();
+        record_pruned_before(ws.path(), "2999-01-01T00:00:00Z").unwrap();
+        assert!(read(ws.path()).is_empty());
+
+        let added = reconcile(ws.path(), &["nightly".to_string()]);
+        assert!(
+            added.is_empty(),
+            "reconcile resurrected a publication retention removed (committed {committed})"
+        );
+        assert!(read(ws.path()).is_empty(), "the log was rebuilt from swept history");
+    }
+
+    /// And a gap NEWER than the sweep is still rebuilt, which is the whole
+    /// point of the reconciler. A watermark that stopped everything would be a
+    /// silent way to turn the feature off.
+    #[test]
+    fn a_gap_after_the_sweep_is_still_rebuilt() {
+        let ws = tempfile::tempdir().unwrap();
+        append_run_record(ws.path(), "nightly", published("run-1", "/lake/orders")).unwrap();
+        // Swept long ago; this publication is newer than that.
+        record_pruned_before(ws.path(), "2000-01-01T00:00:00Z").unwrap();
+        std::fs::remove_file(log_path(ws.path())).unwrap();
+
+        let added = reconcile(ws.path(), &["nightly".to_string()]);
+        assert_eq!(added.len(), 1, "a real gap after the sweep was not rebuilt");
+    }
+
+    /// The watermark only ever moves forward.
+    ///
+    /// The horizon comes from the policy, so an operator running one prune with
+    /// a shorter retention than the last must not widen what the reconciler is
+    /// willing to bring back.
+    #[test]
+    fn the_sweep_watermark_never_goes_backwards() {
+        let ws = tempfile::tempdir().unwrap();
+        record_pruned_before(ws.path(), "2026-06-01T00:00:00Z").unwrap();
+        record_pruned_before(ws.path(), "2026-01-01T00:00:00Z").unwrap();
+        assert_eq!(
+            pruned_before(ws.path()).as_deref(),
+            Some("2026-06-01T00:00:00Z"),
+            "an earlier horizon moved the watermark back"
+        );
+        record_pruned_before(ws.path(), "2026-09-01T00:00:00Z").unwrap();
+        assert_eq!(pruned_before(ws.path()).as_deref(), Some("2026-09-01T00:00:00Z"));
+    }
+
+    /// A workspace that has never pruned has nothing to mistake, so every gap
+    /// is a real one and the reconciler is unrestricted.
+    #[test]
+    fn with_no_sweep_recorded_every_gap_is_real() {
+        let ws = tempfile::tempdir().unwrap();
+        assert_eq!(pruned_before(ws.path()), None);
+        append_run_record(ws.path(), "nightly", published("run-1", "/lake/orders")).unwrap();
+        std::fs::remove_file(log_path(ws.path())).unwrap();
+        assert_eq!(reconcile(ws.path(), &["nightly".to_string()]).len(), 1);
     }
 }
 
