@@ -46,6 +46,7 @@
 
 - [Where Duckle runs](#where-duckle-runs)
 - [What is Duckle?](#what-is-duckle)
+- [What's new in v0.7.3](#whats-new-in-v073)
 - [What's new in v0.7.2](#whats-new-in-v072)
 - [What's new in v0.7.1](#whats-new-in-v071)
 - [What's new in v0.7.0](#whats-new-in-v070)
@@ -206,7 +207,7 @@ That's a real, native ETL pipeline built and run in under a minute. CSV is just 
 
 ## Download / Install
 
-Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.7.2):
+Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.7.3):
 
 | OS | Asset | How to run |
 |---|---|---|
@@ -4363,6 +4364,62 @@ gh release edit vX.Y.Z --draft=false --latest
 ```
 
 ---
+
+## What's new in v0.7.3
+
+61 commits. **A security release: it carries the fixes for six published
+advisories, one of them critical.** Upgrade before running a console anywhere
+but loopback, and before extracting an archive from a source you do not
+control.
+
+- **The six advisories, all patched here.** An official-container console could
+  be claimed by whoever asked first, so claiming now needs the code it printed
+  (critical). A self-extracting artifact trusted a predictable cache path, which
+  is now per user and checked before reuse (high). A ZIP member could escape the
+  destination on Windows, because a backslash is a separator there and the
+  filter only split on `/` (high). A run parameter was pasted into SQL
+  unescaped; it is a value now, in SQL and in a shell alike (medium). The
+  console's rebinding guard covered writes and not reads, so `GET /api` walked
+  past it (medium). A secret was redacted by where it landed rather than where
+  it came from, so a context secret reached authenticated viewers (medium).
+- **The DuckDB boundary closes two more routes.** A dot-command is not SQL - the
+  CLI runs `.shell`, `.read` and `.output` itself, so nothing a policy says
+  about components reaches them - and is now refused outright. An `INSTALL` in a
+  batched pure-SQL body downloaded an extension under an enforcing policy; both
+  execution paths are guarded, not just the one. Credentials no longer travel in
+  the per-stage executor's argv, where any local process could read them. rustls
+  moves to 0.23.45 for RUSTSEC-2026-0285.
+- **Stores that lost writes when two things wrote at once.** Accepting an XSD
+  contract, recording a delivery, and running a backfill each read a file,
+  changed it and wrote it back with nothing holding it still. Measured at eight
+  concurrent writers: seven acceptances reported success and one survived; six
+  deliveries were recorded and one was in the ledger. A backfill was worse than
+  a lost update - the executor never re-read the plan, so **cancelling a running
+  backfill did nothing**, silently, which is the only time anyone cancels one.
+  All three go through the workspace store lock now.
+- **A prune says what it did, and cannot be undone by the recovery.** The ledger
+  prune reported what it had PLANNED, so a prune that wrote nothing still said
+  "removed N" and audited it - and with `--json`, the mode a cron reads, the
+  result never reached the operator at all. Separately, the reconciler that
+  rebuilds a publication event whose append failed had no caller, so the warning
+  naming it promised a recovery that never came; it runs at startup now, bounded
+  by how far a prune has swept, so it restores a real gap without putting back
+  something retention deliberately removed. Deciding what to prune also got
+  ~9x faster by asking whether an asset declares freshness once per asset
+  instead of once per asset per event.
+- **New connectors and transforms.** Manticore Search as a source and a sink.
+  Explode and Flatten expand nested objects. The Geospatial sink can sort
+  spatially and offers Parquet in its file dialog. `duckle-runner xsd accept`
+  records an audited acceptance of a changed schema contract, and a full
+  snapshot opens a new epoch so an ordered chain recovers from a broken delta.
+- **Correctness.** A run that panics still reports an outcome; the scheduler tick
+  stays responsive and clears its busy marks on a panic; drift reads the real
+  source rather than a placeholder; the Visual Mapper casts each output to the
+  type it declares; `${workspace}` resolves for a run started over MCP; a
+  backfill slice resolves env, vault and saved connection references; `duckle
+  test` resolves a pipeline the way a run does; a retry refuses to repeat a file
+  operation or a shell command; and a schema path containing a space no longer
+  stops `fail` mode refusing anything.
 
 ## What's new in v0.7.2
 
