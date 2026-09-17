@@ -291,7 +291,7 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
                 &workspace, &name, &result, "follow",
             );
             record.run_id = Some(run_id.clone());
-            duckle_duckdb_engine::append_run_record(&workspace, &name, record);
+            duckle_duckdb_engine::record_run(&workspace, &name, record);
         }
         duckle_duckdb_engine::follow_session::record_poll(
             &workspace,

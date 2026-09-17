@@ -19,7 +19,7 @@
 //! any pipeline in the workspace, so it is open only on loopback and refuses
 //! to start on any other host without a credential: see console_auth.
 
-use duckle_duckdb_engine::{append_run_record, load_run_history, DuckdbEngine, PipelineDoc, RunRecord};
+use duckle_duckdb_engine::{load_run_history, DuckdbEngine, PipelineDoc, RunRecord};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -4229,7 +4229,7 @@ fn execute_one_with(
     // #259: stamp the id the caller was handed, so a finished async run is
     // still answerable once it has left memory.
     record.run_id = Some(owned_id.clone());
-    let _ = append_run_record(&state.workspace, &id, record);
+    duckle_duckdb_engine::record_run(&state.workspace, &id, record);
     // After the run is recorded, so an unreachable channel can never cost a
     // run its history entry, and never changes the outcome reported below.
     duckle_duckdb_engine::alerts::notify(&state.workspace, &id, &result);

@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use duckle_duckdb_engine::{
-    append_run_record, plans, runlock, schedules, DuckdbEngine, RunRecord, RunResult,
+    plans, runlock, schedules, DuckdbEngine, RunRecord, RunResult,
 };
 use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
@@ -699,7 +699,7 @@ impl Scheduler {
                     Err(e) => failed_run(started, &e),
                 };
                 duckle_duckdb_engine::alerts::notify(&ws, pipeline, &record);
-                let _ = append_run_record(
+                duckle_duckdb_engine::record_run(
                     &ws,
                     pipeline,
                     RunRecord::from_result_in(&ws, pipeline, &record, &trigger),
@@ -794,7 +794,7 @@ impl Scheduler {
         // duckle_duckdb_engine::alerts::notify.
         if let (Some(path), Some(pid)) = (workspace, pipeline_id) {
             let record = RunRecord::from_result_in(&path, &pid, result, "scheduled");
-            let _ = append_run_record(&path, &pid, record);
+            duckle_duckdb_engine::record_run(&path, &pid, record);
             duckle_duckdb_engine::alerts::notify(&path, &pid, result);
         }
     }

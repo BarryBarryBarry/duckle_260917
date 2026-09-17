@@ -155,8 +155,8 @@ fn history_file(workspace: &Path, pipeline_id: &str) -> std::path::PathBuf {
     workspace.join("runs").join(format!("{}.json", pipeline_id))
 }
 
-/// Append a record, trimming to the most recent MAX_RECORDS. Best
-/// effort - IO failures are logged by the caller, not propagated.
+/// Append a record, trimming to the most recent MAX_RECORDS. A run surface
+/// should call [`record_run`], which says when this fails.
 pub fn append_run_record(
     workspace: &Path,
     pipeline_id: &str,
@@ -422,6 +422,19 @@ mod incomplete_record_tests {
 mod tests {
     use super::*;
 
+    /// A record that cannot be written is reported, not swallowed: `runs` is a
+    /// file here, so the history directory cannot exist.
+    #[test]
+    fn a_run_record_that_cannot_be_written_is_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("runs"), "not a directory").unwrap();
+        let rec = record("ok", 10, 1);
+        assert!(!record_run(tmp.path(), "nightly", rec.clone()), "a lost record was reported as written");
+        std::fs::remove_file(tmp.path().join("runs")).unwrap();
+        assert!(record_run(tmp.path(), "nightly", rec), "a writable history must still record");
+        assert_eq!(load_run_history(tmp.path(), "nightly").len(), 1);
+    }
+
     fn record(status: &str, duration_ms: u64, rows: u64) -> RunRecord {
         RunRecord {
             run_id: None,
@@ -486,6 +499,29 @@ mod tests {
 
 /// Load the run history for a pipeline (oldest first). Returns an empty
 /// vec if there's no history yet or it can't be parsed.
+/// Append a finished run's record, or say on stderr why it could not be.
+///
+/// The doc above promised callers would log the failure; none did - the CLI,
+/// follow mode, the console and both desktop scheduler paths all dropped it.
+/// The run has already happened, so failing it would invite a re-run that
+/// repeats its sinks. But the record is more than a history line: publication
+/// events are rebuilt from it, and freshness, alerting and `runs diff` read it,
+/// so a silent loss meant subscribers were never triggered and nothing said why.
+/// Returns whether it was written, for a caller that reports it.
+pub fn record_run(workspace: &Path, pipeline_id: &str, record: RunRecord) -> bool {
+    match append_run_record(workspace, pipeline_id, record) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!(
+                "duckle: the {pipeline_id} run finished but its record could not be written ({e}). \
+                 It is missing from run history, freshness and alerting, and nothing subscribed \
+                 to what it published will be triggered by it."
+            );
+            false
+        }
+    }
+}
+
 pub fn load_run_history(workspace: &Path, pipeline_id: &str) -> Vec<RunRecord> {
     let path = history_file(workspace, pipeline_id);
     let Ok(content) = std::fs::read_to_string(&path) else {

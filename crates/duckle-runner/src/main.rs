@@ -609,9 +609,12 @@ fn run_with(args: Args) -> Result<bool, String> {
         if target.is_some() { "partial" } else { "manual" },
     );
     record.run_id = Some(run_id);
-    duckle_duckdb_engine::append_run_record(&workspace, &name, record);
+    let recorded = duckle_duckdb_engine::record_run(&workspace, &name, record);
 
     println!("status   : {}", result.status);
+    if !recorded {
+        println!("recorded : no - see the message above; the run itself is not repeated");
+    }
     println!("duration : {} ms", result.duration_ms);
     if let Some(err) = &result.error {
         println!("error    : {err}");
