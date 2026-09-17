@@ -87,6 +87,15 @@ impl Order {
         }
     }
 
+    /// `key` spelled the way this order's keys are: an integer without padding,
+    /// a date as the partition generator writes it. `None` when it is not one.
+    pub fn canonical(self, key: &str) -> Option<String> {
+        match self {
+            Order::Date { cadence } => crate::partition::canonical_key(key.trim(), cadence),
+            Order::Integer => key.trim().parse::<i64>().ok().map(|n| n.to_string()),
+        }
+    }
+
     /// Sort order over canonical keys.
     ///
     /// Not string order: `9` sorts after `10` as text, which would put an
@@ -825,7 +834,17 @@ pub fn verdict(
 
 /// The sequence definition a pipeline document declares, if any.
 pub fn of(doc: &serde_json::Value) -> Option<SequenceDef> {
-    serde_json::from_value(doc.get("sequence")?.clone()).ok()
+    let mut def: SequenceDef = serde_json::from_value(doc.get("sequence")?.clone()).ok()?;
+    // A baseline is accepted however it was typed, and everything downstream
+    // compares it with keys the generator spelled: the predecessor filter by
+    // equality, the snapshot floor by rank. Compared as written, a stray space
+    // made the first link wait on a baseline slice that never exists, and a date
+    // written 2026-9-3 ranked as text. One that is not a key is left as it is, so
+    // the chain reports it rather than guessing.
+    if let Some(canonical) = def.baseline.as_deref().and_then(|b| def.order.canonical(b)) {
+        def.baseline = Some(canonical);
+    }
+    Some(def)
 }
 
 /// Every object in the collection, unfiltered.
@@ -1517,6 +1536,31 @@ mod tests {
         );
         assert!(plan.claimable(first));
         assert!(!plan.claimable(at(&plan, "2026-09-02")));
+    }
+
+    /// A baseline is accepted however it was typed, so it is compared the way
+    /// the keys are spelled. It was compared as written: the first link's
+    /// predecessor (trimmed) no longer matched a baseline with a stray space, so
+    /// that link required a slice that never exists and the chain blocked for
+    /// good; and a date written `2026-9-3` ranked as text against `2026-09-03`.
+    #[test]
+    fn a_baseline_is_read_in_the_spelling_the_keys_use() {
+        let read = |order: serde_json::Value, baseline: &str| {
+            of(&serde_json::json!({ "sequence": {
+                "pattern": "D{date:YYYYMMDD}.zip", "order": order,
+                "requireContinuity": true, "baseline": baseline
+            }}))
+            .expect("a definition")
+        };
+        let dated_def = read(serde_json::json!({ "type": "date", "cadence": "day" }), " 2026-8-31 ");
+        assert_eq!(dated_def.baseline.as_deref(), Some("2026-08-31"));
+        let int_def = read(serde_json::json!({ "type": "integer" }), "007");
+        assert_eq!(int_def.baseline.as_deref(), Some("7"));
+
+        let plan = ledger(&dated_def, &["D20260901.zip", "D20260902.zip"]);
+        let first = at(&plan, "2026-09-01");
+        assert_eq!(plan.partitions[first].requires, None, "the first link waits on a baseline slice that never exists");
+        assert!(plan.claimable(first));
     }
 
     /// Continuity is opt-in: without it, the same links plan and nothing blocks.

@@ -338,6 +338,13 @@ pub fn next_key(key: &str, cadence: Cadence) -> Option<String> {
     Some(key_for(next, cadence))
 }
 
+/// `key` in the spelling [`generate`] gives it: `2026-8-31` is `2026-08-31`.
+///
+/// `None` when it is not a key of this cadence at all.
+pub fn canonical_key(key: &str, cadence: Cadence) -> Option<String> {
+    Some(key_for(key_instant(key, cadence, chrono_tz::UTC)?, cadence))
+}
+
 /// A canonical key, read back as the instant it names.
 fn key_instant(key: &str, cadence: Cadence, tz: chrono_tz::Tz) -> Option<chrono::DateTime<chrono_tz::Tz>> {
     let key = key.trim();
