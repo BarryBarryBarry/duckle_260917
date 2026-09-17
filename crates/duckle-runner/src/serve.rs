@@ -1799,7 +1799,11 @@ fn api_backfill_action(state: &Arc<State>, req: &Request) -> Reply {
             let Some(id) = body.get("id").and_then(Value::as_str) else {
                 return respond_err("400 Bad Request", "retry needs an id");
             };
-            let mut plan = match backfill::load(&ws, id) {
+            let mut plan = match backfill::load_for_retry(
+                &ws,
+                id,
+                &duckle_duckdb_engine::runlock::process_alive,
+            ) {
                 Ok(p) => p,
                 Err(e) => return respond_err("404 Not Found", &e),
             };
@@ -5683,6 +5687,52 @@ mod tests {
         assert!(
             duckle_duckdb_engine::backfill::list(ws).is_empty(),
             "a dry run persisted a plan"
+        );
+    }
+
+    /// A backfill killed while serve stayed up: startup is the only place that
+    /// reclaimed a dead executor's `running` slices, and retry moves only failed
+    /// and interrupted ones, so the console could never retry it. `u32::MAX` is
+    /// never a live pid; the partition filter matches nothing, so no executor
+    /// thread is started.
+    #[test]
+    fn a_console_retry_reclaims_a_slice_its_dead_executor_left_running() {
+        use duckle_duckdb_engine::backfill::{self, State};
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(
+            ws.join("pipelines/daily.json"),
+            r#"{"formatVersion":1,"name":"daily",
+                "partition":{"type":"time","cadence":"day","timezone":"UTC"},
+                "nodes":[],"edges":[]}"#,
+        )
+        .unwrap();
+        let mut plan = duckle_duckdb_engine::backfill_exec::plan_for(
+            &ws,
+            &ws.join("pipelines/daily.json"),
+            "2020-01-01",
+            "2020-01-02",
+            4,
+            None,
+        )
+        .unwrap();
+        plan.pid = Some(u32::MAX);
+        plan.partitions[0].state = State::Running;
+        backfill::save(&ws, &plan).unwrap();
+
+        let state = guarded_state(&ws);
+        let mut req = request("POST", "/api/backfills", Some("Bearer s3cret"));
+        req.body = serde_json::to_vec(&serde_json::json!({
+            "action": "retry", "id": plan.id, "partition": "no-such-slice"
+        }))
+        .unwrap();
+        let reply = route_console(&req, &state);
+        assert_eq!(reply.code(), 200, "{}", String::from_utf8_lossy(&reply.body));
+        assert_eq!(
+            backfill::load(&ws, &plan.id).unwrap().partitions[0].state,
+            State::Interrupted,
+            "the dead executor's slice is still `running`, so no retry can ever pick it up"
         );
     }
 

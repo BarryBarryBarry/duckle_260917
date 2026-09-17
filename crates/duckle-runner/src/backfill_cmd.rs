@@ -240,7 +240,11 @@ fn status(args: &Args) -> ExitCode {
 
 fn retry(args: &Args) -> ExitCode {
     let Some(id) = args.positional.first() else { return usage() };
-    let mut b = match backfill::load(&args.workspace, id) {
+    let mut b = match backfill::load_for_retry(
+        &args.workspace,
+        id,
+        &duckle_duckdb_engine::runlock::process_alive,
+    ) {
         Ok(b) => b,
         Err(e) => {
             eprintln!("duckle-runner backfill retry: {e}");
@@ -349,5 +353,68 @@ fn execute(workspace: &Path, plan: Backfill, json: bool, force: bool) -> ExitCod
     match counts.get("failed").copied().unwrap_or(0) {
         0 => ExitCode::from(0),
         _ => ExitCode::from(1),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use duckle_duckdb_engine::backfill::{self, State};
+
+    /// A backfill whose executor was killed mid-slice: one slice left `running`,
+    /// owned by a pid that is not alive. `u32::MAX` is never a live process on
+    /// either platform.
+    fn killed_backfill(ws: &Path) -> String {
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(
+            ws.join("pipelines/daily.json"),
+            r#"{"formatVersion":1,"name":"daily",
+                "partition":{"type":"time","cadence":"day","timezone":"UTC"},
+                "nodes":[],"edges":[]}"#,
+        )
+        .unwrap();
+        let mut plan = duckle_duckdb_engine::backfill_exec::plan_for(
+            ws,
+            &ws.join("pipelines/daily.json"),
+            "2020-01-01",
+            "2020-01-02",
+            4,
+            None,
+        )
+        .unwrap();
+        plan.pid = Some(u32::MAX);
+        plan.partitions[0].state = State::Running;
+        backfill::save(ws, &plan).unwrap();
+        plan.id
+    }
+
+    /// Only serve's startup reclaimed a killed executor's `running` slices, and
+    /// `retry` moves only failed and interrupted ones, so a backfill killed under
+    /// the CLI could never be retried or finished from it. The partition filter
+    /// matches nothing, so nothing runs: this is about what retry sees.
+    #[test]
+    fn retry_reclaims_a_slice_its_dead_executor_left_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let id = killed_backfill(&ws);
+        let args = Args {
+            workspace: ws.clone(),
+            from: String::new(),
+            to: String::new(),
+            max_concurrent: 4,
+            partition: Some("no-such-slice".into()),
+            occurrence: None,
+            force: false,
+            verify: false,
+            dry_run: false,
+            json: false,
+            positional: vec![id.clone()],
+        };
+        let _ = retry(&args);
+        assert_eq!(
+            backfill::load(&ws, &id).unwrap().partitions[0].state,
+            State::Interrupted,
+            "the dead executor's slice is still `running`, so no retry can ever pick it up"
+        );
     }
 }

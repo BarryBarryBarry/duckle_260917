@@ -806,7 +806,8 @@ fn t_backfill(args: &Value) -> Result<Value, String> {
         },
         "retry" => {
             let id = arg_str(args, "id").ok_or("missing 'id'")?;
-            let mut plan = backfill::load(&ws, id)?;
+            let mut plan =
+                backfill::load_for_retry(&ws, id, &duckle_duckdb_engine::runlock::process_alive)?;
             let only = arg_str(args, "partition").map(|k| vec![k.to_string()]);
             let n = plan.retry_open(only.as_deref());
             if n == 0 {
@@ -2499,6 +2500,51 @@ mod capability_tool {
         assert_eq!(r["component"].as_str(), Some("src.postgres"));
         assert_eq!(r["dialect"].as_str(), Some("postgres"));
         assert!(t_component_capabilities(&json!({ "component": "src.nope" })).is_err());
+    }
+}
+
+#[cfg(test)]
+mod backfill_tool {
+    use super::*;
+    use duckle_duckdb_engine::backfill::{self, State};
+
+    /// Only serve's startup reclaimed a killed executor's `running` slices, and
+    /// retry moves only failed and interrupted ones, so a backfill killed under
+    /// MCP could never be retried or finished from it. `u32::MAX` is never a live
+    /// pid; the partition filter matches nothing, so nothing runs.
+    #[test]
+    fn retry_reclaims_a_slice_its_dead_executor_left_running() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(
+            ws.join("pipelines/daily.json"),
+            r#"{"formatVersion":1,"name":"daily",
+                "partition":{"type":"time","cadence":"day","timezone":"UTC"},
+                "nodes":[],"edges":[]}"#,
+        )
+        .unwrap();
+        let mut plan = duckle_duckdb_engine::backfill_exec::plan_for(
+            &ws,
+            &ws.join("pipelines/daily.json"),
+            "2020-01-01",
+            "2020-01-02",
+            4,
+            None,
+        )
+        .unwrap();
+        plan.pid = Some(u32::MAX);
+        plan.partitions[0].state = State::Running;
+        backfill::save(&ws, &plan).unwrap();
+
+        let _ = t_backfill(&json!({
+            "workspace": ws, "action": "retry", "id": plan.id, "partition": "no-such-slice"
+        }));
+        assert_eq!(
+            backfill::load(&ws, &plan.id).unwrap().partitions[0].state,
+            State::Interrupted,
+            "the dead executor's slice is still `running`, so no retry can ever pick it up"
+        );
     }
 }
 

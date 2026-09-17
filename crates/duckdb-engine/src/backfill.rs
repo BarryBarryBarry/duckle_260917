@@ -546,39 +546,63 @@ pub fn list(workspace: &Path) -> Vec<Backfill> {
 /// process was killed and one still going look identical from outside, and
 /// they call for opposite responses.
 pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<String> {
-    let mut changed = Vec::new();
-    for b in list(workspace) {
-        if b.pid.is_some_and(|pid| live_pids(pid)) {
-            continue;
-        }
-        if !b.partitions.iter().any(|p| p.state == State::Running) {
-            continue;
-        }
-        // Decided again inside the store lock, on the plan as it is NOW. The
-        // listing above is a snapshot, and a bare save from it would overwrite
-        // whatever landed since: a slice that finished, or an executor that
-        // started back up and claimed the plan under its own pid.
-        let reclaimed = update(workspace, &b.id, |plan| {
-            if plan.pid.is_some_and(|pid| live_pids(pid)) {
-                return false;
-            }
-            let mut touched = false;
-            for p in plan.partitions.iter_mut() {
-                if p.state == State::Running {
-                    p.state = State::Interrupted;
-                    touched = true;
-                }
-            }
-            if touched {
-                plan.pid = None;
-            }
-            touched
-        });
-        if matches!(reclaimed, Ok((_, true))) {
-            changed.push(b.id.clone());
-        }
+    list(workspace)
+        .into_iter()
+        .filter(|b| reclaim_abandoned(workspace, b, live_pids))
+        .map(|b| b.id)
+        .collect()
+}
+
+/// A backfill as a retry must see it: slices a dead executor left `running`
+/// reclaimed as `interrupted` first.
+///
+/// Retrying moves only `failed` and `interrupted` slices, and serve's startup
+/// was the only thing that reclaimed a killed executor's `running` ones. So a
+/// backfill killed under the CLI or MCP, or under a serve that stayed up, could
+/// not be retried or finished: retry answered that there was nothing to retry,
+/// and the slice could never be claimed again. A live executor's slices are
+/// left alone, exactly as at startup.
+pub fn load_for_retry(
+    workspace: &Path,
+    id: &str,
+    live_pids: &dyn Fn(u32) -> bool,
+) -> Result<Backfill, String> {
+    let b = load(workspace, id)?;
+    if reclaim_abandoned(workspace, &b, live_pids) {
+        return load(workspace, id);
     }
-    changed
+    Ok(b)
+}
+
+/// Reclaim one backfill's abandoned `running` slices; true when any were.
+fn reclaim_abandoned(workspace: &Path, b: &Backfill, live_pids: &dyn Fn(u32) -> bool) -> bool {
+    if b.pid.is_some_and(|pid| live_pids(pid)) {
+        return false;
+    }
+    if !b.partitions.iter().any(|p| p.state == State::Running) {
+        return false;
+    }
+    // Decided again inside the store lock, on the plan as it is NOW. The
+    // listing above is a snapshot, and a bare save from it would overwrite
+    // whatever landed since: a slice that finished, or an executor that
+    // started back up and claimed the plan under its own pid.
+    let reclaimed = update(workspace, &b.id, |plan| {
+        if plan.pid.is_some_and(|pid| live_pids(pid)) {
+            return false;
+        }
+        let mut touched = false;
+        for p in plan.partitions.iter_mut() {
+            if p.state == State::Running {
+                p.state = State::Interrupted;
+                touched = true;
+            }
+        }
+        if touched {
+            plan.pid = None;
+        }
+        touched
+    });
+    matches!(reclaimed, Ok((_, true)))
 }
 
 #[cfg(test)]
