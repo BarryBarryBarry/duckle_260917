@@ -94,10 +94,17 @@ impl Spool {
 /// Content-Length body and nothing else - no chunked encoding, no keep-alive,
 /// no pipelining - because the job is to catch a webhook POST and write it
 /// down, and every feature beyond that is another way to be wrong.
-pub fn read_request(stream: &mut TcpStream, max_body: usize) -> Result<Request, String> {
-    let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
+///
+/// What it does not take it REFUSES, with the status that tells the sender
+/// why, because the answer to anything taken is a 200 that senders do not
+/// retry. A body over `max_body` used to be cut down to the limit and a chunked
+/// one read as empty, and both were spooled and answered 200: a truncated or
+/// empty record, and a sender told it had been delivered.
+pub fn read_request(stream: &mut TcpStream, max_body: usize) -> Result<Request, (u16, String)> {
+    let unreadable = |e: std::io::Error| (400, e.to_string());
+    let mut reader = BufReader::new(stream.try_clone().map_err(unreadable)?);
     let mut start = String::new();
-    reader.read_line(&mut start).map_err(|e| e.to_string())?;
+    reader.read_line(&mut start).map_err(unreadable)?;
     let mut parts = start.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     let path = parts.next().unwrap_or("/").to_string();
@@ -106,7 +113,7 @@ pub fn read_request(stream: &mut TcpStream, max_body: usize) -> Result<Request, 
     let mut content_length = 0usize;
     loop {
         let mut line = String::new();
-        let n = reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        let n = reader.read_line(&mut line).map_err(unreadable)?;
         if n == 0 || line.trim().is_empty() {
             break;
         }
@@ -116,13 +123,19 @@ pub fn read_request(stream: &mut TcpStream, max_body: usize) -> Result<Request, 
             if k == "content-length" {
                 content_length = v.parse().unwrap_or(0);
             }
+            if k == "transfer-encoding" && v.to_ascii_lowercase().contains("chunked") {
+                return Err((411, "chunked bodies are not accepted; send Content-Length".into()));
+            }
             headers.insert(k, serde_json::Value::String(v));
         }
     }
-    let want = content_length.min(max_body);
+    if content_length > max_body {
+        return Err((413, format!("body of {content_length} bytes is over the {max_body} byte limit")));
+    }
+    let want = content_length;
     let mut body = vec![0u8; want];
     if want > 0 {
-        reader.read_exact(&mut body).map_err(|e| e.to_string())?;
+        reader.read_exact(&mut body).map_err(unreadable)?;
     }
     Ok(Request {
         method,
@@ -200,9 +213,9 @@ pub fn run(opts: ListenOptions) -> Result<u64, String> {
                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
                 let req = match read_request(&mut stream, 8 * 1024 * 1024) {
                     Ok(r) => r,
-                    Err(e) => {
-                        eprintln!("listen: unreadable request: {e}");
-                        let _ = respond(&mut stream, 400, "bad request");
+                    Err((code, e)) => {
+                        eprintln!("listen: request not taken ({code}): {e}");
+                        let _ = respond(&mut stream, code, &e);
                         continue;
                     }
                 };
@@ -246,6 +259,8 @@ fn respond(stream: &mut TcpStream, code: u16, body: &str) -> std::io::Result<()>
         200 => "OK",
         400 => "Bad Request",
         404 => "Not Found",
+        411 => "Length Required",
+        413 => "Payload Too Large",
         _ => "Internal Server Error",
     };
     let resp = format!(
@@ -262,6 +277,45 @@ fn respond(stream: &mut TcpStream, code: u16, body: &str) -> std::io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What `read_request` makes of these raw bytes, read through a real socket.
+    fn read_bytes(raw: &[u8], max_body: usize) -> Result<Request, (u16, String)> {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client.write_all(raw).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        server.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        read_request(&mut server, max_body)
+    }
+
+    /// A 200 tells a webhook sender its data is safe, and senders do not retry
+    /// one. A body over the limit was cut down to the limit and spooled with a
+    /// 200, so the sender believed a truncated record was the whole thing.
+    #[test]
+    fn a_body_over_the_limit_is_refused_not_truncated() {
+        let body = "x".repeat(64);
+        let raw = format!("POST /hooks HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        match read_bytes(raw.as_bytes(), 16) {
+            Err((413, _)) => {}
+            Err((code, why)) => panic!("refused with {code} ({why}), not 413"),
+            Ok(r) => panic!("accepted {} of {} bytes as if it were the whole body", r.body.len(), body.len()),
+        }
+        assert!(read_bytes(raw.as_bytes(), 64).is_ok(), "a body at the limit is taken");
+    }
+
+    /// A chunked body carries no Content-Length, so it was read as empty and
+    /// spooled with a 200: the event arrived, the payload did not, and the sender
+    /// was told it had. 411 asks for the length instead.
+    #[test]
+    fn a_chunked_body_is_refused_rather_than_spooled_empty() {
+        let raw = b"POST /hooks HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n7\r\n{\"a\":1}\r\n0\r\n\r\n";
+        match read_bytes(raw, 1024) {
+            Err((411, _)) => {}
+            Err((code, why)) => panic!("refused with {code} ({why}), not 411"),
+            Ok(r) => panic!("accepted a chunked request with body {:?}", r.body),
+        }
+    }
 
     #[test]
     fn a_path_filter_only_takes_what_it_names() {
