@@ -25,6 +25,7 @@ import { deriveNodeSubtitle } from '../src/node-subtitle';
 import {
     buildBundle,
     cancelPipeline,
+    mcpConnectionInfo,
     runPipeline,
     scheduleDelete,
     scheduleList,
@@ -969,6 +970,32 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     check('rename subtitle: the form shape is counted', fromForm === 'rename 2', `got ${fromForm}`);
     const older = deriveNodeSubtitle('xf.rename', { renames: [{ from: 'a', to: 'b' }] });
     check('rename subtitle: the older array shape still counts', older === 'rename 1', `got ${older}`);
+}
+
+// ---------------------------------------------------------------------------
+// Connect to Claude in the web editor says why it cannot connect.
+//
+// duckle-mcp speaks stdio, so it runs on the computer the AI client runs on,
+// which the web editor cannot reach. The server has no command for it, so the
+// details came back empty and the dialog spun on "Preparing" forever.
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as {
+        __checkLogicInvoke?: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    };
+    g.__checkLogicInvoke = async () => null;
+    let outcome = 'resolved';
+    try {
+        await mcpConnectionInfo();
+    } catch (e) {
+        outcome = e instanceof Error ? e.message : String(e);
+    }
+    g.__checkLogicInvoke = undefined;
+    check(
+        'web mcp: the dialog gets a reason, not an endless spinner',
+        outcome !== 'resolved' && outcome.includes('duckle-mcp'),
+        `outcome ${JSON.stringify(outcome)}`,
+    );
 }
 
 // ---------------------------------------------------------------------------

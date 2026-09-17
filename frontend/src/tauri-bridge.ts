@@ -1315,6 +1315,14 @@ export type McpConnInfo = {
  * paths plus a ready-to-paste `claude mcp add` command and mcpServers JSON.
  */
 export async function mcpConnectionInfo(): Promise<McpConnInfo> {
+    // duckle-mcp speaks stdio, so it has to run on the computer the AI client
+    // runs on, which a browser cannot set up. The server has no command for it,
+    // so this used to resolve empty and the dialog spun forever.
+    if (isWebBackend()) {
+        throw new Error(
+            'Connecting an AI client is not available in the web editor: duckle-mcp runs on the same computer as Claude, so set it up from the desktop app there.',
+        );
+    }
     return await invoke<McpConnInfo>('mcp_connection_info');
 }
 
