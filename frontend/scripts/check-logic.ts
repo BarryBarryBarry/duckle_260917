@@ -17,6 +17,7 @@ import { scheduleForSave } from '../src/schedule-save';
 import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
 import { UndoHistory, type CanvasSnapshot } from '../src/undo-history';
 import { saveItemPayload } from '../src/workspace';
+import { gitActionRewritesFiles } from '../src/git-actions';
 import type { Schedule } from '../src/tauri-bridge';
 
 // The frontend directory, injected by check-logic.mjs: the bundle runs from a
@@ -444,6 +445,43 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     );
     g.__checkLogicInvoke = undefined;
     g.fetch = realFetch;
+}
+
+// ---------------------------------------------------------------------------
+// A git pull or checkout reloads the workspace instead of saving over it.
+//
+// Both rewrite files on disk while the editor keeps what it loaded before, and
+// the next edit autosaved those old copies over what git had brought in. The
+// editor already has a reload for exactly this (#92); nothing called it.
+// ---------------------------------------------------------------------------
+{
+    for (const label of ['pull', 'checkout']) {
+        check(`git: ${label} rewrites workspace files`, gitActionRewritesFiles(label), 'the editor would keep stale copies');
+    }
+    for (const label of ['init', 'commit', 'push', 'remote', 'branch-create', 'save-pat', 'clear-pat']) {
+        check(`git: ${label} does not reload the workspace`, !gitActionRewritesFiles(label), 'a needless reload');
+    }
+    const panel = readFileSync(resolve(__FRONTEND_DIR__, 'src/workflow-ui/GitPanel.tsx'), 'utf8');
+    const runStart = panel.indexOf('const run = useCallback(');
+    const runEnd = runStart < 0 ? -1 : panel.indexOf('const handleInit', runStart);
+    const runBody = runStart >= 0 && runEnd > runStart ? panel.slice(runStart, runEnd) : '';
+    check(
+        'git: the panel\'s action runner is still where it was',
+        runBody !== '',
+        'GitPanel run() moved or changed shape; update this check to follow it',
+    );
+    check(
+        'git: every action goes through the rewrite rule and tells the editor',
+        runBody.includes('gitActionRewritesFiles(label)') && runBody.includes('onFilesChanged'),
+        'run() never asks gitActionRewritesFiles or never calls onFilesChanged',
+    );
+    const app = readFileSync(resolve(__FRONTEND_DIR__, 'src/App.tsx'), 'utf8');
+    const element = app.slice(app.indexOf('<GitPanel'), app.indexOf('/>', app.indexOf('<GitPanel')));
+    check(
+        'git: the editor reloads the workspace when the panel says files changed',
+        element.includes('onFilesChanged={handleReloadWorkspace}'),
+        `App renders ${element.trim()}`,
+    );
 }
 
 if (failures.length) {

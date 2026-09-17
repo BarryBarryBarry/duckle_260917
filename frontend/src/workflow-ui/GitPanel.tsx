@@ -29,10 +29,13 @@ import {
     type GitStatus,
 } from '../tauri-bridge';
 import { openExternal } from '../tauri-io';
+import { gitActionRewritesFiles } from '../git-actions';
 
 type Props = {
     workspacePath: string;
     onClose: () => void;
+    /** Git rewrote workspace files; the editor reloads them from disk. */
+    onFilesChanged?: () => void;
 };
 
 /**
@@ -40,7 +43,7 @@ type Props = {
  * push + pull + branches + remote / PAT setup, so the user never leaves
  * Duckle for routine operations.
  */
-export default function GitPanel({ workspacePath, onClose }: Props) {
+export default function GitPanel({ workspacePath, onClose, onFilesChanged }: Props) {
     const [status, setStatus] = useState<GitStatus | null>(null);
     const [branches, setBranches] = useState<string[]>([]);
     const [loading, setLoading] = useState(true);
@@ -103,9 +106,10 @@ export default function GitPanel({ workspacePath, onClose }: Props) {
                 }
             } finally {
                 setBusy(null);
+                if (gitActionRewritesFiles(label)) onFilesChanged?.();
             }
         },
-        [refresh],
+        [refresh, onFilesChanged],
     );
 
     const handleInit = () => run('init', () => workspaceGitInit(workspacePath), 'Initialized empty Git repo');

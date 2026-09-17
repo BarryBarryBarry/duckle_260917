@@ -2885,6 +2885,7 @@ export default function App() {
                 <GitPanel
                     workspacePath={workspacePathState}
                     onClose={() => setShowGitPanel(false)}
+                    onFilesChanged={handleReloadWorkspace}
                 />
             ) : null}
 
