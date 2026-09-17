@@ -944,8 +944,14 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
             // Registered before the queue, so a Stop pressed while it waits lands.
             let _running = state.editor_runs.start(&who.label, &engine);
             let (_guard, pool, queued_ms) = state.run_lock.acquire(&doc.resource_pool);
-            let receipt =
-                begin_editor_run(&state.workspace, &doc, &name, "web", Some((pool, queued_ms)));
+            let receipt = begin_editor_run(
+                &state.workspace,
+                &doc,
+                &name,
+                args.get("pipelineId").and_then(|v| v.as_str()),
+                "web",
+                Some((pool, queued_ms)),
+            );
             let result = engine.execute_pipeline_named(&doc, &name);
             duckle_duckdb_engine::retry::finish(
                 &state.workspace,
@@ -1230,6 +1236,8 @@ fn begin_editor_run(
     workspace: &std::path::Path,
     doc: &PipelineDoc,
     name: &str,
+    // The id the editor saved the pipeline under, which names its file.
+    pipeline_id: Option<&str>,
     trigger: &str,
     // #289: recorded on the receipt so an editor or streaming run answers the
     // same "which pool, and how long did it wait" as a scheduled one.
@@ -1237,12 +1245,27 @@ fn begin_editor_run(
 ) -> duckle_duckdb_engine::retry::RunReceipt {
     let hash = duckle_duckdb_engine::retry::pipeline_hash(doc);
     let run_id = duckle_duckdb_engine::retry::new_run_id(name, trigger);
+    // The editor saves a pipeline as pipelines/<id>.json, so that is the file a
+    // retry has to read. The receipt used the display name, which is not a file,
+    // and retry could not find the pipeline of any web run. Both values come
+    // from the browser, so one that is not a plain file name does not get to
+    // name a path.
+    let plain = |s: &str| {
+        !s.is_empty()
+            && s != "."
+            && s != ".."
+            && !s.contains(['/', '\\', ':', '\0'])
+    };
+    let stem = pipeline_id
+        .filter(|id| plain(id))
+        .or(Some(name).filter(|n| plain(n)))
+        .unwrap_or("web");
     let receipt = duckle_duckdb_engine::retry::begin(
         workspace,
         &run_id,
         trigger,
         name,
-        &workspace.join("pipelines").join(format!("{name}.json")).display().to_string(),
+        &workspace.join("pipelines").join(format!("{stem}.json")).display().to_string(),
         &hash,
         None,
     );
@@ -1327,6 +1350,7 @@ fn run_stream(
         &state.workspace,
         &doc,
         &name,
+        args.get("pipelineId").and_then(|v| v.as_str()),
         if target.is_some() { "web-partial" } else { "web" },
         Some((pool, queued_ms)),
     );
@@ -6293,6 +6317,52 @@ mod tests {
         let signed_in = request("POST", "/api/run_stream", Some(&bearer));
         web_gate(&signed_in, &state, console_auth::Role::Operator, "editor.api")
             .expect("a credentialed operator must still be allowed to run");
+    }
+
+    /// #259: a web editor run is recorded against the pipeline FILE, so
+    /// `duckle-runner retry` can find it.
+    ///
+    /// The receipt named `pipelines/<display name>.json`, but the editor saves a
+    /// pipeline under its id, so retry answered "cannot read the pipeline this
+    /// run used" for every web run. The id comes from the browser, so one that is
+    /// not a plain file name is not trusted to name a path.
+    #[test]
+    fn a_web_run_is_recorded_against_the_file_the_editor_saved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from("duckdb"),
+            dist: ws.clone(),
+            host: "0.0.0.0".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        let recorded_path = |id: &str| {
+            let dir = duckle_duckdb_engine::retry::dir(&ws);
+            let _ = std::fs::remove_dir_all(&dir);
+            let mut req = request("POST", "/api/cmd/run_pipeline", Some("Bearer s3cret"));
+            req.body = serde_json::to_vec(&serde_json::json!({
+                "pipeline": { "nodes": [], "edges": [] },
+                "pipelineId": id,
+                "pipelineName": "Orders nightly",
+            }))
+            .unwrap();
+            route_web(&req, &state);
+            let receipts: Vec<_> = std::fs::read_dir(&dir).expect("a receipt was written").flatten().collect();
+            assert_eq!(receipts.len(), 1, "one run, one receipt");
+            let text = std::fs::read_to_string(receipts[0].path()).unwrap();
+            let receipt: serde_json::Value = serde_json::from_str(&text).unwrap();
+            std::path::PathBuf::from(receipt["pipeline_path"].as_str().or(receipt["pipelinePath"].as_str()).unwrap())
+        };
+        assert_eq!(recorded_path("p_7f3a"), ws.join("pipelines").join("p_7f3a.json"));
+        let escaped = recorded_path("../../outside");
+        assert!(
+            escaped.starts_with(ws.join("pipelines")) && !escaped.to_string_lossy().contains(".."),
+            "an id that is not a file name must not name a path: {}",
+            escaped.display()
+        );
     }
 
     /// The web editor's Schedules dialog reads and writes the workspace's real
