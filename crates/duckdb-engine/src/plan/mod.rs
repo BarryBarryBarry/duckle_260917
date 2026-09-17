@@ -307,6 +307,16 @@ pub(crate) fn run_var_names(doc: &PipelineDoc) -> std::collections::BTreeSet<Str
         .collect()
 }
 
+/// A node's SQL name, when it names something other than the node's own relation.
+///
+/// The name becomes a DuckDB view, and DuckDB identifiers ignore ASCII case - and
+/// only ASCII case: "Ärger" and "ärger" stay two views, measured on 1.5.4. So a
+/// name equal to the node's id in another case IS that relation, and a view named
+/// after it would replace the relation with a view of itself.
+pub(crate) fn node_sql_name<'a>(alias: Option<&'a str>, node_id: &str) -> Option<&'a str> {
+    alias.map(str::trim).filter(|a| !a.is_empty() && !a.eq_ignore_ascii_case(node_id))
+}
+
 /// The single non-SQL action a Stage performs (or None for pure SQL).
 /// Terminal variants (sources / sinks / transforms) replace the stage's
 /// SQL run in the executor; control-flow variants (RunJob / Iterate /
@@ -891,20 +901,25 @@ fn compile_impl(pipeline: &PipelineDoc, allow_view_upgrade: bool) -> Result<Comp
     // an alias must be unique and must not shadow another node's id - otherwise
     // the alias view would clash with a real relation. Validate up front so the
     // error is clear instead of a cryptic "view already exists" mid-run.
+    //
+    // Both compared the way DuckDB compares identifiers, ASCII case folded (see
+    // `node_sql_name`): exactly, "Orders" and "orders" passed, became one view,
+    // and a node reading "Orders" silently got the other node's rows.
     {
         let mut seen: HashSet<String> = HashSet::new();
+        let folded_ids: HashSet<String> =
+            pipeline.nodes.iter().map(|n| n.id.to_ascii_lowercase()).collect();
         for n in &pipeline.nodes {
-            let alias = match n.data.alias.as_deref().map(str::trim) {
-                Some(a) if !a.is_empty() && a != n.id => a,
-                _ => continue,
+            let Some(alias) = node_sql_name(n.data.alias.as_deref(), &n.id) else {
+                continue;
             };
-            if node_index.contains_key(alias) {
+            if folded_ids.contains(&alias.to_ascii_lowercase()) {
                 return Err(EngineError::Config(format!(
                     "Node '{}' has SQL name '{}', which is already another node's id. Pick a different name.",
                     n.data.label, alias
                 )));
             }
-            if !seen.insert(alias.to_string()) {
+            if !seen.insert(alias.to_ascii_lowercase()) {
                 return Err(EngineError::Config(format!(
                     "SQL name '{}' is used by more than one node. Each node's SQL name must be unique.",
                     alias
@@ -6833,13 +6848,7 @@ fn build_stage(
         // validation above), so it cannot clash with a real relation. The executor
         // still injects the same view for runtime-source stages whose Stage.sql it
         // ignores; CREATE OR REPLACE makes the overlap idempotent.
-        if let Some(alias) = node
-            .data
-            .alias
-            .as_deref()
-            .map(str::trim)
-            .filter(|a| !a.is_empty() && *a != node.id)
-        {
+        if let Some(alias) = node_sql_name(node.data.alias.as_deref(), &node.id) {
             sql.push_str(&format!(
                 "; CREATE OR REPLACE VIEW {} AS SELECT * FROM {}",
                 quote_ident(alias),
@@ -7084,12 +7093,7 @@ fn build_stage(
         alias: if no_output_relation {
             None
         } else {
-            node.data
-                .alias
-                .as_deref()
-                .map(str::trim)
-                .filter(|a| !a.is_empty() && *a != node.id)
-                .map(str::to_string)
+            node_sql_name(node.data.alias.as_deref(), &node.id).map(str::to_string)
         },
         no_output_relation,
     })

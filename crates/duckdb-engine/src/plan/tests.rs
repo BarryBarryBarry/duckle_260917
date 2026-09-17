@@ -3303,6 +3303,66 @@
         assert!(err.contains("shared") && err.to_lowercase().contains("unique"), "dup alias errors: {}", err);
     }
 
+    /// A SQL name becomes a DuckDB view, and DuckDB identifiers ignore case:
+    /// `"Orders"` and `"orders"` are one view, so the second replaced the first
+    /// and a node reading `Orders` silently got the other node's rows. The
+    /// uniqueness check compared exactly and compiled it.
+    #[test]
+    fn sql_names_that_differ_only_in_case_are_the_same_name() {
+        let dup = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"a","position":{"x":0,"y":0},"data":{"label":"A","alias":"Orders","componentId":"src.csv","properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"b","position":{"x":0,"y":0},"data":{"label":"B","alias":"orders","componentId":"src.csv","properties":{"path":"/tmp/b.csv","hasHeader":true}}}
+              ],
+              "edges":[]
+            }"#,
+        );
+        let err = compile(&dup).expect_err("two names one view apart compiled").to_string();
+        assert!(err.to_lowercase().contains("unique"), "dup alias errors: {}", err);
+
+        let shadow = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"a","position":{"x":0,"y":0},"data":{"label":"A","alias":"NODE_B","componentId":"src.csv","properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"node_b","position":{"x":0,"y":0},"data":{"label":"B","componentId":"src.csv","properties":{"path":"/tmp/b.csv","hasHeader":true}}}
+              ],
+              "edges":[]
+            }"#,
+        );
+        let err = compile(&shadow).expect_err("a name shadowing another node's relation compiled").to_string();
+        assert!(err.contains("another node's id"), "shadow alias errors: {}", err);
+
+        // Its own id in another case is its own relation, not a clash.
+        let own = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"orders","position":{"x":0,"y":0},"data":{"label":"A","alias":"ORDERS","componentId":"src.csv","properties":{"path":"/tmp/a.csv","hasHeader":true}}}
+              ],
+              "edges":[]
+            }"#,
+        );
+        let plan = compile(&own).expect("a node named after itself compiles");
+        let stage = plan.stages.into_iter().find(|s| s.node_id == "orders").unwrap();
+        assert!(
+            !stage.sql.contains("VIEW \"ORDERS\""),
+            "a view over itself would replace its own relation: {}",
+            stage.sql
+        );
+
+        // DuckDB folds ASCII case only, so these are two views and both compile.
+        let accents = pipeline_from_json(
+            r#"{
+              "nodes": [
+                {"id":"a","position":{"x":0,"y":0},"data":{"label":"A","alias":"Ärger","componentId":"src.csv","properties":{"path":"/tmp/a.csv","hasHeader":true}}},
+                {"id":"b","position":{"x":0,"y":0},"data":{"label":"B","alias":"ärger","componentId":"src.csv","properties":{"path":"/tmp/b.csv","hasHeader":true}}}
+              ],
+              "edges":[]
+            }"#,
+        );
+        assert!(compile(&accents).is_ok(), "two names DuckDB keeps apart were refused");
+    }
+
     #[test]
     fn pure_sql_alias_is_used_by_downstream_consumer() {
         // #102 follow-up: a Pure SQL node with a custom SQL name (alias) registers

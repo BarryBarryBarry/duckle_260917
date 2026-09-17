@@ -3951,9 +3951,7 @@ impl DuckdbEngine {
                 .nodes
                 .iter()
                 .find(|n| &n.id == name)
-                .and_then(|n| n.data.alias.as_deref())
-                .map(str::trim)
-                .filter(|a| !a.is_empty() && a != name)
+                .and_then(|n| plan::node_sql_name(n.data.alias.as_deref(), name))
             {
                 sql.push_str(&format!(
                     "CREATE OR REPLACE VIEW {} AS SELECT {} WHERE 1=0;

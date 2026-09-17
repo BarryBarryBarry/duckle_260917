@@ -23,7 +23,8 @@ const stubTauri = {
             // globalThis.__checkLogicInvoke; otherwise every command answers
             // null, which is what the web shim makes of a 404.
             contents:
-                'export const invoke = async (cmd, args) => globalThis.__checkLogicInvoke ? globalThis.__checkLogicInvoke(cmd, args) : null;' +
+                'export const tauriAutodetect = async () => null;' +
+                'export const invoke =async (cmd, args) => globalThis.__checkLogicInvoke ? globalThis.__checkLogicInvoke(cmd, args) : null;' +
                 'export class Channel {}' +
                 'export const isTauri = () => false;' +
                 'export default {};',

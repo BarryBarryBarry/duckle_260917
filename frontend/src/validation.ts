@@ -64,11 +64,20 @@ export function validatePipeline(
     // A node alias names its output relation, so two nodes can't share one and
     // an alias can't shadow another node's id (the engine rejects both at
     // compile time; surface it here as an inline error first).
+    //
+    // Compared the way DuckDB compares identifiers, because the name becomes a
+    // view: ASCII case folded, so "Orders" and "orders" are one view and the
+    // second replaced the first, and a node reading "Orders" silently got the
+    // other node's rows. Only ASCII - "Ärger" and "ärger" stay two views - which
+    // is the engine's node_sql_name rule too.
+    const fold = (s: string) => s.replace(/[A-Z]/g, c => c.toLowerCase());
+    const foldedIds = new Set(nodes.map(n => fold(n.id)));
     const aliasOwner = new Map<string, string>();
     for (const node of nodes) {
         const alias = typeof node.data.alias === 'string' ? node.data.alias.trim() : '';
-        if (!alias || alias === node.id) continue;
-        if (nodeIds.has(alias)) {
+        const folded = fold(alias);
+        if (!alias || folded === fold(node.id)) continue;
+        if (foldedIds.has(folded)) {
             push({
                 severity: 'error',
                 code: 'alias-collides-with-id',
@@ -76,7 +85,7 @@ export function validatePipeline(
                 nodeId: node.id,
             });
         }
-        const prior = aliasOwner.get(alias);
+        const prior = aliasOwner.get(folded);
         if (prior) {
             push({
                 severity: 'error',
@@ -85,7 +94,7 @@ export function validatePipeline(
                 nodeId: node.id,
             });
         } else {
-            aliasOwner.set(alias, node.id);
+            aliasOwner.set(folded, node.id);
         }
     }
 

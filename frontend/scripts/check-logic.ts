@@ -18,6 +18,7 @@ import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRef
 import { UndoHistory, type CanvasSnapshot } from '../src/undo-history';
 import { saveItemPayload } from '../src/workspace';
 import { gitActionRewritesFiles } from '../src/git-actions';
+import { validatePipeline } from '../src/validation';
 import type { Schedule } from '../src/tauri-bridge';
 
 // The frontend directory, injected by check-logic.mjs: the bundle runs from a
@@ -423,6 +424,9 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         }],
         ['missing from the backend (a 404 the shim turns into null)', async () => null],
     ];
+    // saveItemPayload logs the refusal it is expected to hit here.
+    const realError = console.error;
+    console.error = () => {};
     for (const [why, invoke] of backends) {
         writes.length = 0;
         g.__checkLogicInvoke = invoke;
@@ -434,6 +438,7 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         );
         check(`connection save: encryption ${why} reports a failed save`, ok === false, 'reported saved');
     }
+    console.error = realError;
     writes.length = 0;
     g.__checkLogicInvoke = async (_cmd, args) =>
         JSON.stringify({ ...JSON.parse(String(args.payloadJson)), password: 'enc:v2:sealed' });
@@ -481,6 +486,45 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'git: the editor reloads the workspace when the panel says files changed',
         element.includes('onFilesChanged={handleReloadWorkspace}'),
         `App renders ${element.trim()}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SQL names that differ only in case are the same name.
+//
+// A SQL name becomes a DuckDB view, and DuckDB identifiers are case-insensitive:
+// "Orders" and "orders" are one view, so the second replaced the first and every
+// node reading "Orders" silently got the other node's rows (checked against
+// DuckDB 1.5.4). The uniqueness check compared names exactly and let it through.
+// ---------------------------------------------------------------------------
+{
+    const aliased = (id: string, alias: string) => {
+        const n = node(id, 'code.sql', { sql: 'SELECT 1' });
+        (n.data as Record<string, unknown>).alias = alias;
+        return n;
+    };
+    const codes = (ns: Node<DuckleNodeData>[]) => validatePipeline(ns, []).issues.map(i => i.code);
+    check(
+        'sql name: two names differing only in case are a duplicate',
+        codes([aliased('a', 'Orders'), aliased('b', 'orders')]).includes('duplicate-alias'),
+        `issues: ${JSON.stringify(codes([aliased('a', 'Orders'), aliased('b', 'orders')]))}`,
+    );
+    check(
+        'sql name: a name differing from another node\'s id only in case collides with it',
+        codes([aliased('a', 'NODE_B'), node('node_b', 'code.sql', { sql: 'SELECT 1' })]).includes('alias-collides-with-id'),
+        `issues: ${JSON.stringify(codes([aliased('a', 'NODE_B'), node('node_b', 'code.sql', { sql: 'SELECT 1' })]))}`,
+    );
+    check(
+        'sql name: distinct names are still fine',
+        !codes([aliased('a', 'orders'), aliased('b', 'customers')]).some(c => c === 'duplicate-alias' || c === 'alias-collides-with-id'),
+        'distinct names were refused',
+    );
+    // DuckDB folds ASCII case only: "Ärger" and "ärger" are two views (1.5.4),
+    // so refusing them would be a false error the engine does not raise.
+    check(
+        'sql name: names differing only in non-ASCII case are distinct, as in DuckDB',
+        !codes([aliased('a', 'Ärger'), aliased('b', 'ärger')]).includes('duplicate-alias'),
+        'refused two names DuckDB keeps apart',
     );
 }
 
