@@ -857,6 +857,28 @@ function context(name: string, vars: Record<string, string>): RepoItem {
 }
 
 // ---------------------------------------------------------------------------
+// Autodetect's progress and error belong to the node they were for.
+//
+// Both were panel-wide state, so selecting another node while a detect ran, or
+// after one failed, showed "Detecting..." with the button disabled, or the
+// first source's connection error, on a node that had nothing to do with it.
+// ---------------------------------------------------------------------------
+{
+    const panel = readFileSync(resolve(__FRONTEND_DIR__, 'src/workflow-ui/PropertiesPanel.tsx'), 'utf8');
+    check(
+        'autodetect: the running state names the node it is for',
+        panel.includes('const [autodetectingFor, setAutodetectingFor] = useState<string | null>(null);'),
+        'autodetecting is one flag for the whole panel',
+    );
+    check(
+        'autodetect: the error names the node it is for, and only that node shows it',
+        panel.includes('useState<{ nodeId: string; message: string } | null>(null)') &&
+            panel.includes('detectError?.nodeId === selected?.id'),
+        'the detect error is shown on whichever node is selected',
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The Schedules dialog shows why "Run now" or "Delete" failed.
 //
 // Both awaited their command with no catch, so a refusal ("already running in

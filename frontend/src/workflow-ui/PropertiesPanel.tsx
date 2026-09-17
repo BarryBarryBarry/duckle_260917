@@ -152,8 +152,11 @@ export default function PropertiesPanel({
 }: Props) {
     const { t } = useTranslation();
     const [tab, setTab] = useState<TabId>('basic');
-    const [autodetecting, setAutodetecting] = useState(false);
-    const [detectError, setDetectError] = useState<string | null>(null);
+    // Keyed by the node they are for. As panel-wide flags, selecting another
+    // node while a detect ran - or after one failed - showed "Detecting..." or
+    // the first source's error on a node that had nothing to do with it.
+    const [autodetectingFor, setAutodetectingFor] = useState<string | null>(null);
+    const [detectError, setDetectError] = useState<{ nodeId: string; message: string } | null>(null);
     const nameInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
@@ -396,9 +399,13 @@ export default function PropertiesPanel({
     };
     const setSchema = (columns: Column[]) => onUpdate(selected.id, { schema: columns });
 
+    const autodetecting = autodetectingFor !== null && autodetectingFor === selected?.id;
+    const detectErrorText = detectError?.nodeId === selected?.id ? detectError.message : null;
+
     const runAutodetect = async () => {
         if (!manifest?.autodetect) return;
-        setAutodetecting(true);
+        const nodeId = selected.id;
+        setAutodetectingFor(nodeId);
         setDetectError(null);
         try {
             // Resolve ${context} variables the same way the run path does, so a
@@ -419,16 +426,18 @@ export default function PropertiesPanel({
             // The engine reached the source but returned no columns: flag it
             // rather than leaving a silent (and previously fabricated) schema.
             if (result.columns.length === 0) {
-                setDetectError(
-                    'No columns detected. Check the connection details, or declare the schema manually below.',
-                );
+                setDetectError({
+                    nodeId,
+                    message:
+                        'No columns detected. Check the connection details, or declare the schema manually below.',
+                });
             }
         } catch (err) {
             // Surface the real reason (bad credentials, unreachable host,
             // unsupported source) instead of writing a fabricated schema (#148).
-            setDetectError(err instanceof Error ? err.message : String(err));
+            setDetectError({ nodeId, message: err instanceof Error ? err.message : String(err) });
         } finally {
-            setAutodetecting(false);
+            setAutodetectingFor(current => (current === nodeId ? null : current));
         }
     };
 
@@ -738,7 +747,7 @@ export default function PropertiesPanel({
                                     </span>
                                 </div>
                             ) : null}
-                            {manifest?.schemaSource === 'autodetect' && detectError ? (
+                            {manifest?.schemaSource === 'autodetect' && detectErrorText ? (
                                 <div
                                     className="schema-autodetect-error"
                                     role="alert"
@@ -749,7 +758,7 @@ export default function PropertiesPanel({
                                         whiteSpace: 'pre-wrap',
                                     }}
                                 >
-                                    {detectError}
+                                    {detectErrorText}
                                 </div>
                             ) : null}
                             {manifest?.schemaSource === 'declared' ? (
