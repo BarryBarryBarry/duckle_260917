@@ -93,6 +93,11 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            // A self-update moves the running exe aside and it can only be
+            // removed once that process has exited, which is this launch.
+            if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from)) {
+                std::thread::spawn(move || self_update::sweep_leftovers(&dir));
+            }
             // Resolve where the downloaded DuckDB CLI lives, so the
             // engine can shell out to it. The binary may not exist yet
             // (first run installs it via the setup screen); the engine
@@ -1574,6 +1579,11 @@ fn inflate_embedded(compressed: &[u8]) -> Result<Vec<u8>, String> {
 /// entirely (the common case once a feature has been used), so the ~0.1-0.3s
 /// inflate is paid at most once per app version.
 fn write_embedded_if_changed(dest: &std::path::Path, compressed: &[u8]) -> Result<(), String> {
+    // What an earlier, locked swap in this directory left behind. Here rather
+    // than in write_if_changed, which is skipped once a binary is staged.
+    if let Some(dir) = dest.parent() {
+        self_update::sweep_leftovers(dir);
+    }
     let stamp = dest.with_extension("stamp");
     let want = env!("DUCKLE_BUILD_EPOCH");
     if dest.exists() {

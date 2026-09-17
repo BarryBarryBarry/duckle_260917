@@ -133,24 +133,44 @@ fn swap_current_exe(new_bytes: &[u8]) -> Result<PathBuf, String> {
     Ok(exe)
 }
 
-/// Best-effort removal of leftover `.old-*` and `.duckle-update-*.tmp` files
-/// next to the exe (the displaced binary unlocks once its process exits).
-pub fn sweep_leftovers(exe_dir: &Path) {
-    let Ok(rd) = std::fs::read_dir(exe_dir) else {
+/// Best-effort removal of what a binary swap leaves in `dir` once the process
+/// that left it has exited: the displaced copy (`<name>.old-<pid>` from a
+/// self-update, `<name>.old<pid>` from staging a sidecar) and an abandoned write
+/// (`.duckle-update-<pid>.tmp`, `<name>.tmp<pid>`).
+///
+/// Staging's spelling was not matched, so a full duckle-mcp or duckle-runner was
+/// left behind for good, and this ran only during the NEXT self-update rather
+/// than on a later launch as promised. It also ignored whose file it was, so it
+/// could delete the in-progress write of another Duckle running right now: a
+/// leftover whose process is alive is kept.
+pub fn sweep_leftovers(dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in rd.flatten() {
         let p = entry.path();
         let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        let stale = name.starts_with(".duckle-update-")
-            || p.extension()
-                .and_then(|s| s.to_str())
-                .map(|e| e.starts_with("old-"))
-                .unwrap_or(false);
-        if stale {
+        let Some(pid) = leftover_pid(name) else { continue };
+        if !duckle_duckdb_engine::runlock::process_alive(pid) {
             let _ = std::fs::remove_file(&p);
         }
     }
+}
+
+/// The pid a swap leftover's name carries, or `None` for any other file.
+fn leftover_pid(name: &str) -> Option<u32> {
+    if let Some(pid) = name.strip_prefix(".duckle-update-").and_then(|r| r.strip_suffix(".tmp")) {
+        return pid.parse().ok();
+    }
+    let (_, ext) = name.rsplit_once('.')?;
+    let digits = ext
+        .strip_prefix("old-")
+        .or_else(|| ext.strip_prefix("old"))
+        .or_else(|| ext.strip_prefix("tmp"))?;
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 /// Download + verify + swap the latest release over the running exe.
@@ -267,6 +287,45 @@ pub fn selftest_run_main() -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A swap moves a locked binary aside and removes it once nothing holds it.
+    /// Staging names the copy `<name>.old<pid>`, which the sweep did not match,
+    /// so a full duckle-mcp or duckle-runner was left behind for good; and the
+    /// sweep ignored whose file it was, so it could delete the in-progress write
+    /// of another Duckle that is running right now. Only a dead process's
+    /// leftovers go.
+    #[test]
+    fn leftovers_of_dead_processes_are_swept_and_live_ones_are_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let dead = u32::MAX;
+        let live = std::process::id();
+        let names = [
+            format!("duckle-mcp.old{dead}"),
+            format!("Duckle.old-{dead}"),
+            format!("duckle-runner.tmp{dead}"),
+            format!(".duckle-update-{dead}.tmp"),
+            format!("duckle-mcp.old{live}"),
+            format!(".duckle-update-{live}.tmp"),
+            "duckle-mcp.exe".to_string(),
+            "duckle-mcp.stamp".to_string(),
+        ];
+        for n in &names {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        sweep_leftovers(dir);
+        let left: std::collections::BTreeSet<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        for gone in &names[..4] {
+            assert!(!left.contains(gone), "{gone} belongs to a dead process and was left behind");
+        }
+        for kept in &names[4..] {
+            assert!(left.contains(kept), "{kept} was swept though its process is alive or it is not a leftover");
+        }
+    }
 
     #[test]
     fn parses_sha256sums_lines() {
