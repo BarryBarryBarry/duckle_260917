@@ -137,7 +137,18 @@ fn advance(
 
 fn key_for(at: chrono::DateTime<chrono_tz::Tz>, cadence: Cadence) -> String {
     match cadence {
-        Cadence::Hour => at.format("%Y-%m-%dT%H").to_string(),
+        // At the autumn fall-back the same local hour happens twice, and both
+        // used to get one key, so a ledger or a retry could not name the second.
+        // Only an hour that repeats carries its offset, so every other key - and
+        // every ledger and file named after one - keeps its spelling. `%z` has no
+        // colon, so the key still names a file on Windows.
+        Cadence::Hour => {
+            use chrono::TimeZone;
+            match at.timezone().from_local_datetime(&at.naive_local()) {
+                chrono::LocalResult::Ambiguous(..) => at.format("%Y-%m-%dT%H%z").to_string(),
+                _ => at.format("%Y-%m-%dT%H").to_string(),
+            }
+        }
         Cadence::Day | Cadence::Week => at.format("%Y-%m-%d").to_string(),
         Cadence::Month => at.format("%Y-%m").to_string(),
         Cadence::Year => at.format("%Y").to_string(),
@@ -382,6 +393,26 @@ mod tests {
         let start = chrono::DateTime::parse_from_rfc3339(p[0].start.as_ref().unwrap()).unwrap();
         let end = chrono::DateTime::parse_from_rfc3339(p[0].end.as_ref().unwrap()).unwrap();
         assert_eq!((end - start).num_hours(), 25, "{:?}", p[0]);
+    }
+
+    /// At the autumn fall-back 02:00 happens twice. Both hours were keyed
+    /// `2026-10-25T02`, and a key is how a backfill ledger, a retry and a
+    /// partition file name a slice, so one of the two hours was unreachable by
+    /// its own name. The repeated hour now carries its offset; every other key
+    /// keeps its spelling, so existing ledgers and file names still match, and
+    /// the offset has no colon, so a key still names a file on Windows.
+    #[test]
+    fn the_repeated_autumn_hour_is_two_slices_with_two_keys() {
+        let p = generate(&time(Cadence::Hour, "Europe/Brussels"), "2026-10-24", "2026-10-26").unwrap();
+        let keys: Vec<&str> = p.iter().map(|s| s.key.as_str()).collect();
+        let unique: std::collections::BTreeSet<&str> = keys.iter().copied().collect();
+        assert_eq!(unique.len(), keys.len(), "two slices share a key: {keys:?}");
+        assert!(keys.contains(&"2026-10-25T02+0200"), "the first 02:00: {keys:?}");
+        assert!(keys.contains(&"2026-10-25T02+0100"), "the repeated 02:00: {keys:?}");
+        assert!(keys.contains(&"2026-10-25T01") && keys.contains(&"2026-10-25T03"), "other hours keep their keys");
+        assert!(keys.iter().all(|k| !k.contains(':')), "a key must stay a valid file name");
+        let key_of_slice = |k: &str| p.iter().find(|s| s.key == k).map(|s| s.params["partition_key"].clone());
+        assert_eq!(key_of_slice("2026-10-25T02+0100").as_deref(), Some("2026-10-25T02+0100"));
     }
 
     #[test]
