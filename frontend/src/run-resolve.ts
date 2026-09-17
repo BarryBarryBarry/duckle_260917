@@ -275,6 +275,27 @@ const PARAM_BUILTINS = new Set([
 ]);
 
 /**
+ * The names every `ctl.setvar` node in a pipeline sets - the same rule as the
+ * engine's `plan::run_var_names`.
+ *
+ * A name a node sets is filled in by the RUN, so nothing resolved ahead of it may
+ * stand in for it. The README promises that and the engine enforces it on the
+ * headless path, but the desktop resolves placeholders here before the engine
+ * sees them, and did not skip these: a context entry of the same name replaced
+ * the placeholder with its static default, so the run variable was never read,
+ * and the run wrote the rows for the default instead.
+ */
+export function runVarNames(nodes: Node<DuckleNodeData>[]): Set<string> {
+    const names = new Set<string>();
+    for (const node of nodes) {
+        if (node.data.componentId !== 'ctl.setvar') continue;
+        const name = node.data.properties?.name;
+        if (typeof name === 'string' && name.trim()) names.add(name.trim());
+    }
+    return names;
+}
+
+/**
  * Discover the `${name}` placeholders a pipeline's nodes reference that are NOT
  * already resolvable - i.e. not a date/time or ${workspace} builtin, not an
  * ${ENV:KEY} secret, and not provided by `knownVars` (the active contexts).
@@ -285,6 +306,10 @@ export function discoverParams(
     nodes: Node<DuckleNodeData>[],
     knownVars: Record<string, string>,
 ): string[] {
+    // A run variable has a value by the time anything reads it. Prompting for
+    // one asks the author for something the run supplies, and a typed value
+    // would be substituted here and override it.
+    const setByRun = runVarNames(nodes);
     const found = new Set<string>();
     const scan = (value: unknown): void => {
         if (typeof value === 'string') {
@@ -299,6 +324,7 @@ export function discoverParams(
                 if (!key || key.startsWith('ENV:') || key.startsWith('VAULT:')) continue;
                 if (PARAM_BUILTINS.has(key) || resolveTimeBuiltin(key) !== null) continue;
                 if (Object.prototype.hasOwnProperty.call(knownVars, key)) continue;
+                if (setByRun.has(key)) continue;
                 found.add(key);
             }
         } else if (Array.isArray(value)) {
@@ -325,12 +351,16 @@ export function resolveForRun(
     // the same name (unusual) still wins. Global-context (extraVars) is merged
     // next so its runtime values override the static context defaults, then the
     // run-time input parameters (issue #127) win over everything.
-    const vars = {
+    const vars: Record<string, string> = {
         ...builtinVars(workspacePath, now),
         ...buildContextVars(repo),
         ...(extraVars ?? {}),
         ...(runtimeParams ?? {}),
     };
+    // A name a ctl.setvar node sets stays a placeholder for the run to fill, so
+    // no layer above - a static context, the global context, a typed parameter -
+    // may pre-empt it. The engine's headless path skips the same names.
+    for (const name of runVarNames(nodes)) delete vars[name];
     const sqlRoutines = new Map<string, string>();
     // Map a workspace pipeline id (or name) to its on-disk file path so a
     // dropdown-stored id resolves to something the engine can read.

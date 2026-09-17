@@ -53,6 +53,11 @@ jobs:
       - name: Every credential field is masked
         run: npm --prefix frontend run check-secret-fields
 
+      # The frontend has no unit-test runner. These call the real modules with
+      # real inputs, for logic whose bugs only showed up when it was executed.
+      - name: Frontend logic behaves
+        run: npm --prefix frontend run check-logic
+
       - name: Catalog is in sync with the manifests
         run: |
           npm --prefix frontend run export-catalog
