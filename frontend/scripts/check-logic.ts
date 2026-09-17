@@ -23,6 +23,7 @@ import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
 import {
     cancelPipeline,
+    runPipeline,
     scheduleDelete,
     scheduleList,
     scheduleRunNow,
@@ -876,6 +877,32 @@ function context(name: string, vars: Record<string, string>): RepoItem {
             panel.includes('detectError?.nodeId === selected?.id'),
         'the detect error is shown on whichever node is selected',
     );
+}
+
+// ---------------------------------------------------------------------------
+// A web run the server refuses says why.
+//
+// The streaming run answered a refusal - a bad pipeline, a missing connection,
+// a role that may not run - with only "run failed: HTTP 400", though the server
+// sends the reason in the body.
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as { fetch: typeof fetch };
+    const realFetch = g.fetch;
+    const answers: [number, string, string][] = [
+        [400, '{"error":"bad pipeline: missing field `nodes`"}', 'missing field `nodes`'],
+        [403, 'this needs the operator role; you have viewer', 'operator role'],
+    ];
+    for (const [status, body, reason] of answers) {
+        g.fetch = (async () => new Response(body, { status })) as unknown as typeof fetch;
+        const r = await runPipeline([], []);
+        check(
+            `web run: an HTTP ${status} refusal carries the server's reason`,
+            !!r && r.status === 'error' && String(r.error).includes(reason),
+            `error was ${JSON.stringify(r?.error)}`,
+        );
+    }
+    g.fetch = realFetch;
 }
 
 // ---------------------------------------------------------------------------

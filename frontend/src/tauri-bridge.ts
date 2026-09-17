@@ -144,7 +144,21 @@ async function runViaSse(
                 targetNodeId: targetNodeId ?? null,
             }),
         });
-        if (!res.ok || !res.body) return fail('run failed: HTTP ' + res.status);
+        if (!res.ok) {
+            // The server says why it refused - a bad pipeline, a connection it
+            // could not resolve, a role that may not run - as JSON or plain text.
+            // Only the status reached the editor before.
+            const text = (await res.text().catch(() => '')).trim();
+            let reason = text;
+            try {
+                const parsed = JSON.parse(text) as { error?: unknown };
+                if (typeof parsed.error === 'string') reason = parsed.error;
+            } catch {
+                // plain text: use it as it is
+            }
+            return fail(`run failed: HTTP ${res.status}${reason ? ` - ${reason}` : ''}`);
+        }
+        if (!res.body) return fail('run failed: HTTP ' + res.status);
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buf = '';
