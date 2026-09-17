@@ -563,17 +563,31 @@ pub fn run_web() -> Result<(), String> {
     Ok(())
 }
 
+/// A token that was accepted, with no session to show for it.
+///
+/// Answered as a failure, with no cookie and no "allowed" audit line: a cookie
+/// for a session that was never written fails on the next request with nothing
+/// to explain it, and the audit log would record a sign-in that never took.
+fn session_not_saved(why: &str) -> Reply {
+    eprintln!("duckle-runner: a sign-in was accepted but its session could not be saved: {why}");
+    respond_err(
+        "503 Service Unavailable",
+        "the token was accepted, but the session could not be saved, so you are not signed in. Try again.",
+    )
+}
+
 /// Exchange a token for a session cookie, for the editor.
 fn web_sign_in(state: &WebState, req: &Request) -> Reply {
     let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
     let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
     match state.console.sign_in(token) {
-        Some((sid, who)) => {
+        Ok(Some((sid, who))) => {
             audit::record(&state.workspace, Some(&who), "session.sign_in", "editor", audit::Outcome::Allowed);
             respond_json(&json!({ "label": who.label, "role": who.role.as_str() }))
                 .with_header(session_cookie_header(&sid, req.forwarded_proto.as_deref()))
         }
-        None => {
+        Err(e) => session_not_saved(&e),
+        Ok(None) => {
             audit::record(&state.workspace, None, "session.sign_in", "editor", audit::Outcome::Unauthenticated);
             respond_err("401 Unauthorized", "that token was not accepted")
         }
@@ -2220,6 +2234,10 @@ fn oidc_route(req: &Request, state: &State) -> Reply {
     // Audit carries the provider's STABLE subject, not the display name: a
     // name or an email can be reassigned to a different person, and an audit
     // trail that follows the label rather than the identity is worse than none.
+    let sid = match state.console.sign_in_external(&identity.actor(), identity.role) {
+        Ok(sid) => sid,
+        Err(e) => return session_not_saved(&e),
+    };
     audit::record(
         &state.workspace,
         None,
@@ -2227,7 +2245,6 @@ fn oidc_route(req: &Request, state: &State) -> Reply {
         &format!("{} as {}", identity.actor(), identity.role.as_str()),
         audit::Outcome::Allowed,
     );
-    let sid = state.console.sign_in_external(&identity.actor(), identity.role);
     Reply {
         status: "302 Found".into(),
         content_type: "text/plain; charset=utf-8".into(),
@@ -2856,12 +2873,13 @@ fn sign_in(state: &State, req: &Request) -> Reply {
     let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
     let token = body.get("token").and_then(|v| v.as_str()).unwrap_or("");
     match state.console.sign_in(token) {
-        Some((sid, who)) => {
+        Ok(Some((sid, who))) => {
             audit::record(&state.workspace, Some(&who), "session.sign_in", "-", audit::Outcome::Allowed);
             respond_json(&json!({ "label": who.label, "role": who.role.as_str() }))
                 .with_header(session_cookie_header(&sid, req.forwarded_proto.as_deref()))
         }
-        None => {
+        Err(e) => session_not_saved(&e),
+        Ok(None) => {
             audit::record(
                 &state.workspace,
                 None,
@@ -5430,7 +5448,7 @@ mod tests {
             oidc: None,
             oidc_endpoints: Mutex::new(None),
             oidc_logins: Mutex::new(Default::default()),
-        unrecorded_deliveries: Mutex::new(Default::default()),
+            unrecorded_deliveries: Mutex::new(Default::default()),
         })
     }
 
@@ -5520,8 +5538,42 @@ mod tests {
             oidc: None,
             oidc_endpoints: Mutex::new(None),
             oidc_logins: Mutex::new(Default::default()),
-        unrecorded_deliveries: Mutex::new(Default::default()),
+            unrecorded_deliveries: Mutex::new(Default::default()),
         })
+    }
+
+    /// A sign-in the session store would not take is not a sign-in.
+    ///
+    /// The session write was ignored, so a token that verified was answered 200
+    /// with a cookie naming a session that did not exist, and the audit log said
+    /// "allowed". The browser then failed on its very next request with nothing to
+    /// explain why, and the log recorded a sign-in that never took effect. The
+    /// store refuses here because another connection dropped its sessions table.
+    #[test]
+    fn a_session_that_could_not_be_saved_is_not_handed_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let state = guarded_state(&ws);
+        rusqlite::Connection::open(ws.join(".duckle").join("console.db"))
+            .unwrap()
+            .execute_batch("DROP TABLE sessions")
+            .unwrap();
+
+        let mut req = request("POST", "/api/session", None);
+        req.body = serde_json::to_vec(&serde_json::json!({ "token": "s3cret" })).unwrap();
+        let reply = route_console(&req, &state);
+
+        assert_ne!(reply.code(), 200, "{}", String::from_utf8_lossy(&reply.body));
+        assert!(
+            !reply.headers.iter().any(|h| h.contains(console_auth::SESSION_COOKIE)),
+            "a cookie was set for a session that was never saved: {:?}",
+            reply.headers
+        );
+        let log = crate::audit::read(&ws, &crate::audit::Filter { limit: 50, ..Default::default() }).unwrap();
+        assert!(
+            !log.entries.iter().any(|e| e.action == "session.sign_in" && e.outcome == "allowed"),
+            "the audit log records a sign-in that never took effect"
+        );
     }
 
     /// #300: an operator can alert on failed and queued runs without the UI.
@@ -5725,7 +5777,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let console =
             console_auth::Console::configure(tmp.path(), "0.0.0.0", Some("s3cret")).unwrap();
-        let sid = console.sign_in_external("user-123 (Ada)", console_auth::Role::Operator);
+        let sid = console.sign_in_external("user-123 (Ada)", console_auth::Role::Operator).unwrap();
 
         let header = super::session_cookie_header(&sid, None);
         let sent_back = header
@@ -5753,7 +5805,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let console =
             console_auth::Console::configure(tmp.path(), "0.0.0.0", Some("s3cret")).unwrap();
-        let sid = console.sign_in_external("user-123 (Ada)", console_auth::Role::Operator);
+        let sid = console.sign_in_external("user-123 (Ada)", console_auth::Role::Operator).unwrap();
 
         // Exactly the header the browser will send back, built from the same
         // constant the callback must use.
@@ -6830,7 +6882,7 @@ mod tests {
             oidc: None,
             oidc_endpoints: Mutex::new(None),
             oidc_logins: Mutex::new(Default::default()),
-        unrecorded_deliveries: Mutex::new(Default::default()),
+            unrecorded_deliveries: Mutex::new(Default::default()),
         };
 
         let leaked = read_pipeline_file(&state, "connections/prod-db.json");
@@ -7438,7 +7490,7 @@ mod serve_honours_the_schedule {
             oidc: None,
             oidc_endpoints: Mutex::new(None),
             oidc_logins: Mutex::new(Default::default()),
-        unrecorded_deliveries: Mutex::new(Default::default()),
+            unrecorded_deliveries: Mutex::new(Default::default()),
         };
         let projected = load_schedules(&state).expect("a projection");
         let one = projected.get("p").expect("the schedule");

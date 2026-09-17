@@ -488,20 +488,25 @@ impl Console {
     ///
     /// The browser holds the session id, not the token, so a stored cookie
     /// cannot be replayed against the API after the server restarts.
-    pub fn sign_in(&self, token: &str) -> Option<(String, Identity)> {
-        let identity = self.verify_token(token)?;
+    ///
+    /// `Ok(None)` is a token that was not accepted. `Err` is a token that was,
+    /// with no session to show for it: the session write used to be ignored, so
+    /// the browser got a cookie naming a session that did not exist, failed on
+    /// its next request, and the audit log recorded a sign-in that never took.
+    pub fn sign_in(&self, token: &str) -> Result<Option<(String, Identity)>, String> {
+        let Some(identity) = self.verify_token(token) else {
+            return Ok(None);
+        };
         let mut raw = [0u8; 32];
-        getrandom::fill(&mut raw).ok()?;
+        getrandom::fill(&mut raw).map_err(|e| format!("no random session id: {e}"))?;
         let sid = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
-        if let Ok(store) = self.store.lock() {
-            let _ = store.put_session(
-                &sid,
-                &identity.label,
-                identity.role,
-                now_secs() + SESSION_TTL_SECS,
-            );
-        }
-        Some((sid, identity))
+        self.save_session(&sid, &identity.label, identity.role)?;
+        Ok(Some((sid, identity)))
+    }
+
+    fn save_session(&self, sid: &str, label: &str, role: Role) -> Result<(), String> {
+        let store = self.store.lock().map_err(|_| "the session store is unavailable".to_string())?;
+        store.put_session(sid, label, role, now_secs() + SESSION_TTL_SECS)
     }
 
     /// Mint a session for an identity another mechanism has already verified
@@ -514,16 +519,16 @@ impl Console {
     /// Naming it plainly is the point: a function that hands out a session for
     /// a label and a role should be obvious in a grep, not hidden behind a
     /// parameter on the ordinary path.
-    pub fn sign_in_external(&self, label: &str, role: Role) -> String {
+    pub fn sign_in_external(&self, label: &str, role: Role) -> Result<String, String> {
         let mut raw = [0u8; 32];
-        // Not `ok()?` - a session id that is not random is not a session id,
-        // and returning a short one would be worse than failing loudly.
-        getrandom::fill(&mut raw).expect("the OS random source");
+        // A session id that is not random is not a session id, and returning a
+        // short one would be worse than failing loudly.
+        getrandom::fill(&mut raw).map_err(|e| format!("no random session id: {e}"))?;
         let sid = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw);
-        if let Ok(store) = self.store.lock() {
-            let _ = store.put_session(&sid, label, role, now_secs() + SESSION_TTL_SECS);
-        }
-        sid
+        // Saved or refused, as for `sign_in`: a cookie for a session that was
+        // never written is a sign-in that only looks like one.
+        self.save_session(&sid, label, role)?;
+        Ok(sid)
     }
 
     pub fn sign_out(&self, cookie: Option<&str>) {
@@ -988,7 +993,7 @@ mod tests {
         let ws = tmp.path();
 
         let first = Console::configure(ws, "0.0.0.0", Some("s3cret-token")).expect("starts");
-        let (sid, who) = first.sign_in("s3cret-token").expect("token signs in");
+        let (sid, who) = first.sign_in("s3cret-token").unwrap().expect("token signs in");
         assert_eq!(who.role, Role::Admin);
         let cookie = format!("{SESSION_COOKIE}={sid}");
         drop(first);
@@ -1010,7 +1015,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path();
         let console = Console::configure(ws, "0.0.0.0", Some("s3cret-token")).expect("starts");
-        let (sid, _) = console.sign_in("s3cret-token").expect("signs in");
+        let (sid, _) = console.sign_in("s3cret-token").unwrap().expect("signs in");
 
         let bytes = std::fs::read(crate::auth_store::db_path(ws)).expect("database written");
         let haystack = String::from_utf8_lossy(&bytes);
@@ -1051,8 +1056,8 @@ mod tests {
         let ops = Console::configure(ws, "0.0.0.0", Some("s3cret-token")).expect("starts");
         let editor = Console::configure(ws, "0.0.0.0", Some("s3cret-token")).expect("starts");
 
-        let (a, _) = ops.sign_in("s3cret-token").expect("signs in");
-        let (b, _) = editor.sign_in("s3cret-token").expect("signs in");
+        let (a, _) = ops.sign_in("s3cret-token").unwrap().expect("signs in");
+        let (b, _) = editor.sign_in("s3cret-token").unwrap().expect("signs in");
 
         // A third process reads what is actually on disk.
         let fresh = Console::configure(ws, "0.0.0.0", Some("s3cret-token")).expect("starts");
@@ -1071,7 +1076,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path();
         let console = Console::configure(ws, "0.0.0.0", Some("s3cret-token")).expect("starts");
-        let (sid, _) = console.sign_in("s3cret-token").expect("signs in");
+        let (sid, _) = console.sign_in("s3cret-token").unwrap().expect("signs in");
         let cookie = format!("{SESSION_COOKIE}={sid}");
         console.sign_out(Some(&cookie));
         drop(console);
@@ -1172,8 +1177,8 @@ mod tests {
         let console =
             Console::configure(tmp.path(), "0.0.0.0", Some("s3cret-token")).expect("starts");
 
-        assert!(console.sign_in("wrong").is_none(), "signed in with the wrong token");
-        let (sid, who) = console.sign_in("s3cret-token").expect("sign in");
+        assert!(console.sign_in("wrong").unwrap().is_none(), "signed in with the wrong token");
+        let (sid, who) = console.sign_in("s3cret-token").unwrap().expect("sign in");
         assert_eq!(who.role, Role::Admin);
         // The session id is not the token, so a stolen cookie is not a token.
         assert_ne!(sid, "s3cret-token");
