@@ -207,13 +207,9 @@ pub fn append(workspace: &Path, pipeline_id: &str, record: &RunRecord) -> Result
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let line = serde_json::to_string(&event).map_err(|e| e.to_string())?;
-    use std::io::Write;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    writeln!(f, "{line}").map_err(|e| format!("{}: {e}", path.display()))?;
+    // Through `ndjson`, which terminates a torn tail first: written straight
+    // after one, this event was glued to it, would not parse, and was lost.
+    crate::ndjson::append_records(&path, &line).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(Some(event))
 }
 
@@ -414,6 +410,24 @@ mod emitted_once {
         assert_eq!(events.len(), 1, "appending a run did not record its publication");
         assert_eq!(events[0].pipeline_id, "nightly");
         assert_eq!(events[0].assets, vec!["/lake/orders".to_string()]);
+    }
+
+    /// A process killed mid-write leaves a torn last line with no newline. The
+    /// next append wrote straight after it, so the new event was glued onto the
+    /// torn bytes, the combined line would not parse, and `read` skipped it:
+    /// the publication was lost while `reconcile` reported it rebuilt.
+    #[test]
+    fn an_append_after_a_torn_tail_is_still_readable() {
+        let ws = tempfile::tempdir().unwrap();
+        let log = log_path(ws.path());
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::fs::write(&log, r#"{"eventId":"mat-torn","pipelineId":"nigh"#).unwrap();
+
+        append_run_record(ws.path(), "nightly", published("run-1", "/lake/orders")).unwrap();
+
+        let events = read(ws.path());
+        assert_eq!(events.len(), 1, "the event appended after a torn line was lost");
+        assert_eq!(events[0].pipeline_id, "nightly");
     }
 
     /// And rebuilding is idempotent, which is what makes a failed append

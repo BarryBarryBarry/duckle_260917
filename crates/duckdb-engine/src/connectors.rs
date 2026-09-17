@@ -21013,13 +21013,7 @@ fn record_known_host(path: &std::path::Path, hostport: &str, fingerprint: &str) 
             return;
         }
     }
-    use std::io::Write as _;
-    let line = format!("{} {}\n", hostport, fingerprint);
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .and_then(|mut f| f.write_all(line.as_bytes()));
+    let _ = crate::ndjson::append_records(path, &format!("{} {}", hostport, fingerprint));
 }
 
 /// Strip the `SHA256:` prefix and surrounding space. Base64 is

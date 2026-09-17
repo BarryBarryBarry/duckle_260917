@@ -62,14 +62,8 @@ pub fn append_entry(workspace: &Path, entry: &Entry) {
             return;
         }
     }
-    use std::io::Write;
-    match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
-        Ok(mut f) => {
-            if let Err(e) = writeln!(f, "{line}") {
-                eprintln!("duckle: could not write the audit log: {e}");
-            }
-        }
-        Err(e) => eprintln!("duckle: could not open the audit log: {e}"),
+    if let Err(e) = crate::ndjson::append_records(&path, &line) {
+        eprintln!("duckle: could not write the audit log: {e}");
     }
 }
 

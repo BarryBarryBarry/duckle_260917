@@ -26,7 +26,6 @@
 //! an upsert sink rather than an append - and a repeat costs time, not
 //! correctness.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use duckle_duckdb_engine::batch::{self, LedgerLine};
@@ -39,42 +38,13 @@ fn record(workspace: &Path, batch_id: &str, line: &LedgerLine) -> Result<(), Str
     }
     let text = serde_json::to_string(line).map_err(|e| e.to_string())?;
     // One append of one short line, so concurrent workers interleave whole
-    // lines rather than fragments of them.
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&p)
-        .map_err(|e| format!("{}: {e}", p.display()))?;
-    // Heal a torn tail before appending. A worker killed mid-write can leave a
-    // line with no newline on it; appending straight onto that glues the two
-    // together and destroys THIS record as well as the broken one, turning one
-    // lost line into a second item run twice. Cheap to check, and the check is
-    // what makes the ledger worth trusting.
-    let needs_newline = std::fs::metadata(&p)
-        .ok()
-        .map(|m| m.len() > 0)
-        .unwrap_or(false)
-        && !ends_with_newline(&p);
-    let payload = if needs_newline { format!("\n{text}\n") } else { format!("{text}\n") };
-    f.write_all(payload.as_bytes()).map_err(|e| e.to_string())
+    // lines rather than fragments of them - after terminating a torn tail. A
+    // worker killed mid-write can leave a line with no newline on it; appending
+    // straight onto that glues the two together and destroys THIS record as well
+    // as the broken one, turning one lost line into a second item run twice.
+    duckle_duckdb_engine::ndjson::append_records(&p, &text).map_err(|e| format!("{}: {e}", p.display()))
 }
 
-fn ends_with_newline(p: &Path) -> bool {
-    use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut f) = std::fs::File::open(p) else { return true };
-    let Ok(len) = f.metadata().map(|m| m.len()) else { return true };
-    if len == 0 {
-        return true;
-    }
-    if f.seek(SeekFrom::End(-1)).is_err() {
-        return true;
-    }
-    let mut last = [0u8; 1];
-    match f.read_exact(&mut last) {
-        Ok(()) => last[0] == b'\n',
-        Err(_) => true,
-    }
-}
 
 /// Every batch in the workspace, oldest first so work is taken in the order it
 /// was queued rather than in whatever order the filesystem lists.

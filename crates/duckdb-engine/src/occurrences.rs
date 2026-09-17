@@ -111,13 +111,7 @@ pub fn record(workspace: &Path, occ: &Occurrence) -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let line = serde_json::to_string(occ).map_err(|e| e.to_string())?;
-    use std::io::Write;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    writeln!(f, "{line}").map_err(|e| format!("{}: {e}", path.display()))
+    crate::ndjson::append_records(&path, &line).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Every recorded occurrence, oldest first.

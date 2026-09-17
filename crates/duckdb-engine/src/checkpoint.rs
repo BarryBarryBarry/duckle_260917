@@ -92,6 +92,10 @@ impl Store {
             .into_iter()
             .map(|e| (e.key, e.output))
             .collect();
+        // Held open for the whole run, so a torn line a killed run left is
+        // terminated once, here, before the first record goes after it.
+        crate::ndjson::heal_tail(&path)
+            .map_err(|e| EngineError::Config(format!("checkpoint: {}: {e}", path.display())))?;
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)

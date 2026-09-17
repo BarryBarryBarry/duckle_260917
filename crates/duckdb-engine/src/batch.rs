@@ -405,13 +405,7 @@ pub fn reset_attempts(
         );
         out.push('\n');
     }
-    use std::io::Write;
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&p)
-        .map_err(|e| EngineError::Config(format!("{}: {e}", p.display())))?;
-    f.write_all(out.as_bytes())
+    crate::ndjson::append_records(&p, &out)
         .map_err(|e| EngineError::Config(format!("{}: {e}", p.display())))?;
     Ok(targets.len())
 }

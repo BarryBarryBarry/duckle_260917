@@ -10,7 +10,7 @@
 //! worked cannot show someone probing an endpoint they have no role for, which
 //! is the pattern worth seeing.
 
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -303,14 +303,9 @@ fn append(workspace: &Path, line: &str) -> Result<(), String> {
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    // One write of one short line in append mode, so concurrent writers
-    // interleave whole lines rather than fragments of them.
-    let mut f = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&p)
-        .map_err(|e| format!("{}: {e}", p.display()))?;
-    f.write_all(format!("{line}\n").as_bytes()).map_err(|e| e.to_string())
+    // One write of one short line, so concurrent writers interleave whole lines
+    // rather than fragments, after terminating any torn line a killed writer left.
+    duckle_duckdb_engine::ndjson::append_records(&p, line).map_err(|e| format!("{}: {e}", p.display()))
 }
 
 /// The role a route needs, and the action name recorded for it.

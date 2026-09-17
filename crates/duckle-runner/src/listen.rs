@@ -64,6 +64,10 @@ impl Spool {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("spool dir {}: {}", parent.display(), e))?;
         }
+        // Held open while listening, so a torn record a killed listener left is
+        // terminated once, here, before the first new record goes after it.
+        duckle_duckdb_engine::ndjson::heal_tail(path)
+            .map_err(|e| format!("spool {}: {}", path.display(), e))?;
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)

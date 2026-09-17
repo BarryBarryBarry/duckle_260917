@@ -378,16 +378,10 @@ pub fn emit(workspace: &Path, cfg: &Config, event: &Value) {
     };
     let dir = workspace.join("logs");
     if std::fs::create_dir_all(&dir).is_ok() {
-        use std::io::Write;
-        if let Ok(mut f) =
-            std::fs::OpenOptions::new().create(true).append(true).open(dir.join("openlineage.ndjson"))
-        {
-            // One syscall. `writeln!` issues a write per format piece, and
-            // O_APPEND makes each write atomic but not the pair - two runs in
-            // one workspace interleave and the file stops being NDJSON, which
-            // is the durability this whole path rests on.
-            let _ = f.write_all(format!("{line}\n").as_bytes());
-        }
+        // One write, and a torn tail terminated first: `ndjson` does both, so two
+        // runs in one workspace cannot interleave and a killed one cannot take
+        // the next event down with it.
+        let _ = crate::ndjson::append_records(&dir.join("openlineage.ndjson"), &line);
     }
     let Some(endpoint) = cfg.endpoint.as_deref().filter(|e| !e.trim().is_empty()) else {
         return;
