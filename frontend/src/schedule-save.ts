@@ -10,6 +10,39 @@ export type ScheduleEdit = {
 };
 
 /**
+ * The schedule as the server's deploy endpoint wants it.
+ *
+ * The desktop keeps a schedule as `kind: { type: 'cron' | 'interval' | 'file_watch' }`;
+ * `save_schedule_at` on the server reads flat `cron` / `intervalSeconds` keys instead.
+ * Sending the desktop shape would deploy a schedule the server quietly ignores, so it is
+ * translated here rather than hoped over.
+ *
+ * A file watch has no expression that endpoint can store, so it is not sent at all.
+ *
+ * The zone and exclusion calendar go too. Sending only the trigger put a Brussels
+ * 03:00 job on the server's clock, usually UTC, with its maintenance days
+ * forgotten. A schedule without them sends neither key, which the server reads as
+ * "leave what is there alone".
+ */
+export function serverSchedule(s: Schedule | undefined, name: string): Record<string, unknown> | null {
+    if (!s) return null;
+    const trigger =
+        s.kind.type === 'cron'
+            ? { cron: s.kind.expr }
+            : s.kind.type === 'interval'
+              ? { intervalSeconds: s.kind.seconds }
+              : null;
+    if (!trigger) return null;
+    return {
+        id: name,
+        enabled: false,
+        ...trigger,
+        ...(s.timezone ? { timezone: s.timezone } : {}),
+        ...(s.exclude ? { exclude: s.exclude } : {}),
+    };
+}
+
+/**
  * Run a Schedules-dialog action; the message to show when it fails, else null.
  *
  * "Run now" and "Delete" awaited their command inside try/finally with no catch,

@@ -13,7 +13,7 @@ import type { RepoItem } from '../src/repo-types';
 import { livePreviewable } from '../src/live-preview';
 import { buildContextVars, discoverParams, resolveForRun, resolveTimeBuiltin } from '../src/run-resolve';
 import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterBuilderField';
-import { scheduleActionError, scheduleForSave } from '../src/schedule-save';
+import { scheduleActionError, scheduleForSave, serverSchedule } from '../src/schedule-save';
 import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
 import { UndoHistory, type CanvasSnapshot } from '../src/undo-history';
 import { saveItemPayload } from '../src/workspace';
@@ -594,6 +594,44 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'cycle: a trigger link that does not close a loop is fine',
         !codesFor([edge('e1', 'a', 'b', 'main'), edge('e2', 'a', 'b', 'iterate')]).includes('cycle'),
         'a parallel trigger link was reported as a cycle',
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A deployed schedule keeps its zone and exclusion calendar.
+//
+// Deploy translated a schedule to the server's shape with only its trigger, so
+// a Brussels 03:00 job arrived on the server's clock (usually UTC) with its
+// maintenance days forgotten. The server validates and stores both keys; a
+// schedule that has neither sends neither, which the server reads as "leave
+// what is there alone".
+// ---------------------------------------------------------------------------
+{
+    const cron: Schedule = {
+        id: 's1',
+        pipeline_id: 'p1',
+        name: 'Nightly',
+        enabled: true,
+        kind: { type: 'cron', expr: '0 0 3 * * *' },
+        timezone: 'Europe/Brussels',
+        exclude: { weekdays: ['sunday'], dates: ['2026-12-25'] },
+    };
+    const sent = serverSchedule(cron, 'nightly');
+    check(
+        'deploy: the schedule\'s zone travels with it',
+        sent?.timezone === 'Europe/Brussels',
+        `sent ${JSON.stringify(sent)}`,
+    );
+    check(
+        'deploy: the schedule\'s exclusion calendar travels with it',
+        JSON.stringify(sent?.exclude) === JSON.stringify(cron.exclude),
+        `sent ${JSON.stringify(sent)}`,
+    );
+    const bare = serverSchedule({ ...cron, timezone: undefined, exclude: undefined }, 'nightly');
+    check(
+        'deploy: a schedule with no zone or calendar sends neither key',
+        bare !== null && !('timezone' in bare) && !('exclude' in bare),
+        `sent ${JSON.stringify(bare)}`,
     );
 }
 

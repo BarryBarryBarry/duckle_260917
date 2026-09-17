@@ -9,6 +9,7 @@ import {
     type Schedule,
 } from '../tauri-bridge';
 import { stripPreviewRows } from '../workspace';
+import { serverSchedule } from '../schedule-save';
 
 /**
  * Send the pipeline you are looking at to a server you own.
@@ -27,27 +28,6 @@ type Props = {
     workspacePath: string | null;
     onClose: () => void;
 };
-
-/**
- * The schedule as the server's deploy endpoint wants it.
- *
- * The desktop keeps a schedule as `kind: { type: 'cron' | 'interval' | 'file_watch' }`;
- * `save_schedule_at` on the server reads flat `cron` / `intervalSeconds` keys instead.
- * Sending the desktop shape would deploy a schedule the server quietly ignores, so it is
- * translated here rather than hoped over.
- *
- * A file watch has no expression that endpoint can store, so it is not sent at all.
- */
-function serverSchedule(s: Schedule | undefined, name: string): Record<string, unknown> | null {
-    if (!s) return null;
-    if (s.kind.type === 'cron') {
-        return { id: name, enabled: false, cron: s.kind.expr };
-    }
-    if (s.kind.type === 'interval') {
-        return { id: name, enabled: false, intervalSeconds: s.kind.seconds };
-    }
-    return null;
-}
 
 /** How a schedule reads to a person, for the line offering to send it. */
 function describe(s: Schedule): string {
