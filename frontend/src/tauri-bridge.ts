@@ -521,6 +521,11 @@ export async function engineInstall(
     onProgress?: (p: InstallProgress) => void,
     modelId?: string,
 ): Promise<string> {
+    // Engines install beside the desktop app. The server has no engine_install,
+    // so this used to resolve empty and Duckie's Retry reported an install.
+    if (isWebBackend()) {
+        throw new Error('Engines are not installed from the web editor: Duckie chat is only available in the desktop app.');
+    }
     const channel = new Channel<InstallProgress>();
     if (onProgress) channel.onmessage = onProgress;
     return await invoke<string>('engine_install', { engine, modelId, onProgress: channel });

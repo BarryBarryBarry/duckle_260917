@@ -25,6 +25,7 @@ import { deriveNodeSubtitle } from '../src/node-subtitle';
 import {
     buildBundle,
     cancelPipeline,
+    engineInstall,
     mcpConnectionInfo,
     runPipeline,
     scheduleDelete,
@@ -970,6 +971,36 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     check('rename subtitle: the form shape is counted', fromForm === 'rename 2', `got ${fromForm}`);
     const older = deriveNodeSubtitle('xf.rename', { renames: [{ from: 'a', to: 'b' }] });
     check('rename subtitle: the older array shape still counts', older === 'rename 1', `got ${older}`);
+}
+
+// ---------------------------------------------------------------------------
+// Duckie's Retry in the web editor does not claim an install that never ran.
+//
+// The server has no engine_install, which the web shim answers as an empty
+// success, so Retry marked the AI engine ready and the next message was refused
+// as desktop-only.
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as {
+        __checkLogicInvoke?: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    };
+    const asked: string[] = [];
+    g.__checkLogicInvoke = async cmd => {
+        asked.push(cmd);
+        return null;
+    };
+    let outcome = 'resolved';
+    try {
+        await engineInstall('llamacpp');
+    } catch (e) {
+        outcome = e instanceof Error ? e.message : String(e);
+    }
+    g.__checkLogicInvoke = undefined;
+    check(
+        'web duckie: Retry fails with the reason instead of reporting an install',
+        outcome !== 'resolved' && outcome.includes('desktop app') && asked.length === 0,
+        `outcome ${JSON.stringify(outcome)}, asked ${JSON.stringify(asked)}`,
+    );
 }
 
 // ---------------------------------------------------------------------------
