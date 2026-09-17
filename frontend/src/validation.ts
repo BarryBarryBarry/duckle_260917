@@ -288,12 +288,12 @@ export function validatePipeline(
         }
     }
 
-    // ---- Cycle detection on data-flow edges ----
+    // ---- Cycle detection on data and trigger edges ----
     if (hasCycle(nodes, edges)) {
         push({
             severity: 'error',
             code: 'cycle',
-            message: 'Pipeline contains a cycle in the data-flow graph.',
+            message: 'Pipeline contains a cycle: its data or trigger links lead back to a node they start from.',
         });
     }
 
@@ -340,11 +340,10 @@ function hasCycle(
         adj.set(n.id, []);
         inDegree.set(n.id, 0);
     }
-    const dataEdges = edges.filter(e => {
-        const t = (e.data as { connectionType?: string } | undefined)?.connectionType;
-        return !t || t === 'main' || t === 'lookup' || t === 'reject' || t === 'filter';
-    });
-    for (const e of dataEdges) {
+    // Every edge, triggers included, as the engine orders a run: a trigger says
+    // "after this", so a loop closed by one is a cycle the engine refuses. On
+    // data edges alone such a pipeline validated clean and failed at Run.
+    for (const e of edges) {
         if (!adj.has(e.source) || !adj.has(e.target)) continue;
         adj.get(e.source)!.push(e.target);
         inDegree.set(e.target, (inDegree.get(e.target) ?? 0) + 1);

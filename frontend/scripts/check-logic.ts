@@ -7,7 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import type { Node } from '@xyflow/react';
+import type { Edge, Node } from '@xyflow/react';
 import type { DuckleNodeData } from '../src/pipeline-types';
 import type { RepoItem } from '../src/repo-types';
 import { livePreviewable } from '../src/live-preview';
@@ -569,6 +569,31 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'date offset: an ordinary offset still resolves',
         resolveTimeBuiltin('date+1d', now) === '2026-09-18',
         `date+1d resolved to ${JSON.stringify(resolveTimeBuiltin('date+1d', now))}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A cycle through a trigger link is a cycle.
+//
+// The engine orders a run on every edge, triggers included (a trigger says
+// "after this"), and refuses a cycle among them. The editor looked for cycles
+// on data edges only, so a loop closed by a trigger link validated clean and
+// then failed at Run.
+// ---------------------------------------------------------------------------
+{
+    const edge = (id: string, source: string, target: string, connectionType: string) =>
+        ({ id, source, target, data: { connectionType } }) as unknown as Edge;
+    const ns = [node('a', 'code.sql', { sql: 'SELECT 1' }), node('b', 'code.sql', { sql: 'SELECT * FROM input' })];
+    const codesFor = (es: Edge[]) => validatePipeline(ns, es).issues.map(i => i.code);
+    check(
+        'cycle: a loop closed by a trigger link is refused, as the engine refuses it',
+        codesFor([edge('e1', 'a', 'b', 'main'), edge('e2', 'b', 'a', 'iterate')]).includes('cycle'),
+        `issues: ${JSON.stringify(codesFor([edge('e1', 'a', 'b', 'main'), edge('e2', 'b', 'a', 'iterate')]))}`,
+    );
+    check(
+        'cycle: a trigger link that does not close a loop is fine',
+        !codesFor([edge('e1', 'a', 'b', 'main'), edge('e2', 'a', 'b', 'iterate')]).includes('cycle'),
+        'a parallel trigger link was reported as a cycle',
     );
 }
 
