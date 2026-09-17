@@ -16,7 +16,7 @@ import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterB
 import { scheduleActionError, scheduleForSave, serverSchedule } from '../src/schedule-save';
 import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
 import { UndoHistory, type CanvasSnapshot } from '../src/undo-history';
-import { saveItemPayload } from '../src/workspace';
+import { saveItemPayload, saveNow } from '../src/workspace';
 import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
 import {
@@ -723,6 +723,56 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'web schedules: Run now says it is not available rather than doing nothing',
         runNow.includes('serve') && !asked.includes('schedule_run_now'),
         `Run now answered ${JSON.stringify(runNow)}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Save writes before it says saved, in the web edition too.
+//
+// The Save button cleared the unsaved marker first, returned early outside the
+// desktop app, and ignored a failed write, so a tab read as saved with nothing
+// on disk. Driven through a fake web backend that can refuse writes.
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as { fetch: typeof fetch };
+    const realFetch = g.fetch;
+    const written: string[] = [];
+    let refuseWrites = false;
+    g.fetch = (async (url: string, init?: { body?: string }) => {
+        const op = String(url).replace('/api/fs/', '');
+        const body = JSON.parse(init?.body ?? '{}') as { path?: string };
+        if (op === 'write') {
+            if (refuseWrites) return new Response('disk full', { status: 500 });
+            written.push(String(body.path));
+        }
+        return new Response(JSON.stringify(op === 'exists' ? { exists: true } : {}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const realError = console.error;
+    console.error = () => {};
+    const ok = await saveNow('/ws', 'j1', { nodes: [], edges: [] }, [], { activeJobId: 'j1' });
+    refuseWrites = true;
+    const refused = await saveNow('/ws', 'j1', { nodes: [], edges: [] }, [], { activeJobId: 'j1' });
+    console.error = realError;
+    g.fetch = realFetch;
+    check(
+        'save: the web edition writes the pipeline, repository and metadata',
+        ok && written.some(p => p.includes('j1.json')) && written.length === 3,
+        `ok=${ok}, wrote ${JSON.stringify(written)}`,
+    );
+    check('save: a refused write is not reported as saved', refused === false, 'reported saved');
+
+    const app = readFileSync(resolve(__FRONTEND_DIR__, 'src/App.tsx'), 'utf8');
+    const start = app.indexOf('const handleSave = useCallback(');
+    const body = start < 0 ? '' : app.slice(start, app.indexOf('}, [', start));
+    check(
+        'save: the Save button clears the unsaved marker only after saveNow succeeded',
+        body.includes('await saveNow(') && body.indexOf('dirty: false') > body.indexOf('if (ok)'),
+        'handleSave clears the marker without waiting for a successful write',
+    );
+    check(
+        'save: the Save button is not desktop-only',
+        !body.includes('if (!isInTauri() || !workspacePathState) return;'),
+        'handleSave still returns early in the web edition',
     );
 }
 

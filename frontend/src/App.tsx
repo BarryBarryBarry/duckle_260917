@@ -80,6 +80,7 @@ import {
     loadWorkspace,
     saveItemPayload,
     saveMetadata,
+    saveNow,
     savePipelineFile,
     saveRepository,
     setWorkspacePath,
@@ -1620,17 +1621,22 @@ export default function App() {
     }, [nodes, edges]);
 
     const handleSave = useCallback(() => {
-        // Flush the active pipeline + repo + metadata to disk now, then clear
-        // the tab's unsaved marker. (Autosave is debounced; the explicit
-        // Save button / Ctrl+S gesture writes immediately.)
-        setJobs(js => js.map(j => (j.id === activeJobId ? { ...j, dirty: false } : j)));
-        if (!isInTauri() || !workspacePathState) return;
+        // Flush the active pipeline + repo + metadata to disk now, and clear the
+        // tab's unsaved marker only once that worked. (Autosave is debounced; the
+        // explicit Save button / Ctrl+S gesture writes immediately.) It used to
+        // clear the marker first, skip the web edition, and ignore a failed
+        // write, so a tab read as saved with nothing on disk.
+        if ((!isInTauri() && !isWebBackend()) || !workspacePathState) return;
         const ws = workspacePathState;
         void (async () => {
-            const active = pipelineData[activeJobId];
-            if (active) await savePipelineFile(ws, activeJobId, active);
-            await saveRepository(ws, repo as unknown as Array<Record<string, unknown>>);
-            await saveMetadata(ws, { engine, jobs, activeJobId });
+            const ok = await saveNow(
+                ws,
+                activeJobId,
+                pipelineData[activeJobId],
+                repo as unknown as Array<Record<string, unknown>>,
+                { engine, jobs, activeJobId },
+            );
+            if (ok) setJobs(js => js.map(j => (j.id === activeJobId ? { ...j, dirty: false } : j)));
         })();
     }, [activeJobId, workspacePathState, pipelineData, repo, engine, jobs]);
 

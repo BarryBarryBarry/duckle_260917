@@ -430,16 +430,18 @@ async function loadAndMigrateV1(path: string): Promise<WorkspaceState | null> {
 export async function saveMetadata(
     path: string,
     metadata: { engine?: string; jobs?: unknown; activeJobId?: string },
-): Promise<void> {
-    if (!hasBackend()) return;
+): Promise<boolean> {
+    if (!hasBackend()) return true;
     try {
         await ensureDir(path);
         await writeJson(joinPath(path, METADATA_FILE), {
             version: 2,
             ...metadata,
         });
+        return true;
     } catch (err) {
         console.error('saveMetadata failed', err);
+        return false;
     }
 }
 
@@ -450,8 +452,8 @@ export async function saveMetadata(
 export async function saveRepository(
     path: string,
     items: Array<Record<string, unknown>>,
-): Promise<void> {
-    if (!hasBackend()) return;
+): Promise<boolean> {
+    if (!hasBackend()) return true;
     try {
         await ensureDir(path);
         const stripped = items.map(i => {
@@ -460,9 +462,31 @@ export async function saveRepository(
             return rest;
         });
         await writeJson(joinPath(path, REPOSITORY_FILE), stripped);
+        return true;
     } catch (err) {
         console.error('saveRepository failed', err);
+        return false;
     }
+}
+
+/**
+ * The Save button: the active pipeline, the repository and the metadata, now.
+ *
+ * True only when all three were written. The button used to clear the unsaved
+ * marker before writing, skip the web edition altogether, and clear it even when
+ * a write failed - so a tab could read as saved with nothing on disk.
+ */
+export async function saveNow(
+    path: string,
+    pipelineId: string,
+    pipeline: unknown,
+    repo: Array<Record<string, unknown>>,
+    metadata: { engine?: string; jobs?: unknown; activeJobId?: string },
+): Promise<boolean> {
+    const wrotePipeline = pipeline === undefined ? true : await savePipelineFile(path, pipelineId, pipeline);
+    const wroteRepo = await saveRepository(path, repo);
+    const wroteMeta = await saveMetadata(path, metadata);
+    return wrotePipeline && wroteRepo && wroteMeta;
 }
 
 /**
