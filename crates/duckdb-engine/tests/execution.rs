@@ -11358,7 +11358,7 @@ fn a_cost_ceiling_with_no_prices_does_not_compile() {
 /// input into the output with no error and no way to notice.
 #[test]
 fn an_expanded_field_never_overwrites_an_upstream_column() {
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::TcpListener;
     use std::time::Duration;
 
@@ -11369,8 +11369,10 @@ fn an_expanded_field_never_overwrites_an_upstream_column() {
         for stream in incoming_bounded(&listener, 2) {
             let Ok(mut stream) = stream else { break };
             stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
-            let mut buf = [0u8; 8192];
-            let _ = stream.read(&mut buf);
+            // The whole request, body included. One read could leave the POST body
+            // unread, and on Windows closing a socket with unread bytes resets it, so
+            // the client saw "connection aborted" instead of this reply.
+            let _ = drain_http_request(&mut stream);
             // The model returns a field named like the caller's own column.
             let inner = r#"{\"id\": 999, \"score\": 1}"#;
             let body = format!(r#"{{"choices":[{{"message":{{"content":"{inner}"}}}}]}}"#);
@@ -16386,7 +16388,7 @@ fn src_html_extracts_columns_by_selector_including_attributes() {
 /// Which is exactly what the incomplete outcome from #258 is for.
 #[test]
 fn a_pagination_walk_cut_short_by_a_failure_is_incomplete() {
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -16401,8 +16403,10 @@ fn a_pagination_walk_cut_short_by_a_failure_is_incomplete() {
         for stream in incoming_bounded(&listener, 4) {
             let Ok(mut stream) = stream else { break };
             stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
-            let mut buf = [0u8; 4096];
-            let _ = stream.read(&mut buf);
+            // The whole request, body included. One read could leave the POST body
+            // unread, and on Windows closing a socket with unread bytes resets it, so
+            // the client saw "connection aborted" instead of this reply.
+            let _ = drain_http_request(&mut stream);
             let i = count.fetch_add(1, Ordering::SeqCst);
             // Page 1 answers and names page 2. Page 2 fails, so the link to
             // page 3 is never seen and the walk ends there.
@@ -18389,7 +18393,7 @@ fn changed_emits_a_row_only_when_the_remote_fingerprint_moves() {
     let name = "changedpoll";
 
     // Three HEADs: same ETag twice, then a different one.
-    use std::io::{Read, Write};
+    use std::io::Write;
     use std::net::TcpListener;
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
@@ -18397,8 +18401,10 @@ fn changed_emits_a_row_only_when_the_remote_fingerprint_moves() {
         for (i, stream) in incoming_bounded(&listener, 3).enumerate() {
             let mut stream = match stream { Ok(s) => s, Err(_) => break };
             stream.set_read_timeout(Some(std::time::Duration::from_millis(300))).ok();
-            let mut buf = [0u8; 2048];
-            let _ = stream.read(&mut buf);
+            // The whole request, body included. One read could leave the POST body
+            // unread, and on Windows closing a socket with unread bytes resets it, so
+            // the client saw "connection aborted" instead of this reply.
+            let _ = drain_http_request(&mut stream);
             // The third probe reports a different object.
             let etag = if i < 2 { "aaa111" } else { "bbb222" };
             let resp = format!(
@@ -18888,7 +18894,7 @@ fn artifact_copy_skips_what_is_already_there_without_re_reading_it() {
 
     // The source is served over HTTP so the stub can COUNT how many times the
     // bytes were actually fetched. A skip that still downloads is not a skip.
-    use std::io::{Read, Write};
+    use std::io::Write;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let (tx, rx) = std::sync::mpsc::channel();
@@ -18899,8 +18905,10 @@ fn artifact_copy_skips_what_is_already_there_without_re_reading_it() {
                 Err(_) => break,
             };
             stream.set_read_timeout(Some(std::time::Duration::from_millis(300))).ok();
-            let mut buf = [0u8; 2048];
-            let _ = stream.read(&mut buf);
+            // The whole request, body included. One read could leave the POST body
+            // unread, and on Windows closing a socket with unread bytes resets it, so
+            // the client saw "connection aborted" instead of this reply.
+            let _ = drain_http_request(&mut stream);
             let _ = tx.send(());
             let body = "hello world";
             let resp = format!(
@@ -18998,7 +19006,7 @@ fn artifact_copy_cannot_escape_the_destination_prefix() {
     std::fs::create_dir_all(&dest_dir).unwrap();
     let out = out_path(tmp.path(), "landed.csv");
 
-    use std::io::{Read, Write};
+    use std::io::Write;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -19008,8 +19016,10 @@ fn artifact_copy_cannot_escape_the_destination_prefix() {
                 Err(_) => break,
             };
             stream.set_read_timeout(Some(std::time::Duration::from_millis(300))).ok();
-            let mut buf = [0u8; 2048];
-            let _ = stream.read(&mut buf);
+            // The whole request, body included. One read could leave the POST body
+            // unread, and on Windows closing a socket with unread bytes resets it, so
+            // the client saw "connection aborted" instead of this reply.
+            let _ = drain_http_request(&mut stream);
             let body = "pwned";
             let resp = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -19401,7 +19411,7 @@ fn src_pdf_fetches_a_remote_document_and_leaves_no_spool_behind() {
     let tmp = tempfile::tempdir().unwrap();
     let bytes = minimal_pdf(&["Remote page one", "Remote page two"]);
 
-    use std::io::{Read, Write};
+    use std::io::Write;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let served = bytes.clone();
@@ -19412,8 +19422,10 @@ fn src_pdf_fetches_a_remote_document_and_leaves_no_spool_behind() {
                 Err(_) => break,
             };
             stream.set_read_timeout(Some(std::time::Duration::from_millis(400))).ok();
-            let mut buf = [0u8; 4096];
-            let _ = stream.read(&mut buf);
+            // The whole request, body included. One read could leave the POST body
+            // unread, and on Windows closing a socket with unread bytes resets it, so
+            // the client saw "connection aborted" instead of this reply.
+            let _ = drain_http_request(&mut stream);
             let head = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: {}\r\n\
                  Connection: close\r\n\r\n",
