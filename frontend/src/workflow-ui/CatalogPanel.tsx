@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { annotationPatch } from '../catalog-annotate';
 import { Library, RefreshCw, Search, Tag, User, X } from 'lucide-react';
 import {
     workspaceCatalog,
@@ -80,14 +81,22 @@ export default function CatalogPanel({ workspace, onClose }: Props) {
         [workspace],
     );
 
+    // Loaded when the workspace changes, not whenever the editor re-renders. The
+    // close handler App passes is a new function on every render, and a run sends
+    // a stream of events, so depending on it reloaded the catalog per event - and
+    // the reload re-seeded the form, erasing what was being typed.
+    const onCloseRef = useRef(onClose);
+    onCloseRef.current = onClose;
     useEffect(() => {
         void load();
+    }, [load]);
+    useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onClose();
+            if (e.key === 'Escape') onCloseRef.current();
         };
         document.addEventListener('keydown', onKey);
         return () => document.removeEventListener('keydown', onKey);
-    }, [load, onClose]);
+    }, []);
 
     const assets = view?.assets ?? [];
     const shown = useMemo(() => {
@@ -300,12 +309,13 @@ function AssetDetail({
     const [tags, setTags] = useState(asset.tags.join(', '));
 
     // Re-seed when a different asset is selected, so the form never shows one
-    // asset's description under another's name.
+    // asset's description under another's name. Only then: a reload hands back
+    // a new tags array for the same asset, and re-seeding on it erased typing.
     useEffect(() => {
         setOwner(asset.owner ?? '');
         setDescription(asset.description ?? '');
         setTags(asset.tags.join(', '));
-    }, [asset.id, asset.owner, asset.description, asset.tags]);
+    }, [asset.id]);
 
     return (
         <div className="catalog-detail-inner">
@@ -386,16 +396,7 @@ function AssetDetail({
                     type="button"
                     className="btn btn-primary"
                     disabled={busy}
-                    onClick={() =>
-                        onAnnotate({
-                            owner: owner.trim() || undefined,
-                            description: description.trim() || undefined,
-                            tags: tags
-                                .split(',')
-                                .map(t => t.trim().toLowerCase())
-                                .filter(Boolean),
-                        })
-                    }
+                    onClick={() => onAnnotate(annotationPatch(owner, description, tags))}
                 >
                     Save to owners.json
                 </button>

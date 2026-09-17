@@ -17,6 +17,7 @@ import { scheduleActionError, scheduleForSave, serverSchedule } from '../src/sch
 import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
 import { UndoHistory, type CanvasSnapshot } from '../src/undo-history';
 import { saveItemPayload, saveNow } from '../src/workspace';
+import { annotationPatch } from '../src/catalog-annotate';
 import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
 import {
@@ -773,6 +774,37 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'save: the Save button is not desktop-only',
         !body.includes('if (!isInTauri() || !workspacePathState) return;'),
         'handleSave still returns early in the web edition',
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Data Catalog can clear a field, and does not wipe what you are typing.
+//
+// An emptied owner or description was sent as "not given", which the engine
+// reads as "leave it alone", so the old value came back. And the panel reloaded
+// on every render of the editor - a run sends a stream of events, each one a
+// render - and the form re-seeded from the reload, erasing half-typed text.
+// ---------------------------------------------------------------------------
+{
+    const cleared = annotationPatch('  ', '', 'pii, ');
+    check(
+        'catalog: emptying owner and description clears them rather than keeping the old values',
+        cleared.owner === '' && cleared.description === '',
+        `sent ${JSON.stringify(cleared)}`,
+    );
+    check('catalog: tags still split and trim', JSON.stringify(cleared.tags) === '["pii"]', JSON.stringify(cleared.tags));
+    const panel = readFileSync(resolve(__FRONTEND_DIR__, 'src/workflow-ui/CatalogPanel.tsx'), 'utf8');
+    check(
+        'catalog: the panel does not reload whenever its close handler is a new function',
+        !panel.includes('}, [load, onClose]);'),
+        'the load effect depends on onClose, which App recreates on every render',
+    );
+    const seed = panel.slice(panel.indexOf('// Re-seed when a different asset is selected'));
+    const deps = seed.slice(seed.indexOf('}, ['), seed.indexOf(']);') + 3);
+    check(
+        'catalog: the form re-seeds only for a different asset',
+        deps === '}, [asset.id]);',
+        `the re-seed effect depends on ${deps}, which changes on every reload`,
     );
 }
 

@@ -484,6 +484,11 @@ pub fn annotate(
     if name.is_empty() {
         return Err("annotate needs a name".into());
     }
+    // An empty contact or description is a cleared one, stored as absent rather
+    // than as "". `None` still means "not given, leave it alone" - the editor
+    // sends "" to clear, because sending nothing brought the old value back.
+    let cleared = |v: Option<String>| v.map(|s| s.trim().to_string());
+    let (contact, description) = (cleared(contact), cleared(description));
     let mut owners = load_owners(workspace)?;
     let rules = if pipelines { &mut owners.pipelines } else { &mut owners.assets };
 
@@ -493,11 +498,11 @@ pub fn annotate(
             if let Some(v) = owner {
                 rule.owner = v;
             }
-            if contact.is_some() {
-                rule.contact = contact;
+            if let Some(v) = contact {
+                rule.contact = Some(v).filter(|s| !s.is_empty());
             }
-            if description.is_some() {
-                rule.description = description;
+            if let Some(v) = description {
+                rule.description = Some(v).filter(|s| !s.is_empty());
             }
             if let Some(v) = tags {
                 rule.tags = v;
@@ -512,8 +517,8 @@ pub fn annotate(
                 // An annotation with no owner still needs the field; the empty
                 // string reads as "not stated" everywhere it is shown.
                 owner: owner.unwrap_or_default(),
-                contact,
-                description,
+                contact: contact.filter(|s| !s.is_empty()),
+                description: description.filter(|s| !s.is_empty()),
                 tags: tags.unwrap_or_default(),
             },
         ),
@@ -1692,6 +1697,23 @@ mod tests {
         let rule = &owners.assets[0];
         assert_eq!(rule.description.as_deref(), Some("Second"));
         assert_eq!(rule.owner, "Ingest", "writing a description cleared the owner");
+    }
+
+    /// An empty value clears a field; `None` still leaves it alone. The editor
+    /// sends "" to clear, and an emptied description is stored as absent, not
+    /// as an empty string that reads as a description.
+    #[test]
+    fn an_empty_annotation_clears_the_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        annotate(ws, false, "/lake/orders.parquet", Some("Ingest".into()), Some("ops@x".into()), Some("Orders.".into()), None)
+            .unwrap();
+        annotate(ws, false, "/lake/orders.parquet", Some(String::new()), Some("  ".into()), Some(String::new()), None)
+            .unwrap();
+        let rule = &load_owners(ws).unwrap().assets[0];
+        assert_eq!(rule.owner, "", "the owner was not cleared");
+        assert_eq!(rule.contact, None, "an emptied contact must be absent, not an empty string");
+        assert_eq!(rule.description, None, "an emptied description must be absent, not an empty string");
     }
 
     /// The view joins the graph, ownership, annotations and freshness.
