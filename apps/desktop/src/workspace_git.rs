@@ -217,7 +217,7 @@ pub fn init(workspace: &Path) -> GitResult<()> {
         return Err(format!("workspace {} doesn't exist", workspace.display()));
     }
     run_git(workspace, &["init", "-b", "main"])?;
-    write_gitignore_safety(workspace);
+    write_gitignore_safety(workspace)?;
     Ok(())
 }
 
@@ -238,7 +238,7 @@ pub fn clone(parent: &Path, url: &str, folder_name: &str) -> GitResult<PathBuf> 
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
-    write_gitignore_safety(&dest);
+    write_gitignore_safety(&dest)?;
     Ok(dest)
 }
 
@@ -246,7 +246,9 @@ pub fn add_all(workspace: &Path) -> GitResult<()> {
     // Before staging, not only at git init. This is what repairs a workspace whose
     // ignore file was written before the list grew; without it, an older workspace
     // stays one click away from committing its own encryption key.
-    write_gitignore_safety(workspace);
+    write_gitignore_safety(workspace).map_err(|e| {
+        format!("nothing was staged: the ignore file that keeps Duckle's keys and secrets out of git could not be updated ({e})")
+    })?;
     run_git(workspace, &["add", "-A"])?;
     Ok(())
 }
@@ -396,7 +398,7 @@ pub fn save_pat(workspace: &Path, token: &str) -> GitResult<()> {
         crate::secrets::encrypt_value(&key, &duckle_secrets::aad_for("git", "pat"), token)?;
     let body = serde_json::to_string_pretty(&StoredPat { pat: stored }).map_err(|e| e.to_string())?;
     write_owner_only(&path, body.as_bytes())?;
-    write_gitignore_safety(workspace);
+    write_gitignore_safety(workspace)?;
     Ok(())
 }
 
@@ -492,11 +494,20 @@ const GITIGNORE_SAFETY: &[&str] = &[
 /// older build keeps that older file forever. One was found on a real machine holding
 /// only `secrets/`, which left the encryption key, the AI key and the proxy URL staged
 /// for the next commit.
-fn write_gitignore_safety(workspace: &Path) {
+///
+/// Fails rather than shrugging. Every failure used to be ignored, and `add_all` stages
+/// right after this, so an ignore file that could not be written let `git add -A` take
+/// the encryption key. And a file that exists but cannot be read is not an empty one:
+/// read as empty, the list was written over the person's own ignore rules.
+fn write_gitignore_safety(workspace: &Path) -> GitResult<()> {
     let dir = workspace.join(".duckle");
-    let _ = std::fs::create_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let path = dir.join(".gitignore");
-    let mut existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut existing = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("read {}: {e}", path.display())),
+    };
     let mut changed = false;
     for need in GITIGNORE_SAFETY.iter().copied() {
         if !existing.lines().any(|l| l.trim() == need) {
@@ -509,8 +520,9 @@ fn write_gitignore_safety(workspace: &Path) {
         }
     }
     if changed {
-        let _ = std::fs::write(&path, existing);
+        std::fs::write(&path, existing).map_err(|e| format!("write {}: {e}", path.display()))?;
     }
+    Ok(())
 }
 
 /// Inject a PAT into an HTTPS remote URL. Returns None for ssh:// or
@@ -564,7 +576,7 @@ mod tests {
         std::fs::write(ws.join(".duckle").join(".gitignore"), "secrets/
 ").unwrap();
 
-        write_gitignore_safety(ws);
+        write_gitignore_safety(ws).unwrap();
 
         let got = std::fs::read_to_string(ws.join(".duckle").join(".gitignore")).unwrap();
         let lines: Vec<&str> = got.lines().map(str::trim).collect();
@@ -577,9 +589,53 @@ mod tests {
         // The key is the one that matters most: it decrypts everything else.
         assert!(lines.contains(&"keys/"), "the encryption key would be committed");
         // Idempotent: running it again must not duplicate anything.
-        write_gitignore_safety(ws);
+        write_gitignore_safety(ws).unwrap();
         let twice = std::fs::read_to_string(ws.join(".duckle").join(".gitignore")).unwrap();
         assert_eq!(got, twice, "running it twice changed the file");
+    }
+
+    /// Staging is refused when the safety ignore file cannot be written.
+    ///
+    /// `add_all` repairs `.duckle/.gitignore` and then runs `git add -A`, but the
+    /// repair ignored every failure, so when the file could not be written the
+    /// stage went ahead and took `.duckle/keys/` - the key that decrypts every
+    /// saved credential - into the next commit. A directory stands where the
+    /// file goes, which can be neither read nor written.
+    #[test]
+    fn nothing_is_staged_when_the_safety_ignore_file_cannot_be_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        run_git(ws, &["init", "-b", "main"]).expect("git init");
+        std::fs::create_dir_all(ws.join(".duckle").join("keys")).unwrap();
+        std::fs::write(ws.join(".duckle").join("keys").join("workspace.key"), "not-for-git").unwrap();
+        std::fs::write(ws.join("pipeline.json"), "{}").unwrap();
+        std::fs::create_dir_all(ws.join(".duckle").join(".gitignore")).unwrap();
+
+        let staged = add_all(ws);
+        let listed = run_git(ws, &["diff", "--cached", "--name-only"]).unwrap_or_default();
+        assert!(
+            !listed.contains("keys/"),
+            "the encryption key was staged for commit: {listed:?}"
+        );
+        assert!(staged.is_err(), "a stage that skipped its safety net must say so");
+    }
+
+    /// An ignore file that exists but cannot be read is not an empty one. Read as
+    /// empty, the repair wrote only the safety entries over it and the person's own
+    /// ignore rules were gone.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_ignore_file_is_not_overwritten() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let path = ws.join(".duckle").join(".gitignore");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "my-own-rule/\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o200)).unwrap();
+        let _ = write_gitignore_safety(ws);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("my-own-rule/"));
     }
 
     /// A token written before encryption existed must not stay in the clear. Reading it
