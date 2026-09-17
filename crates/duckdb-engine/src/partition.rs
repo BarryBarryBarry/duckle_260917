@@ -195,8 +195,22 @@ pub fn generate(def: &PartitionDef, from: &str, to: &str) -> Result<Vec<Partitio
             }
             let mut at = floor(from_date, *cadence, tz)
                 .ok_or_else(|| format!("cannot place {from} in {timezone}"))?;
-            let stop = floor(to_date, *cadence, tz)
-                .ok_or_else(|| format!("cannot place {to} in {timezone}"))?;
+            // `--to` names a day, and including it means all of it. For a day or
+            // coarser cadence that is the slice containing the day; for an hour
+            // it is every hour before the next day starts. Stopping at the slice
+            // containing `to`'s midnight gave the last day one hour of 24.
+            let stop = match cadence {
+                Cadence::Hour => {
+                    let next_day = to_date
+                        .succ_opt()
+                        .ok_or_else(|| format!("cannot place the day after {to}"))?;
+                    let end = floor(next_day, Cadence::Hour, tz)
+                        .ok_or_else(|| format!("cannot place {to} in {timezone}"))?;
+                    end - chrono::Duration::hours(1)
+                }
+                _ => floor(to_date, *cadence, tz)
+                    .ok_or_else(|| format!("cannot place {to} in {timezone}"))?,
+            };
             let mut out = Vec::new();
             // A guard rather than a while-true: a cadence and zone combination
             // that failed to advance would otherwise spin forever building an
@@ -259,19 +273,21 @@ pub fn params_for(def: &PartitionDef, key: &str) -> Option<BTreeMap<String, Stri
             .into_iter()
             .find(|p| p.key == key)
             .map(|p| p.params),
-        // A time key names exactly one slice, so generating from it to itself
-        // produces that slice and no other.
+        // Generating the key's day and taking the slice with that key. It used
+        // to demand the day produce exactly one slice, which only a day or
+        // coarser cadence does, so an hourly key - 24 slices a day - bound no
+        // window and a consumer of an hourly producer ran without one.
         PartitionDef::Time { .. } => {
             let day = match key.split('T').next().unwrap_or(key) {
                 d if d.len() == 4 => format!("{d}-01-01"),
                 d if d.len() == 7 => format!("{d}-01"),
                 d => d.to_string(),
             };
-            let mut found = generate(def, &day, &day).ok()?;
-            match found.len() {
-                1 if found[0].key == key => Some(found.remove(0).params),
-                _ => None,
-            }
+            generate(def, &day, &day)
+                .ok()?
+                .into_iter()
+                .find(|p| p.key == key)
+                .map(|p| p.params)
         }
     }
 }
@@ -393,6 +409,38 @@ mod tests {
         let start = chrono::DateTime::parse_from_rfc3339(p[0].start.as_ref().unwrap()).unwrap();
         let end = chrono::DateTime::parse_from_rfc3339(p[0].end.as_ref().unwrap()).unwrap();
         assert_eq!((end - start).num_hours(), 25, "{:?}", p[0]);
+    }
+
+    /// `--to` names a DAY, and "up to and including" it means all of it: an
+    /// operator writing `--to 2026-09-02` means to process the 2nd. For an hourly
+    /// cadence the range stopped at the slice containing that day's midnight, so
+    /// the last day contributed hour 00 and silently dropped the other 23.
+    #[test]
+    fn an_hourly_range_covers_every_hour_of_its_last_day() {
+        let p = generate(&time(Cadence::Hour, "UTC"), "2026-09-01", "2026-09-02").unwrap();
+        assert_eq!(p.len(), 48, "two days of hours: {:?}", p.iter().map(|s| &s.key).collect::<Vec<_>>());
+        assert_eq!(p.last().unwrap().key, "2026-09-02T23");
+        // A zone with a fall-back that day still ends at its last local hour.
+        let p = generate(&time(Cadence::Hour, "Europe/Brussels"), "2026-10-25", "2026-10-25").unwrap();
+        assert_eq!(p.len(), 25, "the fall-back day has 25 hours");
+        assert_eq!(p.last().unwrap().key, "2026-10-25T23");
+    }
+
+    /// #325: a consumer of an hourly producer receives the window of the hour
+    /// it was triggered by. `params_for` generated the key's day and demanded
+    /// exactly one slice, which only a daily or coarser cadence produces, so
+    /// every hourly key bound no window at all.
+    #[test]
+    fn an_hourly_key_binds_its_own_window() {
+        let def = time(Cadence::Hour, "UTC");
+        let params = params_for(&def, "2026-09-03T05").expect("an hourly key binds a window");
+        assert_eq!(params["partition_key"], "2026-09-03T05");
+        assert_eq!(params["window_start"], "2026-09-03T05:00:00+00:00");
+        assert_eq!(params["window_end"], "2026-09-03T06:00:00+00:00");
+        let brussels = time(Cadence::Hour, "Europe/Brussels");
+        let repeated = params_for(&brussels, "2026-10-25T02+0100").expect("the repeated hour binds too");
+        assert_eq!(repeated["window_start"], "2026-10-25T02:00:00+01:00");
+        assert_eq!(params_for(&def, "2026-09-03T24"), None, "not a key this definition produces");
     }
 
     /// At the autumn fall-back 02:00 happens twice. Both hours were keyed
