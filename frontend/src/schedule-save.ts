@@ -10,6 +10,23 @@ export type ScheduleEdit = {
 };
 
 /**
+ * Run a Schedules-dialog action; the message to show when it fails, else null.
+ *
+ * "Run now" and "Delete" awaited their command inside try/finally with no catch,
+ * so a failure became an unhandled rejection and the dialog showed nothing -
+ * including "already running in this workspace, so this run was refused", which
+ * is exactly what the person pressing Run now needs to read.
+ */
+export async function scheduleActionError(action: () => Promise<unknown>): Promise<string | null> {
+    try {
+        await action();
+        return null;
+    } catch (err) {
+        return String(err);
+    }
+}
+
+/**
  * The record the desktop Schedules dialog saves: the schedule as it was loaded,
  * with only the fields the dialog edits replaced.
  *

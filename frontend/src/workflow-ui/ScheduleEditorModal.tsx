@@ -13,7 +13,7 @@ import {
     X,
 } from 'lucide-react';
 import { isTauri } from '../tauri-dialog';
-import { scheduleForSave } from '../schedule-save';
+import { scheduleActionError, scheduleForSave } from '../schedule-save';
 import {
     runHistory,
     scheduleDelete,
@@ -163,8 +163,9 @@ export default function ScheduleEditorModal({
 
     const handleDelete = async (id: string) => {
         setBusy(true);
+        setError(null);
         try {
-            await scheduleDelete(id);
+            setError(await scheduleActionError(() => scheduleDelete(id)));
             await refresh();
         } finally {
             setBusy(false);
@@ -173,8 +174,9 @@ export default function ScheduleEditorModal({
 
     const handleRunNow = async (id: string) => {
         setBusy(true);
+        setError(null);
         try {
-            await scheduleRunNow(id);
+            setError(await scheduleActionError(() => scheduleRunNow(id)));
             await refresh();
         } finally {
             setBusy(false);
@@ -255,6 +257,7 @@ export default function ScheduleEditorModal({
                                         />
                                     ))
                                 )}
+                                {error ? <div className="modal-error">{error}</div> : null}
                             </div>
                             <button
                                 type="button"

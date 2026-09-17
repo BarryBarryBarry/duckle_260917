@@ -13,7 +13,7 @@ import type { RepoItem } from '../src/repo-types';
 import { livePreviewable } from '../src/live-preview';
 import { discoverParams, resolveForRun } from '../src/run-resolve';
 import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterBuilderField';
-import { scheduleForSave } from '../src/schedule-save';
+import { scheduleActionError, scheduleForSave } from '../src/schedule-save';
 import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
 import { UndoHistory, type CanvasSnapshot } from '../src/undo-history';
 import { saveItemPayload } from '../src/workspace';
@@ -525,6 +525,48 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'sql name: names differing only in non-ASCII case are distinct, as in DuckDB',
         !codes([aliased('a', 'Ärger'), aliased('b', 'ärger')]).includes('duplicate-alias'),
         'refused two names DuckDB keeps apart',
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The Schedules dialog shows why "Run now" or "Delete" failed.
+//
+// Both awaited their command with no catch, so a refusal ("already running in
+// this workspace, so this run was refused") was an unhandled rejection and the
+// dialog showed nothing. The list view did not render the error either: only
+// the edit form did.
+// ---------------------------------------------------------------------------
+{
+    const refusal = 'orders is already running in this workspace, so this run was refused';
+    let got: string | null | 'threw' = 'threw';
+    try {
+        got = await scheduleActionError(async () => {
+            throw refusal;
+        });
+    } catch {
+        got = 'threw';
+    }
+    check('schedule action: a refusal becomes the message to show', got === refusal, `got ${JSON.stringify(got)}`);
+    check(
+        'schedule action: success shows nothing',
+        (await scheduleActionError(async () => undefined)) === null,
+        'a successful action produced a message',
+    );
+    const modal = readFileSync(resolve(__FRONTEND_DIR__, 'src/workflow-ui/ScheduleEditorModal.tsx'), 'utf8');
+    for (const handler of ['handleDelete', 'handleRunNow']) {
+        const start = modal.indexOf(`const ${handler} = `);
+        const body = start < 0 ? '' : modal.slice(start, modal.indexOf('};', start));
+        check(
+            `schedule action: ${handler} reports its failure`,
+            body.includes('scheduleActionError(') && body.includes('setError('),
+            `${handler} does not route its command through scheduleActionError into setError`,
+        );
+    }
+    const list = modal.slice(modal.indexOf('<div className="schedule-list">'), modal.indexOf('schedule-add'));
+    check(
+        'schedule action: the list view renders the error',
+        list.includes('{error ?'),
+        'the error is set but only the edit form shows it',
     );
 }
 
