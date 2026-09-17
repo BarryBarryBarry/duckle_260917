@@ -11,7 +11,7 @@ import type { Node } from '@xyflow/react';
 import type { DuckleNodeData } from '../src/pipeline-types';
 import type { RepoItem } from '../src/repo-types';
 import { livePreviewable } from '../src/live-preview';
-import { buildContextVars, discoverParams, resolveForRun } from '../src/run-resolve';
+import { buildContextVars, discoverParams, resolveForRun, resolveTimeBuiltin } from '../src/run-resolve';
 import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterBuilderField';
 import { scheduleActionError, scheduleForSave } from '../src/schedule-save';
 import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
@@ -549,6 +549,26 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'context key: every placeholder the warning suggests resolves',
         suggested.length > 0 && suggested.every(k => Object.prototype.hasOwnProperty.call(vars, k)),
         `suggested ${JSON.stringify(suggested)}; resolvable keys include ${JSON.stringify(Object.keys(vars))}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A date offset too large for a date is left verbatim, as the engine leaves it.
+//
+// The editor shifted the date anyway and formatted the invalid result, so a
+// typo like ${date+300000000d} became the path segment "NaN-NaN-NaN"; the engine
+// panicked on the same input. A malformed offset resolves to nothing on both.
+// ---------------------------------------------------------------------------
+{
+    const now = new Date(Date.UTC(2026, 8, 17, 12, 0, 0));
+    for (const huge of ['date+300000000d', 'datetime-99999999999d', 'now+9999999999999999999h', 'time+999999999999999999999s']) {
+        const got = resolveTimeBuiltin(huge, now);
+        check(`date offset: ${huge} is left verbatim`, got === null, `resolved to ${JSON.stringify(got)}`);
+    }
+    check(
+        'date offset: an ordinary offset still resolves',
+        resolveTimeBuiltin('date+1d', now) === '2026-09-18',
+        `date+1d resolved to ${JSON.stringify(resolveTimeBuiltin('date+1d', now))}`,
     );
 }
 

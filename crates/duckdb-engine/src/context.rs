@@ -144,11 +144,13 @@ fn parse_offset(s: &str) -> Option<chrono::Duration> {
         }
         let n: i64 = num.parse().ok()?;
         num.clear();
+        // The `try_` forms: the plain constructors PANIC past their range, so
+        // one typo in a path took the run down instead of being malformed.
         let seg = match ch {
-            'd' => chrono::Duration::days(n),
-            'h' => chrono::Duration::hours(n),
-            'm' => chrono::Duration::minutes(n),
-            's' => chrono::Duration::seconds(n),
+            'd' => chrono::Duration::try_days(n)?,
+            'h' => chrono::Duration::try_hours(n)?,
+            'm' => chrono::Duration::try_minutes(n)?,
+            's' => chrono::Duration::try_seconds(n)?,
             _ => return None, // unknown unit
         };
         total = total.checked_add(&seg)?;
@@ -156,7 +158,7 @@ fn parse_offset(s: &str) -> Option<chrono::Duration> {
     if !num.is_empty() {
         return None; // trailing digits with no unit
     }
-    Some(total * sign)
+    total.checked_mul(sign)
 }
 
 /// Resolve a time-builtin placeholder name, with an optional relative offset, to
@@ -174,7 +176,8 @@ pub(crate) fn resolve_time_builtin(name: &str, now: chrono::DateTime<chrono::Utc
         if let Some(rest) = name.strip_prefix(base) {
             if rest.starts_with('+') || rest.starts_with('-') {
                 let dur = parse_offset(rest)?;
-                return format_time_builtin(base, now + dur);
+                // Past the calendar is malformed too; `now + dur` panics there.
+                return format_time_builtin(base, now.checked_add_signed(dur)?);
             }
         }
     }
@@ -1586,6 +1589,26 @@ mod tests {
                 super::resolve_time_builtin(bad, now).is_none(),
                 "{bad} should not resolve"
             );
+        }
+    }
+
+    /// An offset too large for a date is malformed, like any other: the
+    /// placeholder is left verbatim. It panicked instead - chrono's
+    /// `Duration::hours` and `seconds` panic past their range, and adding a
+    /// representable duration to `now` panics past the calendar's - so one typo
+    /// in a path took down the run, and a scheduler thread with it.
+    #[test]
+    fn an_offset_too_large_for_a_date_is_left_verbatim_rather_than_panicking() {
+        let now = chrono::Utc::now();
+        for huge in [
+            "date+300000000d",
+            "date+99999999999d",
+            "now-9999999999999h",
+            "datetime+999999999999999999m",
+            "timestamp+9223372036854775807s",
+        ] {
+            let got = std::panic::catch_unwind(|| super::resolve_time_builtin(huge, now));
+            assert!(matches!(got, Ok(None)), "{huge} should be left verbatim, got {got:?}");
         }
     }
 

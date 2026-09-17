@@ -189,6 +189,9 @@ export function resolveTimeBuiltin(name: string, now: Date = new Date()): string
                 const offsetMs = parseOffset(rest);
                 if (offsetMs !== null) {
                     const shifted = new Date(now.getTime() + offsetMs);
+                    // An offset past the calendar is malformed, as in the engine:
+                    // left verbatim, not formatted into "NaN-NaN-NaN".
+                    if (Number.isNaN(shifted.getTime())) return null;
                     return formatTimeBuiltin(base, shifted);
                 }
             }
