@@ -140,7 +140,12 @@ tar = "0.4"
 # RabbitMQ / AMQP 0.9.1 client. Pure Rust, async. Same block_on
 # pattern as Kafka/NATS. Publishes to an exchange + routing key;
 # pulls from a queue with a per-message timeout for batch ETL.
-lapin = { version = "4", default-features = false, features = ["rustls"] }
+#
+# `default-runtime` is not optional. lapin 4 moved its async runtime into a
+# default feature, so this line - correct for lapin 2 - stopped carrying one when
+# only the version number changed, and every connect failed with "no default
+# configured runtime" before opening a socket. Tokio is already in the tree.
+lapin = { version = "4", default-features = false, features = ["rustls", "default-runtime"] }
 # FTP / FTPS client. Pure Rust, synchronous API (fits the per-stage
 # blocking model - no block_on dance). Rustls-backed TLS keeps the
 # build self-contained on every OS.

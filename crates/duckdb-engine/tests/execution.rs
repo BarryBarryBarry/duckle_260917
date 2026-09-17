@@ -9890,6 +9890,82 @@ fn snk_and_src_kafka_roundtrip_via_real_broker() {
     assert!(n >= 3, "expected at least 3 records consumed, got {}", n);
 }
 
+/// Run one rabbit node against a plain TCP listener and report whether a socket
+/// was ever opened, plus the run's error text.
+///
+/// Not a broker: it accepts and closes, so the AMQP handshake fails - but only
+/// AFTER a connection was made, and making one is the thing under test.
+fn rabbit_opens_a_socket(nodes: impl Fn(u16) -> Value, edges: Value) -> (bool, String) {
+    let engine = engine().expect("DUCKLE_DUCKDB_BIN");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let accepted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen = accepted.clone();
+    let handle = std::thread::spawn(move || {
+        for stream in incoming_bounded(&listener, 1) {
+            if stream.is_ok() {
+                seen.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    });
+    let r = engine.execute_pipeline(&doc(nodes(port), edges));
+    let _ = handle.join();
+    (
+        accepted.load(std::sync::atomic::Ordering::SeqCst),
+        r.error.unwrap_or_default(),
+    )
+}
+
+/// src.rabbit and snk.rabbit reach the broker at all.
+///
+/// The round-trip test below needs a real broker and skips without one, which
+/// is how this went unnoticed. lapin 4 moved its async runtime into a DEFAULT
+/// feature; the major bump kept lapin 2's `default-features = false` line
+/// verbatim, so every connect failed with "no default configured runtime"
+/// before opening a socket - source and sink both.
+#[test]
+fn rabbit_source_and_sink_open_a_socket_to_the_broker() {
+    if engine().is_none() {
+        eprintln!("skipping: set DUCKLE_DUCKDB_BIN to a duckdb CLI to run");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.csv");
+    let (opened, err) = rabbit_opens_a_socket(
+        |port| {
+            json!([
+                node("r", "src.rabbit", json!({
+                    "url": format!("amqp://guest:guest@127.0.0.1:{port}/%2f"),
+                    "queue": "q1",
+                    "maxMessages": 1,
+                    "timeoutMs": 2000,
+                })),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ])
+        },
+        json!([main_edge("e", "r", "k")]),
+    );
+    assert!(!err.contains("no default configured runtime"), "src.rabbit has no async runtime: {err}");
+    assert!(opened, "src.rabbit never opened a socket to the broker: {err}");
+
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let (opened, err) = rabbit_opens_a_socket(
+        |port| {
+            json!([
+                node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("r", "snk.rabbit", json!({
+                    "url": format!("amqp://guest:guest@127.0.0.1:{port}/%2f"),
+                    "exchange": "",
+                    "routingKey": "q1",
+                })),
+            ])
+        },
+        json!([main_edge("e", "s", "r")]),
+    );
+    assert!(!err.contains("no default configured runtime"), "snk.rabbit has no async runtime: {err}");
+    assert!(opened, "snk.rabbit never opened a socket to the broker: {err}");
+}
+
 #[test]
 fn snk_and_src_rabbit_roundtrip_via_real_broker() {
     // Env-gated. Set DUCKLE_RABBITMQ_URL to an amqp:// URL
