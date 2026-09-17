@@ -301,7 +301,9 @@ export function validatePipeline(
     // Two contexts defining the same bare key share one slot in
     // buildContextVars' flat map, so `${KEY}` silently resolves to whichever
     // context is last in repo order. Warn (not error) and point at the
-    // unambiguous `${context.KEY}` form. A single context never collides.
+    // unambiguous form, which is keyed by the context's NAME - `${Prod.KEY}` -
+    // in buildContextVars and the engine alike. The literal `${context.KEY}` it
+    // used to suggest resolves nowhere. A single context never collides.
     for (const c of contextKeyCollisions(repo)) {
         push({
             severity: 'warning',
@@ -309,7 +311,7 @@ export function validatePipeline(
             message:
                 `Variable "${c.key}" is defined by ${c.contexts.length} contexts ` +
                 `(${c.contexts.join(', ')}); a bare \${${c.key}} resolves to only one. ` +
-                `Use \${context.${c.key}} to pick a specific context.`,
+                `Use ${c.contexts.map(name => `\${${name}.${c.key}}`).join(' or ')} to pick a specific context.`,
         });
     }
 

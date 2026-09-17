@@ -11,7 +11,7 @@ import type { Node } from '@xyflow/react';
 import type { DuckleNodeData } from '../src/pipeline-types';
 import type { RepoItem } from '../src/repo-types';
 import { livePreviewable } from '../src/live-preview';
-import { discoverParams, resolveForRun } from '../src/run-resolve';
+import { buildContextVars, discoverParams, resolveForRun } from '../src/run-resolve';
 import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterBuilderField';
 import { scheduleActionError, scheduleForSave } from '../src/schedule-save';
 import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
@@ -525,6 +525,30 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'sql name: names differing only in non-ASCII case are distinct, as in DuckDB',
         !codes([aliased('a', 'Ärger'), aliased('b', 'ärger')]).includes('duplicate-alias'),
         'refused two names DuckDB keeps apart',
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The duplicate-context-key warning suggests placeholders that resolve.
+//
+// It told people to write ${context.KEY}. Nothing defines that: a namespaced
+// variable is keyed by the context's NAME (${Prod.KEY}), in the editor and the
+// engine alike, so following the advice left the placeholder unresolved.
+// ---------------------------------------------------------------------------
+{
+    const repo = [context('Prod', { DB_HOST: 'prod.db' }), context('Dev', { DB_HOST: 'dev.db' })];
+    const warning = validatePipeline([node('q', 'code.sql', { sql: 'SELECT 1' })], [], repo).issues.find(
+        i => i.code === 'duplicate-context-key',
+    );
+    const suggested = [...(warning?.message ?? '').matchAll(/\$\{([^}]+)\}/g)]
+        .map(m => m[1])
+        .filter(k => k !== 'DB_HOST');
+    const vars = buildContextVars(repo);
+    check('context key: the collision is still reported', warning !== undefined, 'no duplicate-context-key warning');
+    check(
+        'context key: every placeholder the warning suggests resolves',
+        suggested.length > 0 && suggested.every(k => Object.prototype.hasOwnProperty.call(vars, k)),
+        `suggested ${JSON.stringify(suggested)}; resolvable keys include ${JSON.stringify(Object.keys(vars))}`,
     );
 }
 
