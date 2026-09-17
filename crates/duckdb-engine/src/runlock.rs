@@ -348,6 +348,33 @@ pub(crate) fn test_sleeper() -> std::process::Child {
 mod tests {
     use super::*;
 
+    /// Claim `key` just after its only holder was dropped, as a caller would.
+    ///
+    /// On Unix a `flock` belongs to the open file, and a child process spawned
+    /// by ANY thread holds a copy of every open descriptor between its fork and
+    /// its exec. Tests spawn processes all the time - DuckDB, sleepers - so a
+    /// drop that lands inside that window leaves the lock held for the
+    /// microseconds until the child execs, and an immediate re-claim is refused.
+    /// That failed these tests twice on ubuntu CI. Production waits for the next
+    /// tick anyway; a test has to wait too.
+    ///
+    /// A lock that was really never released stays held for the whole window
+    /// and still fails, which is the regression these tests exist to catch. An
+    /// Unusable outcome is retried for the same reason the sibling test gave: a
+    /// runner executing a thousand tests at once can lose an `open` for a moment.
+    fn claim_after_release(ws: &Path, key: &str) -> RunLock {
+        let mut last = String::new();
+        for _ in 0..100 {
+            match try_acquire_reason(ws, key) {
+                AcquireOutcome::Claimed(lock) => return lock,
+                AcquireOutcome::HeldByOther => last = "still held by another holder".into(),
+                AcquireOutcome::Unusable(e) => last = format!("unusable: {e}"),
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        panic!("{key} could not be claimed for two seconds after its holder was dropped ({last})");
+    }
+
     /// A running process is alive, and one that has exited is not.
     ///
     /// Every reconcile call site passed a stand-in for this. serve and web said
@@ -399,10 +426,7 @@ mod tests {
 
         // And releasing frees it, so a finished run does not wedge the next one.
         drop(held);
-        assert!(
-            claim_for_run(ws, "orders_etl").is_ok(),
-            "the lock was not released when the run ended"
-        );
+        claim_after_release(ws, "orders_etl");
     }
 
     #[test]
@@ -425,43 +449,7 @@ mod tests {
         // Releasing lets the next caller through, which is what makes the
         // schedule resume on the following tick rather than stalling.
         drop(first);
-        // Asserted on the CLASSIFIED outcome rather than on `is_some()`.
-        //
-        // `try_acquire` collapses "another holder" and "this workspace cannot
-        // be locked at all" into the same `None`, so when this failed on CI it
-        // said only "lock never became available again" - which is the one
-        // thing that could not have been true, since nothing held it. Three
-        // reds and no way to tell contention from an `open` that failed for an
-        // environmental reason, on a runner executing 1160 tests at once.
-        //
-        // HeldByOther is the real regression and still fails loudly. Unusable
-        // is not what this test is about: the property is that RELEASING lets
-        // the next caller through, not that a file can be opened right now.
-        //
-        // An Unusable outcome is retried briefly rather than failed on. It is
-        // not the property under test, and it is transient by definition: a
-        // read-only mount or a filesystem without locks stays broken for the
-        // whole second, while an `open` that lost a race for a file descriptor
-        // on a runner executing 1160 tests at once clears immediately. A
-        // HeldByOther is never retried - that IS the regression, and retrying
-        // it would hide exactly what this test exists to catch.
-        let mut last = None;
-        for _ in 0..50 {
-            match try_acquire_reason(ws, "nightly-load") {
-                AcquireOutcome::Claimed(_) => return,
-                AcquireOutcome::HeldByOther => {
-                    panic!("the lock was still held after its only holder was dropped")
-                }
-                AcquireOutcome::Unusable(e) => {
-                    last = Some(e.to_string());
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-            }
-        }
-        panic!(
-            "the workspace could not be locked at all for a second, so this is the              environment rather than the lock: {}",
-            last.unwrap_or_default()
-        );
+        claim_after_release(ws, "nightly-load");
     }
 
     /// The whole point of this module is holding across PROCESSES, so a
