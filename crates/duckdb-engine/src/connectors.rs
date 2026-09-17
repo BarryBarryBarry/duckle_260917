@@ -11684,10 +11684,17 @@ impl DuckdbEngine {
             // Read request bytes until headers parse + body fully consumed.
             let (method, path, headers, body) = match read_http_request(&mut stream) {
                 Ok(req) => req,
-                Err(e) => {
-                    let _ = stream.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                Err((code, e)) => {
+                    let reason = match code {
+                        411 => "Length Required",
+                        _ => "Bad Request",
+                    };
+                    let _ = stream.write_all(
+                        format!("HTTP/1.1 {code} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                            .as_bytes(),
+                    );
                     let _ = stream.flush();
-                    eprintln!("webhook: skipping malformed request: {}", e);
+                    eprintln!("webhook: skipping request ({code}): {}", e);
                     continue;
                 }
             };

@@ -1078,28 +1078,28 @@ pub(crate) fn unwrap_dynamodb_value(v: &JsonValue) -> JsonValue {
 /// Content-Length when there's a non-empty body indication.
 pub(crate) fn read_http_request(
     stream: &mut std::net::TcpStream,
-) -> Result<(String, String, Vec<(String, String)>, Vec<u8>), String> {
+) -> Result<(String, String, Vec<(String, String)>, Vec<u8>), (u16, String)> {
     use std::io::Read;
     let mut buf: Vec<u8> = Vec::with_capacity(8192);
     let mut chunk = [0u8; 4096];
     // Read until we see end-of-headers (\r\n\r\n).
     while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
         if buf.len() > 1_048_576 {
-            return Err("request too large".into());
+            return Err((400, "request too large".into()));
         }
         match stream.read(&mut chunk) {
-            Ok(0) => return Err("connection closed before headers".into()),
+            Ok(0) => return Err((400, "connection closed before headers".into())),
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
-            Err(e) => return Err(format!("read: {}", e)),
+            Err(e) => return Err((400, format!("read: {}", e))),
         }
     }
     let split_at = buf
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
-        .ok_or_else(|| "no header/body split".to_string())?;
+        .ok_or_else(|| (400, "no header/body split".to_string()))?;
     let head = String::from_utf8_lossy(&buf[..split_at]).into_owned();
     let mut lines = head.split("\r\n");
-    let request_line = lines.next().ok_or_else(|| "empty request".to_string())?;
+    let request_line = lines.next().ok_or_else(|| (400, "empty request".to_string()))?;
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or("").to_string();
     let path = parts.next().unwrap_or("").to_string();
@@ -1114,6 +1114,12 @@ pub(crate) fn read_http_request(
                 content_length = v.parse().unwrap_or(0);
                 saw_content_length = true;
             }
+            // A chunked body has no length and its framing is not the payload.
+            // Taken as-is it was stored with the chunk sizes in it; 411 asks the
+            // sender for a Content-Length instead.
+            if k.eq_ignore_ascii_case("transfer-encoding") && v.to_ascii_lowercase().contains("chunked") {
+                return Err((411, "chunked bodies are not accepted; send Content-Length".into()));
+            }
             headers.push((k, v));
         }
     }
@@ -1123,9 +1129,12 @@ pub(crate) fn read_http_request(
     // Content-Length can't grow `body` unboundedly in RAM.
     const MAX_WEBHOOK_BODY: usize = 16 * 1024 * 1024;
     if content_length > MAX_WEBHOOK_BODY {
-        return Err(format!(
-            "request body too large ({} bytes; max {})",
-            content_length, MAX_WEBHOOK_BODY
+        return Err((
+            400,
+            format!(
+                "request body too large ({} bytes; max {})",
+                content_length, MAX_WEBHOOK_BODY
+            ),
         ));
     }
     let mut body: Vec<u8> = buf[split_at + 4..].to_vec();
@@ -1139,6 +1148,15 @@ pub(crate) fn read_http_request(
                 Ok(n) => body.extend_from_slice(&chunk[..n]),
                 Err(_) => break,
             }
+        }
+        // A body that ended early is a truncated request, not a short one: taken
+        // as whole, a cut-off JSON body became a raw text row and the sender was
+        // told it had been delivered.
+        if body.len() < content_length {
+            return Err((
+                400,
+                format!("request body ended after {} of {} bytes", body.len(), content_length),
+            ));
         }
         body.truncate(content_length);
     }
@@ -1668,6 +1686,55 @@ mod tests {
         );
         // Objects/arrays are JSON-stringified on write, so they map to string.
         assert_eq!(infer_avro_nullable_field(&rows, "obj"), json!(["null", "string"]));
+    }
+}
+
+#[cfg(test)]
+mod http_request_tests {
+    use super::read_http_request;
+    use std::io::Write;
+
+    type Parsed = Result<(String, String, Vec<(String, String)>, Vec<u8>), (u16, String)>;
+
+    /// What `read_http_request` makes of these bytes, sent through a real socket
+    /// that the sender then half-closes.
+    fn read_bytes(raw: &[u8]) -> Parsed {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        client.write_all(raw).unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        server.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        read_http_request(&mut server)
+    }
+
+    /// src.webhook turns a body into rows and the run answers the sender. A
+    /// chunked body carries no Content-Length, so its raw chunk framing -
+    /// `7\r\n{..}\r\n0` - was taken as the body and stored as a row. 411 asks for
+    /// the length instead.
+    #[test]
+    fn a_chunked_body_is_refused_not_stored_with_its_framing() {
+        let raw = b"POST /hook HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n7\r\n{\"a\":1}\r\n0\r\n\r\n";
+        match read_bytes(raw) {
+            Err((411, _)) => {}
+            Err((code, why)) => panic!("refused with {code} ({why}), not 411"),
+            Ok((_, _, _, body)) => panic!("accepted a chunked body as {:?}", String::from_utf8_lossy(&body)),
+        }
+    }
+
+    /// A sender that stops before Content-Length bytes sent a truncated
+    /// request. It was accepted as if whole, so a cut-off JSON body became a
+    /// raw text row and the sender was told it had been delivered.
+    #[test]
+    fn a_body_shorter_than_its_content_length_is_refused() {
+        let raw = b"POST /hook HTTP/1.1\r\nContent-Length: 50\r\n\r\n{\"a\":1";
+        match read_bytes(raw) {
+            Err((400, _)) => {}
+            Err((code, why)) => panic!("refused with {code} ({why}), not 400"),
+            Ok((_, _, _, body)) => panic!("accepted {} of 50 bytes as the whole body", body.len()),
+        }
+        let whole = b"POST /hook HTTP/1.1\r\nContent-Length: 7\r\n\r\n{\"a\":1}";
+        assert!(read_bytes(whole).is_ok(), "a complete body is still taken");
     }
 }
 
