@@ -70,12 +70,78 @@ pub fn resolve_zone(tz: Option<&str>) -> Result<Zone, String> {
 ///
 /// Shared so the two schedulers cannot drift: a hand-edited 5-field expression
 /// used to parse to None on one surface and silently never fire.
+///
+/// A 5-field expression is STANDARD crontab, which is what the console and the
+/// README tell people to write, and standard crontab numbers weekdays from
+/// Sunday = 0. The crate numbers them from Sunday = 1. So the weekday field is
+/// translated, not just padded: without that, `0 9 * * 1` - the console's own
+/// example for Monday - fired every Sunday, and `1-5` never fired on a Friday.
+/// A 6- or 7-field expression is already the crate's own syntax and is left
+/// exactly as written, because that is what the desktop schedule builder saves.
 pub fn normalize_cron(expr: &str) -> Option<String> {
-    match expr.split_whitespace().count() {
-        5 => Some(format!("0 {}", expr)),
+    let fields: Vec<&str> = expr.split_whitespace().collect();
+    match fields.len() {
+        5 => Some(format!(
+            "0 {} {} {} {} {}",
+            fields[0],
+            fields[1],
+            fields[2],
+            fields[3],
+            crontab_weekdays(fields[4])
+        )),
         6 | 7 => Some(expr.to_string()),
         _ => None,
     }
+}
+
+/// Rewrite a standard crontab weekday field (0 or 7 = Sunday, 1 = Monday) in
+/// the cron crate's numbering (1 = Sunday, 2 = Monday).
+///
+/// Names mean the same in both and pass through, and so do `*` and `*/n`: both
+/// numberings START at Sunday, so every n-th day is the same set of days either
+/// way. A number, a range or a stepped range is expanded to the days it names
+/// and re-emitted as a list - which is also what makes a range through Sunday
+/// such as `5-7` expressible at all, since the crate's Sunday is its LOWEST
+/// number and a range cannot wrap. Anything this does not recognise, or a number
+/// outside 0-7, is left exactly as written so the crate reports its own error
+/// against what the user typed.
+fn crontab_weekdays(field: &str) -> String {
+    field
+        .split(',')
+        .map(|token| match crontab_days(token) {
+            Some(days) => {
+                let mut crate_days: Vec<u32> =
+                    days.into_iter().map(|d| if d == 0 || d == 7 { 1 } else { d + 1 }).collect();
+                crate_days.sort_unstable();
+                crate_days.dedup();
+                crate_days.iter().map(u32::to_string).collect::<Vec<_>>().join(",")
+            }
+            None => token.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The crontab day numbers one purely numeric weekday token names - `n`, `a-b`
+/// or `a-b/s` - or None for anything else: a name, `*`, `*/n`, `?`, or a shape
+/// such as `n/s` whose meaning differs between cron implementations.
+fn crontab_days(token: &str) -> Option<Vec<u32>> {
+    let (range, step) = match token.split_once('/') {
+        Some((range, step)) => (range, Some(step.parse::<usize>().ok().filter(|s| *s > 0)?)),
+        None => (token, None),
+    };
+    let (lo, hi) = match range.split_once('-') {
+        Some((a, b)) => (a.parse::<u32>().ok()?, b.parse::<u32>().ok()?),
+        None if step.is_some() => return None,
+        None => {
+            let n = range.parse::<u32>().ok()?;
+            (n, n)
+        }
+    };
+    if lo > 7 || hi > 7 || lo > hi {
+        return None;
+    }
+    Some((lo..=hi).step_by(step.unwrap_or(1)).collect())
 }
 
 /// Why an occurrence was not the one the expression literally named.
@@ -489,5 +555,85 @@ mod tests {
     fn an_unparseable_expression_is_an_error() {
         let zone = resolve_zone(None).unwrap();
         assert!(next_after("not a cron", &zone, Utc::now()).is_err());
+    }
+
+    /// Every weekday a schedule FIRES on across two weeks of occurrences - what
+    /// it actually does, not what its text says. A set, because the order the
+    /// days arrive in depends on which day the walk starts from, and that is not
+    /// the property under test.
+    fn fires_on(expr: &str) -> std::collections::BTreeSet<u32> {
+        use chrono::Datelike;
+        let zone = resolve_zone(Some("UTC")).unwrap();
+        let mut after = utc(2026, 9, 13, 0, 0);
+        let mut out = std::collections::BTreeSet::new();
+        for _ in 0..14 {
+            let (occ, _) = next_after(expr, &zone, after).unwrap_or_else(|e| panic!("{expr}: {e}"));
+            let occ = occ.unwrap_or_else(|| panic!("{expr}: no occurrence"));
+            out.insert(occ.at.weekday().num_days_from_monday());
+            after = occ.at;
+        }
+        out
+    }
+
+    fn days(list: &[chrono::Weekday]) -> std::collections::BTreeSet<u32> {
+        list.iter().map(|d| d.num_days_from_monday()).collect()
+    }
+
+    /// A STANDARD 5-field weekday number is the day it names in crontab.
+    ///
+    /// The cron crate counts weekdays from Sunday = 1; crontab counts from
+    /// Sunday = 0 and also accepts 7 for Sunday. This only prepended a seconds
+    /// field, so a 5-field weekday was read in the crate's numbering: `0 9 * * 1`
+    /// - the web console's own placeholder for Monday - fired every SUNDAY,
+    /// `1-5` fired Sunday to Thursday and never on Friday, and `0` was refused.
+    /// Both schedulers normalise through here, so every numbered weekday
+    /// schedule fired a day early.
+    #[test]
+    fn a_five_field_weekday_number_is_the_crontab_day() {
+        use chrono::Weekday::*;
+        assert_eq!(fires_on("0 9 * * 1"), days(&[Mon]), "1 is Monday");
+        assert_eq!(fires_on("0 9 * * 1-5"), days(&[Mon, Tue, Wed, Thu, Fri]), "weekdays");
+        assert_eq!(fires_on("0 9 * * 6"), days(&[Sat]), "6 is Saturday");
+        assert_eq!(fires_on("0 9 * * 0"), days(&[Sun]), "0 is Sunday");
+        assert_eq!(fires_on("0 9 * * 7"), days(&[Sun]), "7 is Sunday too");
+        assert_eq!(fires_on("0 9 * * 1,3,5"), days(&[Mon, Wed, Fri]), "a list");
+    }
+
+    /// A range that runs through Sunday, which the crate cannot express as a
+    /// range at all because its Sunday is the LOWEST number.
+    #[test]
+    fn a_five_field_range_through_sunday_keeps_every_day_it_names() {
+        use chrono::Weekday::*;
+        assert_eq!(fires_on("0 9 * * 5-7"), days(&[Fri, Sat, Sun]));
+        assert_eq!(fires_on("0 9 * * 0-6"), days(&[Mon, Tue, Wed, Thu, Fri, Sat, Sun]));
+    }
+
+    /// Steps. `*/2` names the same days in both numberings, because both ranges
+    /// START on Sunday, so it must come through unchanged; a stepped RANGE does
+    /// not, and must be translated.
+    #[test]
+    fn a_five_field_stepped_weekday_is_the_crontab_days() {
+        use chrono::Weekday::*;
+        assert_eq!(fires_on("0 9 * * */2"), days(&[Sun, Tue, Thu, Sat]), "every other day from Sunday");
+        assert_eq!(fires_on("0 9 * * 1-5/2"), days(&[Mon, Wed, Fri]));
+    }
+
+    /// What must NOT change. Names mean the same in both numberings, and a 6- or
+    /// 7-field expression is already the crate's own syntax - the desktop
+    /// schedule builder writes those, and translating them would move every
+    /// schedule it ever saved.
+    #[test]
+    fn names_and_six_field_expressions_are_left_as_written() {
+        use chrono::Weekday::*;
+        assert_eq!(fires_on("0 9 * * MON-FRI"), days(&[Mon, Tue, Wed, Thu, Fri]));
+        assert_eq!(fires_on("0 0 8 * * Mon-Fri"), days(&[Mon, Tue, Wed, Thu, Fri]));
+        assert_eq!(fires_on("0 0 9 * * 2"), days(&[Mon]), "6-field 2 is the crate's Monday");
+    }
+
+    /// A weekday nothing can mean is still refused, against what the user typed.
+    #[test]
+    fn a_weekday_out_of_range_is_still_refused() {
+        let zone = resolve_zone(Some("UTC")).unwrap();
+        assert!(next_after("0 9 * * 8", &zone, utc(2026, 9, 13, 0, 0)).is_err());
     }
 }

@@ -3418,17 +3418,14 @@ fn migrate_legacy_schedules(workspace: &Path) {
     }
 }
 
-/// The `cron` crate expects a 6- or 7-field expression (seconds first). Accept a
-/// standard 5-field cron ("min hour dom mon dow") by prepending a "0 " seconds
-/// field; pass a 6/7-field expression through. Returns None for any other field
-/// count so a malformed expression is rejected rather than silently ignored.
-fn normalize_cron(expr: &str) -> Option<String> {
-    match expr.split_whitespace().count() {
-        5 => Some(format!("0 {}", expr)),
-        6 | 7 => Some(expr.to_string()),
-        _ => None,
-    }
-}
+/// The shared normaliser, not a copy of it.
+///
+/// serve kept its own `normalize_cron` after `cronzone` gained one "so the two
+/// schedulers cannot drift", and then they drifted: when the shared one learned
+/// to translate crontab weekdays, this copy went on validating the old way, so
+/// the console refused `0 9 * * 0` - Sunday in standard cron - that the
+/// evaluator would have run correctly.
+use duckle_duckdb_engine::cronzone::normalize_cron;
 
 /// The next time an enabled schedule is expected to fire, as an RFC3339 string
 /// for the console to display beside "last run" (discussion #155). Cron uses the
@@ -6413,13 +6410,26 @@ mod tests {
     fn normalize_cron_pads_five_fields_and_validates() {
         // A standard 5-field cron gets a "0 " seconds field prepended so the
         // `cron` crate (which wants 6/7 fields) accepts it, and the result parses.
+        //
+        // And its weekday is translated. This used to assert "0 0 9 * * 1", which
+        // is the string the old code produced and a SUNDAY to the crate - the test
+        // checked the text and never the day, so it held the bug in place. Crontab
+        // 1 is Monday; the crate's Monday is 2.
         let five = normalize_cron("0 9 * * 1").expect("5-field accepted");
-        assert_eq!(five, "0 0 9 * * 1");
+        assert_eq!(five, "0 0 9 * * 2");
         assert!(five.parse::<cron::Schedule>().is_ok(), "padded expr parses");
         // A 6-field expression passes through unchanged and parses.
         let six = normalize_cron("*/30 * * * * *").expect("6-field accepted");
         assert_eq!(six, "*/30 * * * * *");
         assert!(six.parse::<cron::Schedule>().is_ok());
+        // Sunday as crontab writes it. serve validated with its own copy of this
+        // function, which left the 0 alone, and the crate refuses a weekday 0 -
+        // so the console turned away a valid schedule the evaluator would run.
+        let sunday = normalize_cron("0 9 * * 0").expect("5-field accepted");
+        assert!(
+            sunday.parse::<cron::Schedule>().is_ok(),
+            "0 is Sunday in crontab and the console must accept it: {sunday}"
+        );
         // Garbage / wrong field counts are rejected (never fire silently).
         assert!(normalize_cron("not a cron").is_none());
         assert!(normalize_cron("* * *").is_none());
