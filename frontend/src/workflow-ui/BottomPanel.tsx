@@ -42,13 +42,15 @@ export default function BottomPanel({
     const [height, setHeight] = useState<number>(DEFAULT_HEIGHT);
     const dragRef = useRef<{ startY: number; startH: number } | null>(null);
 
-    // Auto-expand Output tab when a run finishes.
+    // Auto-expand Output tab when a run finishes. Only then: the editor builds a
+    // new run result for every streamed event, and reacting to each one took the
+    // tab back to Output, and re-expanded the panel, all through the run.
     useEffect(() => {
-        if (runResult) {
+        if (runResult && !isRunning) {
             setTab('output');
             setCollapsed(false);
         }
-    }, [runResult]);
+    }, [runResult, isRunning]);
 
     // Auto-expand Problems tab when Validate is clicked.
     useEffect(() => {

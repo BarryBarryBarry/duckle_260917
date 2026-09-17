@@ -838,6 +838,25 @@ function context(name: string, vars: Record<string, string>): RepoItem {
 }
 
 // ---------------------------------------------------------------------------
+// The bottom panel opens Output when a run ends, not on every event of it.
+//
+// The editor builds a new run result for each streamed event, and the panel
+// switched to Output and expanded whenever the result changed, so during a run
+// Console, Problems and collapsing were all taken back on the next event.
+// ---------------------------------------------------------------------------
+{
+    const panel = readFileSync(resolve(__FRONTEND_DIR__, 'src/workflow-ui/BottomPanel.tsx'), 'utf8');
+    const start = panel.indexOf('// Auto-expand Output tab when a run finishes.');
+    const effect = start < 0 ? '' : panel.slice(start, panel.indexOf(']);', start) + 3);
+    check('bottom panel: the auto-open effect is still where it was', effect !== '', 'the Output auto-open effect moved');
+    check(
+        'bottom panel: Output opens once the run has ended, not on each streamed event',
+        effect.includes('!isRunning') && effect.includes('[runResult, isRunning]'),
+        `the effect reacts to every run-result change: ${effect.replace(/\s+/g, ' ')}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The Schedules dialog shows why "Run now" or "Delete" failed.
 //
 // Both awaited their command with no catch, so a refusal ("already running in
