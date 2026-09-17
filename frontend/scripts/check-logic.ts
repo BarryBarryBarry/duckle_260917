@@ -22,6 +22,7 @@ import { CONNECTION_TYPES } from '../src/workflow-ui/editors/ConnectionEditorMod
 import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
 import { deriveNodeSubtitle } from '../src/node-subtitle';
+import { resolveOutputSchema } from '../src/schema-resolve';
 import {
     buildBundle,
     cancelPipeline,
@@ -951,6 +952,50 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         check(`web settings: saving the ${what} says it is not stored here`, refused.includes('server'), `resolved as saved`);
     }
     g.__checkLogicInvoke = undefined;
+}
+
+// ---------------------------------------------------------------------------
+// A transform's output columns are what it produces, before it has ever run.
+//
+// Group By, the joins, Add Column, Coalesce, the window aggregate and the AI
+// nodes have a schema the user may declare, and the resolver returned that
+// declared schema or, with none, the input's columns - so their own column
+// logic never ran. A Group By offered its input columns downstream, and a semi
+// join offered the lookup's columns, which the engine's EXISTS never returns.
+// ---------------------------------------------------------------------------
+{
+    const node = (id: string, componentId: string, properties: Record<string, unknown>, schema?: string[]) =>
+        ({
+            id,
+            position: { x: 0, y: 0 },
+            data: {
+                label: id,
+                componentId,
+                properties,
+                ...(schema ? { schema: schema.map(name => ({ name, type: 'string', nullable: true })) } : {}),
+            },
+        }) as unknown as Node<DuckleNodeData>;
+    const orders = node('orders', 'src.csv', {}, ['id', 'region', 'amount']);
+    const regions = node('regions', 'src.csv', {}, ['region', 'manager']);
+    const into = (target: string): Edge[] => [
+        { id: 'm', source: 'orders', target },
+        { id: 'l', source: 'regions', target, targetHandle: 'lookup' },
+    ];
+    const out = (n: Node<DuckleNodeData>, edges: Edge[] = [{ id: 'm', source: 'orders', target: n.id }]) =>
+        JSON.stringify(resolveOutputSchema(n.id, [orders, regions, n], edges).map(c => c.name));
+
+    const grouped = out(node('g', 'xf.groupby', { groupKeys: ['region'], aggregations: [{ func: 'sum', column: 'amount', output: 'total' }] }));
+    check('computed schema: Group By outputs its keys and aggregates', grouped === '["region","total"]', grouped);
+    const added = out(node('a', 'xf.addcol', { name: 'flag', type: 'bool' }));
+    check('computed schema: Add Column adds its column', added === '["id","region","amount","flag"]', added);
+    const embedded = out(node('e', 'xf.ai.embed', { outputColumn: 'vec' }));
+    check('computed schema: an AI node adds its output column', embedded === '["id","region","amount","vec"]', embedded);
+    const semi = out(node('s', 'xf.semi', {}), into('s'));
+    check('computed schema: a semi join keeps only the main input', semi === '["id","region","amount"]', semi);
+    const joined = out(node('j', 'xf.join', {}), into('j'));
+    check('computed schema: a join still has both sides', joined === '["id","region","amount","manager"]', joined);
+    const ran = out(node('r', 'xf.groupby', { groupKeys: ['region'] }, ['region', 'orders']));
+    check('computed schema: a schema already on the node is kept', ran === '["region","orders"]', ran);
 }
 
 // ---------------------------------------------------------------------------

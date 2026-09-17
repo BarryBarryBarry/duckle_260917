@@ -176,9 +176,13 @@ function computeNodeSchema(
 
     const upstream = () => mergedUpstream(node.id, nodes, edges, visiting);
 
-    // Declared / autodetect - node owns its schema explicitly.
-    if (manifest?.schemaSource === 'declared') {
-        return node.data.schema ?? upstream();
+    // Declared / autodetect - node owns its schema explicitly. A declared node
+    // with no schema yet falls through to what the component computes: many
+    // transforms (Group By, joins, Add Column, the AI nodes) are 'declared' so a
+    // user may write one, and returning the input here meant their own column
+    // logic below never ran.
+    if (manifest?.schemaSource === 'declared' && node.data.schema) {
+        return node.data.schema;
     }
     if (manifest?.schemaSource === 'autodetect') {
         return node.data.schema ?? [];
@@ -324,13 +328,13 @@ function computeNodeSchema(
         return [...up, { name: output, type: 'int64', nullable: true }];
     }
 
-    if (
-        id === 'xf.join' ||
-        id?.startsWith('xf.join.') ||
-        id === 'xf.lookup' ||
-        id === 'xf.semi' ||
-        id === 'xf.anti'
-    ) {
+    // Semi and anti joins filter the main input by EXISTS / NOT EXISTS, so no
+    // lookup column reaches the output.
+    if (id === 'xf.semi' || id === 'xf.semi.join' || id === 'xf.anti' || id === 'xf.anti.join') {
+        return mainUpstream(node.id, nodes, edges, visiting);
+    }
+
+    if (id === 'xf.join' || id?.startsWith('xf.join.') || id === 'xf.lookup') {
         // Joins: union of all incoming schemas (driving + lookup).
         return mergedUpstream(node.id, nodes, edges, visiting);
     }
@@ -443,6 +447,17 @@ function mergedUpstream(
         }
     }
     return cols;
+}
+
+/** The schema arriving on the main input only, not on a lookup port. */
+function mainUpstream(
+    nodeId: string,
+    nodes: Node<DuckleNodeData>[],
+    edges: Edge[],
+    visiting: Set<string>,
+): Column[] {
+    const main = edges.filter(e => e.target === nodeId && (e.targetHandle ?? 'main') === 'main');
+    return main.length ? resolveOutputSchema(main[0].source, nodes, edges, visiting) : [];
 }
 
 /**
