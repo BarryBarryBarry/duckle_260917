@@ -846,6 +846,50 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
     match cmd {
         // Drives the editor's runtime indicator offline -> ready.
         "ping" => respond_json(&Value::String("pong".into())),
+        // The Schedules dialog. These had no web implementation, and the shim
+        // turns a missing command into an empty answer, so the list always read
+        // "No schedules yet" and a save was dropped as if it had worked. They
+        // edit the workspace's one schedule store under the same rules as the
+        // desktop. This editor does not FIRE schedules; `duckle-runner serve` on
+        // the same workspace does, and the dialog says so.
+        "schedule_list" => match duckle_duckdb_engine::schedules::load(&state.workspace) {
+            Ok(list) => respond_json(&serde_json::to_value(&list).unwrap_or(json!([]))),
+            Err(e) => respond_err("500 Internal Server Error", &e),
+        },
+        "schedule_upsert" => {
+            use duckle_duckdb_engine::schedules;
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let mut schedule: schedules::Schedule =
+                match serde_json::from_value(args.get("schedule").cloned().unwrap_or(Value::Null)) {
+                    Ok(s) => s,
+                    Err(e) => return respond_err("400 Bad Request", &format!("bad schedule: {e}")),
+                };
+            if let Err(e) = schedules::validate(&schedule) {
+                return respond_err("400 Bad Request", &e);
+            }
+            if schedule.id.is_empty() {
+                schedule.id = schedules::new_id();
+            }
+            // The process that fires it arms its own next run.
+            schedule.next_run_at = None;
+            let saved = schedule.clone();
+            match schedules::update(&state.workspace, move |list| schedules::merge_saved(list, saved)) {
+                Ok(_) => respond_json(&serde_json::to_value(&schedule).unwrap_or(Value::Null)),
+                Err(e) => respond_err("500 Internal Server Error", &e),
+            }
+        }
+        "schedule_delete" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let Some(id) = args.get("id").and_then(Value::as_str).map(str::to_string) else {
+                return respond_err("400 Bad Request", "missing id");
+            };
+            match duckle_duckdb_engine::schedules::update(&state.workspace, move |list| {
+                list.retain(|s| s.id != id)
+            }) {
+                Ok(_) => respond_json(&json!({ "ok": true })),
+                Err(e) => respond_err("500 Internal Server Error", &e),
+            }
+        }
         // The Stop button: the caller's own runs, never anyone else's.
         "cancel_pipeline" => {
             respond_json(&json!({ "cancelled": state.editor_runs.cancel(&who.label) }))
@@ -6249,6 +6293,68 @@ mod tests {
         let signed_in = request("POST", "/api/run_stream", Some(&bearer));
         web_gate(&signed_in, &state, console_auth::Role::Operator, "editor.api")
             .expect("a credentialed operator must still be allowed to run");
+    }
+
+    /// The web editor's Schedules dialog reads and writes the workspace's real
+    /// schedule store.
+    ///
+    /// The dialog's commands had no web implementation, and the web shim turns a
+    /// missing command into an empty answer: the list always read "No schedules
+    /// yet" while schedules.json held some, and a saved schedule was dropped with
+    /// the dialog closing as if it had worked. Saving goes through the same rules
+    /// as the desktop scheduler, so a bad expression is refused and a re-save
+    /// keeps the run history the store already had.
+    #[test]
+    fn the_web_schedules_dialog_uses_the_workspace_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from("duckdb"),
+            dist: ws.clone(),
+            host: "0.0.0.0".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        let cmd = |name: &str, body: serde_json::Value| {
+            let mut req = request("POST", &format!("/api/cmd/{name}"), Some("Bearer s3cret"));
+            req.body = serde_json::to_vec(&body).unwrap();
+            let reply = route_web(&req, &state);
+            (reply.code(), serde_json::from_slice::<serde_json::Value>(&reply.body).unwrap_or_default())
+        };
+        let nightly = serde_json::json!({
+            "id": "", "pipeline_id": "orders", "name": "Nightly", "enabled": true,
+            "kind": { "type": "cron", "expr": "0 0 3 * * *" }, "timezone": "Europe/Brussels"
+        });
+
+        let (code, saved) = cmd("schedule_upsert", serde_json::json!({ "schedule": nightly }));
+        assert_eq!(code, 200, "{saved}");
+        let id = saved["id"].as_str().expect("a saved schedule gets an id").to_string();
+        assert!(!id.is_empty());
+
+        let (code, list) = cmd("schedule_list", serde_json::json!({}));
+        assert_eq!(code, 200, "{list}");
+        assert_eq!(list.as_array().map(Vec::len), Some(1), "the saved schedule is not listed: {list}");
+        assert_eq!(list[0]["timezone"], "Europe/Brussels");
+
+        // A run recorded by whoever fires it survives a re-save from the dialog.
+        duckle_duckdb_engine::schedules::update(&ws, |l| l[0].last_run_status = Some("ok".into())).unwrap();
+        let mut renamed = list[0].clone();
+        renamed["name"] = "Nightly load".into();
+        renamed.as_object_mut().unwrap().remove("last_run_status");
+        assert_eq!(cmd("schedule_upsert", serde_json::json!({ "schedule": renamed })).0, 200);
+        let stored = &duckle_duckdb_engine::schedules::load(&ws).unwrap()[0];
+        assert_eq!(stored.name, "Nightly load");
+        assert_eq!(stored.last_run_status.as_deref(), Some("ok"), "the re-save wiped the run history");
+
+        let mut broken = nightly.clone();
+        broken["kind"]["expr"] = "not a cron".into();
+        assert_eq!(cmd("schedule_upsert", serde_json::json!({ "schedule": broken })).0, 400);
+        assert_eq!(duckle_duckdb_engine::schedules::load(&ws).unwrap().len(), 1, "a refused save was stored");
+
+        assert_eq!(cmd("schedule_delete", serde_json::json!({ "id": id })).0, 200);
+        assert!(duckle_duckdb_engine::schedules::load(&ws).unwrap().is_empty(), "delete left the schedule");
     }
 
     /// The web editor's Stop button stops the run it started, and only that.

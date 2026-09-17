@@ -19,7 +19,14 @@ import { UndoHistory, type CanvasSnapshot } from '../src/undo-history';
 import { saveItemPayload } from '../src/workspace';
 import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
-import { cancelPipeline, type Schedule } from '../src/tauri-bridge';
+import {
+    cancelPipeline,
+    scheduleDelete,
+    scheduleList,
+    scheduleRunNow,
+    scheduleUpsert,
+    type Schedule,
+} from '../src/tauri-bridge';
 
 // The frontend directory, injected by check-logic.mjs: the bundle runs from a
 // temp dir, so neither import.meta.url nor the cwd can be trusted to find it.
@@ -654,6 +661,50 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     await cancelPipeline();
     g.__checkLogicInvoke = undefined;
     check('web stop: Stop asks the server to cancel', asked.includes('cancel_pipeline'), `asked ${JSON.stringify(asked)}`);
+}
+
+// ---------------------------------------------------------------------------
+// The web Schedules dialog talks to the server's schedule store.
+//
+// Every schedule call returned at once outside the desktop app: the list read
+// "No schedules yet" while schedules.json held some, and a save closed the form
+// as if it had worked while nothing was stored. Run now has no web equivalent,
+// so it says so instead of silently doing nothing.
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as {
+        __checkLogicInvoke?: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    };
+    const asked: string[] = [];
+    const stored: Schedule = {
+        id: 's1',
+        pipeline_id: 'p1',
+        name: 'Nightly',
+        enabled: true,
+        kind: { type: 'cron', expr: '0 0 3 * * *' },
+    };
+    g.__checkLogicInvoke = async cmd => {
+        asked.push(cmd);
+        return cmd === 'schedule_list' ? [stored] : cmd === 'schedule_upsert' ? stored : null;
+    };
+    const listed = await scheduleList();
+    const saved = await scheduleUpsert(stored);
+    await scheduleDelete('s1');
+    let runNow = '';
+    try {
+        await scheduleRunNow('s1');
+    } catch (err) {
+        runNow = String(err);
+    }
+    g.__checkLogicInvoke = undefined;
+    check('web schedules: the list comes from the server', listed.length === 1, `listed ${JSON.stringify(listed)}`);
+    check('web schedules: a save reaches the server', saved?.id === 's1' && asked.includes('schedule_upsert'), `asked ${JSON.stringify(asked)}`);
+    check('web schedules: a delete reaches the server', asked.includes('schedule_delete'), `asked ${JSON.stringify(asked)}`);
+    check(
+        'web schedules: Run now says it is not available rather than doing nothing',
+        runNow.includes('serve') && !asked.includes('schedule_run_now'),
+        `Run now answered ${JSON.stringify(runNow)}`,
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -7,7 +7,6 @@
 //! shared `DuckdbEngine`.
 
 use chrono::{DateTime, Utc};
-use cron::Schedule as CronSchedule;
 use duckle_duckdb_engine::{
     append_run_record, plans, runlock, schedules, DuckdbEngine, RunRecord, RunResult,
 };
@@ -15,7 +14,6 @@ use notify::{RecommendedWatcher, RecursiveMode};
 use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -381,20 +379,7 @@ impl Scheduler {
     }
 
     pub fn upsert(&self, mut schedule: Schedule) -> Result<Schedule, String> {
-        validate_schedule(&schedule)?;
-        match &schedule.kind {
-            ScheduleKind::Cron { .. } => {}
-            ScheduleKind::Interval { seconds } => {
-                if *seconds < 1 {
-                    return Err("Interval must be at least 1 second".into());
-                }
-            }
-            ScheduleKind::FileWatch { path, .. } => {
-                if path.trim().is_empty() {
-                    return Err("Watch path is required".into());
-                }
-            }
-        }
+        schedules::validate(&schedule)?;
         if schedule.id.is_empty() {
             schedule.id = uuid::Uuid::new_v4().to_string();
         }
@@ -402,27 +387,7 @@ impl Scheduler {
         let mut g = self.inner.lock().expect("scheduler poisoned");
         let saved = schedule.clone();
         self.commit(&mut g, move |list| {
-            match list.iter().position(|s| s.id == saved.id) {
-                Some(idx) => {
-                    // Upsert carries config only; preserve the existing
-                    // run-history fields so a partial payload doesn't wipe
-                    // last_run_* to null.
-                    let prev = &list[idx];
-                    let mut next = saved;
-                    next.last_run_at = prev.last_run_at;
-                    next.last_run_status = prev.last_run_status.clone();
-                    next.last_run_duration_ms = prev.last_run_duration_ms;
-                    next.last_run_error = prev.last_run_error.clone();
-                    // The plan a schedule runs is kept for the same reason, and it matters
-                    // more: an editor with no plan field sends "no plan" for a schedule that
-                    // has one, and believing it would leave the schedule pointed at the
-                    // label in its pipeline_id, which is not a file. Clearing a plan is done
-                    // by naming a pipeline instead, not by saying nothing.
-                    next.plan_id = next.plan_id.or_else(|| prev.plan_id.clone());
-                    list[idx] = next;
-                }
-                None => list.push(saved),
-            }
+            schedules::merge_saved(list, saved)
         })?;
         self.rebuild_watchers(&mut g);
         Ok(schedule)
@@ -1140,29 +1105,6 @@ fn compute_next_run(s: &mut Schedule) {
     };
 }
 
-/// What makes a schedule saveable.
-///
-/// Split out so saving and evaluating cannot disagree, which they did: this
-/// validated with a bare `CronSchedule::from_str`, so a five-field expression
-/// was REFUSED on save while `compute_next_run` normalised it and scheduled it
-/// happily. A schedule you cannot save but which would have worked is the same
-/// class of bug as one you can save that never fires.
-fn validate_schedule(schedule: &Schedule) -> Result<(), String> {
-    // #318: an unknown zone is refused here rather than at fire time, so a typo
-    // is a save error in front of the person who made it, not a job that
-    // quietly runs on UTC in a container.
-    duckle_duckdb_engine::cronzone::resolve_zone(schedule.timezone.as_deref())?;
-    schedule.exclude.validate()?;
-    if let ScheduleKind::Cron { expr } = &schedule.kind {
-        let normalized = duckle_duckdb_engine::cronzone::normalize_cron(expr).ok_or_else(|| {
-            format!("Invalid cron expression: {expr:?} does not have 5, 6 or 7 fields")
-        })?;
-        CronSchedule::from_str(&normalized)
-            .map_err(|e| format!("Invalid cron expression: {}", e))?;
-    }
-    Ok(())
-}
-
 /// The next firing of a cron expression, in the schedule's zone (#318).
 ///
 /// A bad expression or an unknown zone yields None - the same "this schedule
@@ -1343,7 +1285,8 @@ mod tests {
             last_run_error: None,
             next_run_at: None,
         };
-        assert!(validate_schedule(&s).is_ok(), "{:?}", validate_schedule(&s));
+        let validate = schedules::validate;
+        assert!(validate(&s).is_ok(), "{:?}", validate(&s));
     }
 
     #[test]
@@ -1365,10 +1308,11 @@ mod tests {
             last_run_error: None,
             next_run_at: None,
         };
-        let e = validate_schedule(&s).unwrap_err();
+        let validate = schedules::validate;
+        let e = validate(&s).unwrap_err();
         assert!(e.contains("Europe/Brussel"), "must name the typo: {e}");
         s.timezone = Some("Europe/Brussels".into());
-        assert!(validate_schedule(&s).is_ok(), "the real zone must be accepted");
+        assert!(validate(&s).is_ok(), "the real zone must be accepted");
     }
 
     /// The point of #318: the instant follows the named zone, not the host.

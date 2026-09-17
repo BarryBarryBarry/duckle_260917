@@ -1024,8 +1024,12 @@ export async function scheduleSetWorkspace(path: string | null): Promise<void> {
     }
 }
 
+// The web edition reads and writes the same schedule store through its server.
+// These used to return at once outside the desktop app, so the web dialog said
+// "No schedules yet" while schedules.json held some, and a save closed the form
+// as if it had worked while nothing was stored.
 export async function scheduleList(): Promise<Schedule[]> {
-    if (!isTauri()) return [];
+    if (!isTauri() && !isWebBackend()) return [];
     // Deliberately not caught. Swallowing the failure into an empty array told
     // the user they had no schedules when the truth was that schedules.json
     // could not be read - and the schedules were still on disk. The caller
@@ -1034,16 +1038,23 @@ export async function scheduleList(): Promise<Schedule[]> {
 }
 
 export async function scheduleUpsert(schedule: Schedule): Promise<Schedule | null> {
-    if (!isTauri()) return null;
+    if (!isTauri() && !isWebBackend()) return null;
     return await invoke<Schedule>('schedule_upsert', { schedule });
 }
 
 export async function scheduleDelete(id: string): Promise<void> {
-    if (!isTauri()) return;
+    if (!isTauri() && !isWebBackend()) return;
     await invoke('schedule_delete', { id });
 }
 
 export async function scheduleRunNow(id: string): Promise<RunResult | null> {
+    // The web editor does not fire schedules; `duckle-runner serve` does. Saying
+    // so beats a button that silently does nothing.
+    if (isWebBackend()) {
+        throw new Error(
+            'Run now is not available in the web editor: schedules fire under duckle-runner serve. Use Run to run the pipeline here.',
+        );
+    }
     if (!isTauri()) return null;
     return await invoke<RunResult>('schedule_run_now', { id });
 }

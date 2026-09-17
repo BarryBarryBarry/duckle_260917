@@ -110,6 +110,72 @@ fn default_true() -> bool {
     true
 }
 
+/// What makes a schedule saveable.
+///
+/// One rule for every editor that saves one. It lived in the desktop scheduler,
+/// and the web editor had no way to save at all; a second copy there is how two
+/// surfaces come to disagree about what they accept. It was split out of saving
+/// once already because saving and evaluating disagreed: a bare cron parse
+/// REFUSED a five-field expression that the scheduler normalised and fired.
+pub fn validate(schedule: &Schedule) -> Result<(), String> {
+    // #318: an unknown zone is refused here rather than at fire time, so a typo
+    // is a save error in front of the person who made it, not a job that
+    // quietly runs on UTC in a container.
+    crate::cronzone::resolve_zone(schedule.timezone.as_deref())?;
+    schedule.exclude.validate()?;
+    match &schedule.kind {
+        ScheduleKind::Cron { expr } => {
+            let normalized = crate::cronzone::normalize_cron(expr).ok_or_else(|| {
+                format!("Invalid cron expression: {expr:?} does not have 5, 6 or 7 fields")
+            })?;
+            normalized
+                .parse::<cron::Schedule>()
+                .map_err(|e| format!("Invalid cron expression: {}", e))?;
+        }
+        ScheduleKind::Interval { seconds } => {
+            if *seconds < 1 {
+                return Err("Interval must be at least 1 second".into());
+            }
+        }
+        ScheduleKind::FileWatch { path, .. } => {
+            if path.trim().is_empty() {
+                return Err("Watch path is required".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Put a saved schedule into the list: over the one with its id, or at the end.
+///
+/// A save carries configuration, not history, so the run fields the store
+/// already has are kept rather than wiped to null by a payload without them.
+/// The plan a schedule runs is kept for the same reason, and it matters more:
+/// an editor with no plan field sends "no plan" for a schedule that has one,
+/// and believing it would leave the schedule pointed at the label in its
+/// pipeline_id, which is not a file. Clearing a plan is done by naming a
+/// pipeline instead, not by saying nothing.
+pub fn merge_saved(list: &mut Vec<Schedule>, saved: Schedule) {
+    match list.iter().position(|s| s.id == saved.id) {
+        Some(idx) => {
+            let prev = &list[idx];
+            let mut next = saved;
+            next.last_run_at = prev.last_run_at;
+            next.last_run_status = prev.last_run_status.clone();
+            next.last_run_duration_ms = prev.last_run_duration_ms;
+            next.last_run_error = prev.last_run_error.clone();
+            next.plan_id = next.plan_id.or_else(|| prev.plan_id.clone());
+            list[idx] = next;
+        }
+        None => list.push(saved),
+    }
+}
+
+/// The id for a schedule saved without one.
+pub fn new_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 pub fn schedules_path(workspace: &Path) -> PathBuf {
     workspace.join("schedules.json")
 }

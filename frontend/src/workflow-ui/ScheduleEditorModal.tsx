@@ -13,6 +13,7 @@ import {
     X,
 } from 'lucide-react';
 import { isTauri } from '../tauri-dialog';
+import { isWebBackend } from '../web-fs';
 import { scheduleActionError, scheduleForSave } from '../schedule-save';
 import {
     runHistory,
@@ -198,6 +199,15 @@ export default function ScheduleEditorModal({
                             <div className="modal-subtitle">
                                 Pipeline: <b>{pipelineName}</b>
                             </div>
+                            {isWebBackend() ? (
+                                // This editor stores schedules but does not fire
+                                // them; without saying so a saved schedule looks
+                                // armed and never runs.
+                                <div className="modal-subtitle">
+                                    Saved to this workspace. They fire where{' '}
+                                    <code>duckle-runner serve</code> runs, not in this editor.
+                                </div>
+                            ) : null}
                         </div>
                     </div>
                     <button
