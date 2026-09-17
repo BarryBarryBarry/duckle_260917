@@ -1613,7 +1613,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn a_vault_reference_is_not_a_run_parameter() {
         // ${VAULT:NAME} is fetched at run time by apply_vault from the host's
         // DUCKLE_VAULT_COMMAND. Offering it as a parameter asks the pipeline's
@@ -1637,6 +1636,7 @@ mod tests {
         assert!(!super::is_reserved_param("REGION"));
     }
 
+    #[test]
     fn discover_parameters_excludes_offset_builtins() {
         // #191: date+1d / now-2h are builtins, not user parameters.
         let doc: crate::PipelineDoc = serde_json::from_str(

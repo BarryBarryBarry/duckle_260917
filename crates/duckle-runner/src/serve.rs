@@ -6303,19 +6303,6 @@ mod tests {
         );
     }
 
-    /// A --token caller is an admin, so this proves the role gate rather than the token
-    /// gate: an unknown route falls to admin and a viewer must not reach it.
-    #[test]
-
-    /// `/api/run_stream` executes a pipeline supplied in the request body, and
-    /// resolves this workspace's saved connections into it before running. It was
-    /// dispatched by `handle_web` before `route_web` was ever called, so it ran
-    /// with no cross-origin guard, no sign-in and no role check: an unauthenticated
-    /// POST executed arbitrary work with the workspace's credentials, on an image
-    /// whose entrypoint is `duckle-runner web`.
-    ///
-    /// The gate is asserted here rather than through `handle_web`, which owns a
-
     /// The file bridge sits at operator level while the connection commands require
     /// admin. That gate is worth nothing if the same operator can ask for the key as
     /// a file, so the key and token directories are refused outright.
@@ -6350,6 +6337,14 @@ mod tests {
         );
     }
 
+    /// `/api/run_stream` executes a pipeline supplied in the request body, and
+    /// resolves this workspace's saved connections into it before running. It was
+    /// dispatched by `handle_web` before `route_web` was ever called, so it ran
+    /// with no cross-origin guard, no sign-in and no role check: an unauthenticated
+    /// POST executed arbitrary work with the workspace's credentials, on an image
+    /// whose entrypoint is `duckle-runner web`.
+    ///
+    /// The gate is asserted here rather than through `handle_web`, which owns a
     /// socket. Reverting `web_gate`'s identity check turns this red.
     #[test]
     fn the_streaming_run_route_is_not_reachable_without_credentials() {
@@ -6628,6 +6623,9 @@ mod tests {
         assert!(state.editor_runs.runs.lock().unwrap().is_empty(), "a finished run stayed registered");
     }
 
+    /// A --token caller is an admin, so this proves the role gate rather than the token
+    /// gate: an unknown route falls to admin and a viewer must not reach it.
+    #[test]
     fn a_role_that_is_not_enough_is_refused_not_admitted() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().canonicalize().unwrap();

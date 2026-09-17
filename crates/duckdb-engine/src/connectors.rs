@@ -19861,7 +19861,6 @@ mod connector_helper_tests {
         assert_eq!(w(Some("Wed, 21 Oct 2026 07:28:00 GMT"), 1), 1_000);
     }
 
-    #[test]
     /// #258: an OpenAI-COMPATIBLE endpoint may accept `response_format` and
     /// ignore it, so the reply is re-checked here. Prose where an object was
     /// asked for is the failure this exists to catch.

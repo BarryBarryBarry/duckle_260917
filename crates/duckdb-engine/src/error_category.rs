@@ -198,6 +198,7 @@ mod tests {
         assert_eq!(categorize_error("process exited (oom-killer)"), "oom");
     }
 
+    #[test]
     fn timeout_beats_network() {
         // "connection timed out" mentions both; timeout is the actionable bucket.
         assert_eq!(categorize_error("connection timed out"), "timeout");
