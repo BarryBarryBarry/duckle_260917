@@ -70,7 +70,15 @@ export function deriveNodeSubtitle(
         case 'xf.limit':
             return p.limit != null ? `limit ${p.limit}` : undefined;
         case 'xf.rename': {
-            const n = arr(p.renames).length || arr(p.columns).length;
+            // The form writes `mapping` as old -> new pairs; the arrays are older
+            // shapes. A pair missing either side is not renamed by the engine.
+            const n =
+                arr(p.renames).length ||
+                arr(p.columns).length ||
+                arr(p.mapping).filter(kv => {
+                    const pair = kv as { key?: unknown; value?: unknown } | null;
+                    return !!str(pair?.key) && !!str(pair?.value);
+                }).length;
             return n ? `rename ${n}` : undefined;
         }
         case 'xf.cast': {

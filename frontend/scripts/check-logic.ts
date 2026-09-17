@@ -21,6 +21,7 @@ import { annotationPatch } from '../src/catalog-annotate';
 import { CONNECTION_TYPES } from '../src/workflow-ui/editors/ConnectionEditorModal';
 import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
+import { deriveNodeSubtitle } from '../src/node-subtitle';
 import {
     cancelPipeline,
     runPipeline,
@@ -946,6 +947,26 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         check(`web settings: saving the ${what} says it is not stored here`, refused.includes('server'), `resolved as saved`);
     }
     g.__checkLogicInvoke = undefined;
+}
+
+// ---------------------------------------------------------------------------
+// A Rename node's card says how many columns it renames.
+//
+// The Rename form writes `mapping` as old -> new pairs, which is what the engine
+// reads, but the subtitle only counted the older `renames` / `columns` arrays, so
+// a node set up in the form never showed one.
+// ---------------------------------------------------------------------------
+{
+    const fromForm = deriveNodeSubtitle('xf.rename', {
+        mapping: [
+            { key: 'cust_id', value: 'customer_id' },
+            { key: 'amt', value: 'amount' },
+            { key: 'half', value: '' },
+        ],
+    });
+    check('rename subtitle: the form shape is counted', fromForm === 'rename 2', `got ${fromForm}`);
+    const older = deriveNodeSubtitle('xf.rename', { renames: [{ from: 'a', to: 'b' }] });
+    check('rename subtitle: the older array shape still counts', older === 'rename 1', `got ${older}`);
 }
 
 // ---------------------------------------------------------------------------
