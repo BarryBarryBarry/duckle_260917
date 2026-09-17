@@ -19254,6 +19254,13 @@ pub(crate) fn context_vars_for_workspace(ws: &Path) -> std::collections::HashMap
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+    // #204: read every context, then merge lowest priority first, as the desktop
+    // and `context::build_context_vars` do. This loader merged in repository
+    // order and ignored `priority`, so on every path that resolves through it -
+    // the runner, both servers, child pipelines - a base context listed after a
+    // production override won, and a scheduled run used values the desktop did
+    // not. Stable, so contexts on one layer keep repository order.
+    let mut loaded: Vec<(String, serde_json::Value)> = Vec::new();
     for it in repo.as_array().map(|a| a.as_slice()).unwrap_or(&[]) {
         if it.get("type").and_then(|v| v.as_str()) != Some("context") {
             continue;
@@ -19272,6 +19279,10 @@ pub(crate) fn context_vars_for_workspace(ws: &Path) -> std::collections::HashMap
             Some(v) => v,
             None => continue,
         };
+        loaded.push((name.to_string(), payload));
+    }
+    loaded.sort_by_key(|(_, p)| p.get("priority").and_then(|v| v.as_i64()).unwrap_or(0));
+    for (name, payload) in &loaded {
         if let Some(vars) = payload.get("variables").and_then(|v| v.as_array()) {
             for v in vars {
                 if let (Some(k), Some(val)) = (
@@ -20185,6 +20196,43 @@ mod context_var_tests {
         assert_eq!(vars.get("MotherDuck.MOTHERDUCK_TOKEN").map(String::as_str), Some("tok-123"));
         // Built-in workspace placeholder is exposed too.
         assert!(vars.contains_key("workspace"));
+    }
+
+    /// #204 on the headless path. `apply_workspace_context` - the runner, both
+    /// servers and every child pipeline - reads contexts through this loader,
+    /// which merged them in repository order and ignored `priority`. The desktop
+    /// layers them, so a base context listed after a production override won
+    /// headless and a scheduled run used the base values the desktop run did not.
+    #[test]
+    fn a_higher_priority_context_wins_whatever_the_repository_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(
+            ws.join("repository.json"),
+            r#"[{"id":"env","name":"Prod","type":"context"},
+                {"id":"base","name":"Base","type":"context"}]"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(ws.join("contexts")).unwrap();
+        std::fs::write(
+            ws.join("contexts").join("base.json"),
+            r#"{"priority":0,"variables":[{"key":"DB_HOST","value":"localhost"},{"key":"RETRIES","value":"3"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            ws.join("contexts").join("env.json"),
+            r#"{"priority":10,"variables":[{"key":"DB_HOST","value":"prod.internal"}]}"#,
+        )
+        .unwrap();
+
+        let vars = context_vars_for_workspace(ws);
+        assert_eq!(
+            vars.get("DB_HOST").map(String::as_str),
+            Some("prod.internal"),
+            "the higher layer must win regardless of repository order"
+        );
+        assert_eq!(vars.get("RETRIES").map(String::as_str), Some("3"), "the base still fills what the layer leaves");
+        assert_eq!(vars.get("Base.DB_HOST").map(String::as_str), Some("localhost"), "a named reference still reaches its own context");
     }
 
     #[test]
