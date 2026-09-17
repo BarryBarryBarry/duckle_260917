@@ -3472,21 +3472,24 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
     if let Some(tz) = body.get("timezone").and_then(|v| v.as_str()) {
         duckle_duckdb_engine::cronzone::resolve_zone(Some(tz))?;
     }
-    let timezone: Option<String> = body
-        .get("timezone")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|t| !t.is_empty())
-        .map(str::to_string);
+    // The same three answers as `planId`, because the console's own save sends no
+    // zone and no calendar: an absent key leaves what the schedule has alone, an
+    // empty zone means the machine's own, and anything else replaces it.
+    let timezone: Option<Option<String>> = body.get("timezone").map(|v| {
+        v.as_str().map(str::trim).filter(|t| !t.is_empty()).map(str::to_string)
+    });
     // #296: a maintenance calendar is checked where it is written. A misspelled
     // weekday excludes nothing, which looks exactly like no exclusion at all
     // until the day it was supposed to cover arrives.
-    let exclude: duckle_duckdb_engine::cronzone::Exclusions = match body.get("exclude").cloned() {
-        Some(v) => serde_json::from_value(v)
-            .map_err(|e| format!("Invalid exclude calendar: {e}"))?,
-        None => Default::default(),
+    let exclude: Option<duckle_duckdb_engine::cronzone::Exclusions> = match body.get("exclude").cloned() {
+        Some(v) => Some(
+            serde_json::from_value(v).map_err(|e| format!("Invalid exclude calendar: {e}"))?,
+        ),
+        None => None,
     };
-    exclude.validate()?;
+    if let Some(calendar) = &exclude {
+        calendar.validate()?;
+    }
     // Seconds are what the store holds. A console that sends only minutes is
     // still honoured, but one that echoes back the intervalSeconds it was given
     // keeps a sub-minute schedule exactly as the desktop editor set it.
@@ -3526,6 +3529,14 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
                 if let Some(wanted) = plan_id.clone() {
                     s.plan_id = wanted;
                 }
+                // Validated above and then dropped here, once: changing the zone
+                // of an existing schedule answered ok and left it on the old clock.
+                if let Some(zone) = timezone.clone() {
+                    s.timezone = zone;
+                }
+                if let Some(calendar) = exclude.clone() {
+                    s.exclude = calendar;
+                }
                 // A changed trigger invalidates the time this process armed.
                 s.next_run_at = None;
             }
@@ -3536,8 +3547,8 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
                 enabled,
                 plan_id: plan_id.clone().flatten(),
                 kind,
-                timezone: timezone.clone(),
-                exclude: exclude.clone(),
+                timezone: timezone.clone().flatten(),
+                exclude: exclude.clone().unwrap_or_default(),
                 // #296: this route does not edit the misfire policy, so a
                 // schedule it CREATES takes the default (skip), which is the
                 // behaviour every schedule had before the policy existed.
@@ -5113,6 +5124,44 @@ mod tests {
         // Asked for explicitly, it goes.
         save(serde_json::json!({ "id": "nightly", "planId": "", "enabled": true, "intervalSeconds": 60 }));
         assert_eq!(plan_of(), None, "an explicit empty planId means 'a pipeline, not a plan'");
+    }
+
+    /// #318 and #296 on a schedule that already exists: a zone and an exclusion
+    /// calendar are validated, then applied. The route checked both and applied
+    /// them only when it CREATED the record, so changing the zone of an existing
+    /// schedule answered ok and left it on the old clock.
+    ///
+    /// The same three answers as `planId`: the console's own save sends neither
+    /// key and must not wipe what the API set; a present key replaces; an empty
+    /// zone clears.
+    #[test]
+    fn a_zone_and_calendar_sent_for_an_existing_schedule_are_applied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let save = |body: serde_json::Value| save_schedule_at(&ws, &body).expect("saves");
+        let stored = || duckle_duckdb_engine::schedules::load(&ws).unwrap()[0].clone();
+
+        save(serde_json::json!({ "id": "p", "enabled": true, "cron": "0 3 * * *",
+            "timezone": "Europe/Brussels", "exclude": { "weekdays": ["sunday"] } }));
+        assert_eq!(stored().timezone.as_deref(), Some("Europe/Brussels"));
+
+        save(serde_json::json!({ "id": "p", "enabled": true, "cron": "0 3 * * *",
+            "timezone": "America/New_York", "exclude": { "dates": ["2026-12-25"] } }));
+        let s = stored();
+        assert_eq!(s.timezone.as_deref(), Some("America/New_York"), "the new zone was dropped");
+        assert_eq!(s.exclude.dates, vec!["2026-12-25".to_string()], "the new calendar was dropped");
+        assert!(s.exclude.weekdays.is_empty(), "a sent calendar replaces the old one");
+
+        // The console toggling it, which sends neither key.
+        save(serde_json::json!({ "id": "p", "enabled": false, "cron": "0 3 * * *" }));
+        let s = stored();
+        assert_eq!(s.timezone.as_deref(), Some("America/New_York"), "a save without a zone wiped it");
+        assert_eq!(s.exclude.dates, vec!["2026-12-25".to_string()], "a save without a calendar wiped it");
+
+        // Asked for explicitly, the zone goes.
+        save(serde_json::json!({ "id": "p", "enabled": true, "cron": "0 3 * * *", "timezone": "" }));
+        assert_eq!(stored().timezone, None, "an explicit empty zone means the machine's own");
+        assert_eq!(duckle_duckdb_engine::schedules::load(&ws).unwrap().len(), 1);
     }
 
     /// Removing the last administrator leaves a console nobody can administer. Removing
