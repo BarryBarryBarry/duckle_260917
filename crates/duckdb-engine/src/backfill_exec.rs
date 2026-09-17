@@ -463,9 +463,10 @@ fn run_one(
 /// backfill of any pipeline holding `${ENV:...}` or `${VAULT:...}` ran with the
 /// placeholder still in it - a literal path, or a password that is not one.
 ///
-/// Order follows MCP's, which is the same shape: time builtins, then env, then
-/// vault, then the workspace pass last so a context value spelled `${ENV:...}`
-/// is already a value when it is read.
+/// Order follows MCP's, which is the same shape: env, then vault, then the
+/// workspace pass so a context value spelled `${ENV:...}` is already a value when
+/// it is read, and the time builtins last so a context's own `date` wins and a
+/// `${date}` inside a context value resolves.
 ///
 /// `resolve_connection_refs` is NOT here and cannot be: it lives in
 /// `duckle-secrets`, which depends on this crate, so calling it would close a
@@ -476,13 +477,12 @@ fn resolve_slice_doc(
     workspace: &Path,
     resolve: Resolve<'_>,
 ) -> Result<(), String> {
-    crate::context::apply_time_builtins(doc);
     // Saved connections expand BEFORE the env pass, so a connection field
     // stored as an ENV placeholder still resolves below. Same order as MCP.
     resolve(doc)?;
     crate::context::apply_env(doc);
     crate::context::apply_vault(doc);
-    crate::context::apply_workspace_context(doc, workspace);
+    crate::context::apply_workspace_context_then_time(doc, workspace);
     Ok(())
 }
 

@@ -80,8 +80,7 @@ pub fn run() -> Result<i32, String> {
     // source behind a saved connection had no host to connect to.
     duckle_secrets::resolve_connection_refs(&workspace, &mut doc.nodes)?;
     crate::apply_env_pass(&mut doc, &workspace, &env_file)?;
-    context::apply_time_builtins(&mut doc);
-    context::apply_workspace_context(&mut doc, &workspace);
+    context::apply_workspace_context_then_time(&mut doc, &workspace);
     std::env::set_var("DUCKLE_WORKSPACE", &workspace);
 
     let duckdb = crate::resolve_duckdb(duckdb_arg)?;

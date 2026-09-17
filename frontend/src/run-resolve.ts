@@ -395,9 +395,14 @@ export function resolveForRun(
             }
         }
 
-        const resolved = hasVars
-            ? (substituteDeep(props, vars, now) as Record<string, unknown>)
-            : props;
+        // Then the date builtins over the result, the order every run surface
+        // resolves in, so one that a context value brought in resolves too. A
+        // single pass inserted `exports/${date}` and left the placeholder in it.
+        const resolved = substituteDeep(
+            hasVars ? substituteDeep(props, vars, now) : props,
+            {},
+            now,
+        ) as Record<string, unknown>;
 
         // Resolve child-pipeline ids to file paths. A value that isn't a
         // known pipeline id/name (a hand-typed literal path from before the

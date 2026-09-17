@@ -1260,7 +1260,6 @@ fn t_run_tests(args: &Value) -> Result<Value, String> {
 /// honour.
 fn prepare_run_doc(v: &Value, workspace: Option<&str>) -> Result<PipelineDoc, String> {
     let mut doc = to_doc(v)?;
-    duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
     // Saved connections expand BEFORE the env pass, so a connection field
     // stored as ${ENV:...} still resolves below. Same order as the scheduler.
     if let Some(ws) = workspace.filter(|w| !w.is_empty()) {
@@ -1285,6 +1284,8 @@ fn prepare_run_doc(v: &Value, workspace: Option<&str>) -> Result<PipelineDoc, St
             std::path::Path::new(ws),
         );
     }
+    // The date builtins after the context, as on every run surface.
+    duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
     Ok(doc)
 }
 

@@ -951,14 +951,13 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
             }
             // Same placeholder resolution as /api/run (execute_one) and the
             // desktop: expand ${ENV:KEY} secrets - so a connection field stored as
-            // ${ENV:...} still resolves after ref injection (#166 stage 2) - and the
-            // ${date}/${datetime} builtins, before the workspace-context pass.
+            // ${ENV:...} still resolves after ref injection (#166 stage 2) - then the
+            // workspace context, then the ${date}/${datetime} builtins.
             let env_file = state.workspace.join("secrets.env");
             if let Err(e) = crate::apply_env_pass(&mut doc, &state.workspace, &env_file) {
                 return respond_err("400 Bad Request", &e);
             }
-            duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
-            duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
+            duckle_duckdb_engine::context::apply_workspace_context_then_time(&mut doc, &state.workspace);
             let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
             let engine = DuckdbEngine::new(state.duckdb.clone());
             // Registered before the queue, so a Stop pressed while it waits lands.
@@ -1226,8 +1225,7 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
             let check_drift = args.get("checkDrift").and_then(|v| v.as_bool()).unwrap_or(false);
             if check_drift {
                 if let Ok(mut doc) = serde_json::from_value::<PipelineDoc>(pipeline.clone()) {
-                    duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
-                    duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
+                    duckle_duckdb_engine::context::apply_workspace_context_then_time(&mut doc, &state.workspace);
                     let resolved = match serde_json::to_value(&doc) {
                         Ok(v) => v,
                         Err(e) => return respond_err("500 Internal Server Error", &e.to_string()),
@@ -1416,14 +1414,13 @@ fn run_stream(
     }
     // Same placeholder resolution as /api/run (execute_one) and the desktop:
     // expand ${ENV:KEY} secrets - so a connection field stored as ${ENV:...}
-    // still resolves after ref injection (#166 stage 2) - and the
-    // ${date}/${datetime} builtins, before the workspace-context pass.
+    // still resolves after ref injection (#166 stage 2) - then the workspace
+    // context, then the ${date}/${datetime} builtins.
     let env_file = state.workspace.join("secrets.env");
     if let Err(e) = crate::apply_env_pass(&mut doc, &state.workspace, &env_file) {
         return write_reply(stream, &respond_err("400 Bad Request", &e));
     }
-    duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
-    duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
+    duckle_duckdb_engine::context::apply_workspace_context_then_time(&mut doc, &state.workspace);
     let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
     // Optional run-to-here target: when set, the engine runs only the subgraph
     // up to and including this node (partial run).
@@ -4196,12 +4193,12 @@ fn execute_one_with(
 
     // Same placeholder resolution as `duckle-runner run`: saved Salesforce
     // connection refs first (#166 stage 2, so a connection field stored as
-    // ${ENV:...} still expands), then ${ENV:KEY} secrets, then the dynamic
-    // ${date}/${datetime}/... builtins.
+    // ${ENV:...} still expands), then ${ENV:KEY} secrets, then the parameters
+    // and the workspace context, and the dynamic ${date}/${datetime}/... builtins
+    // last.
     duckle_secrets::resolve_connection_refs(&state.workspace, &mut doc.nodes)?;
     let env_file = state.workspace.join("secrets.env");
     crate::apply_env_pass(&mut doc, &state.workspace, &env_file)?;
-    duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
     // Per-run input parameters from the dashboard (issue #127) override the
     // static workspace context for this run; applied before the context pass so a
     // supplied value wins and any unset ${KEY} still resolves from the context.
@@ -4230,8 +4227,9 @@ fn execute_one_with(
         duckle_duckdb_engine::context::apply_params_from(&mut doc, &supplied)?;
     // Match the web cmd paths and headless `duckle-runner --pipeline`: resolve
     // ${workspace}/${projectroot} and workspace-relative file paths before run,
-    // so file-loaded pipelines (manual /api/run + scheduled runs) work too.
-    duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
+    // so file-loaded pipelines (manual /api/run + scheduled runs) work too. The
+    // date builtins follow, as on every run surface.
+    duckle_duckdb_engine::context::apply_workspace_context_then_time(&mut doc, &state.workspace);
 
     let engine = engine.unwrap_or_else(|| DuckdbEngine::new(state.duckdb.clone()));
     // #259: every console execution is addressable, not only the async one.
@@ -6568,6 +6566,72 @@ mod tests {
             escaped.starts_with(ws.join("pipelines")) && !escaped.to_string_lossy().contains(".."),
             "an id that is not a file name must not name a path: {}",
             escaped.display()
+        );
+    }
+
+    /// A server run resolves the workspace context before the date builtins, as
+    /// the scheduler and the desktop editor do.
+    ///
+    /// The server stamped `${date}` first, so a context that defines `date` (a
+    /// business date) lost to today's date, and a context value that contains
+    /// `${date}` - `OUT = exports/${date}` - was written into a folder literally
+    /// named `${date}`. The same pipeline wrote somewhere else depending on
+    /// which surface started it.
+    #[test]
+    fn a_server_run_resolves_the_context_before_the_date_builtins() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::write(ws.join("orders.csv"), "id\n1\n").unwrap();
+        std::fs::write(ws.join("repository.json"), r#"[{"type":"context","id":"c","name":"Default"}]"#).unwrap();
+        std::fs::create_dir_all(ws.join("contexts")).unwrap();
+        std::fs::write(
+            ws.join("contexts").join("c.json"),
+            r#"{"variables":[{"key":"date","value":"2020-01-31"},{"key":"OUT","value":"exports/${date}"}]}"#,
+        )
+        .unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from(duckdb),
+            dist: ws.clone(),
+            host: "127.0.0.1".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "127.0.0.1", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        let root = ws.to_string_lossy().replace('\\', "/");
+        let mut req = request("POST", "/api/cmd/run_pipeline", Some("Bearer s3cret"));
+        req.body = serde_json::to_vec(&serde_json::json!({
+            "pipelineName": "dated",
+            "pipeline": {
+                "nodes": [
+                    { "id": "s", "position": {"x":0,"y":0}, "data": { "label": "in", "componentId": "src.csv",
+                      "properties": { "path": format!("{root}/orders.csv"), "hasHeader": true } } },
+                    { "id": "k", "position": {"x":0,"y":0}, "data": { "label": "out", "componentId": "snk.csv",
+                      "properties": { "path": format!("{root}/${{OUT}}/${{date}}.csv"), "hasHeader": true } } }
+                ],
+                "edges": [ { "id": "e", "source": "s", "target": "k", "data": { "connectionType": "main" } } ]
+            }
+        }))
+        .unwrap();
+        let reply = route_web(&req, &state);
+        let result: serde_json::Value = serde_json::from_slice(&reply.body).unwrap_or_default();
+        assert_eq!(result["status"], "ok", "{result}");
+
+        let folders: Vec<String> = std::fs::read_dir(ws.join("exports"))
+            .expect("the sink wrote under exports/")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(folders.len(), 1, "{folders:?}");
+        assert_ne!(folders[0], "${date}", "a context value's ${{date}} was left literal");
+        assert!(
+            ws.join("exports").join(&folders[0]).join("2020-01-31.csv").exists(),
+            "the context's own date lost to today's: {:?}",
+            std::fs::read_dir(ws.join("exports").join(&folders[0])).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>()
         );
     }
 

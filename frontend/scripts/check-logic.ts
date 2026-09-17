@@ -955,6 +955,30 @@ function context(name: string, vars: Record<string, string>): RepoItem {
 }
 
 // ---------------------------------------------------------------------------
+// A run resolves the context first and the date builtins over the result.
+//
+// That is the order of the scheduler, and now of the runner and the server. The
+// editor already let a context's own `date` win, but inserted a context value
+// in one pass, so `OUT = exports/${date}` reached the engine as a folder
+// literally named `${date}`.
+// ---------------------------------------------------------------------------
+{
+    const sink = {
+        id: 'k',
+        position: { x: 0, y: 0 },
+        data: { label: 'out', componentId: 'snk.csv', properties: { path: '${OUT}/orders.csv', note: '${date}' } },
+    } as unknown as Node<DuckleNodeData>;
+    const props = resolveForRun([sink], [context('dev', { OUT: 'exports/${date}' })])[0].data.properties ?? {};
+    check(
+        'run order: a date builtin inside a context value resolves',
+        /^exports\/\d{4}-\d{2}-\d{2}\/orders\.csv$/.test(String(props.path)),
+        `path ${String(props.path)}`,
+    );
+    const business = resolveForRun([sink], [context('dev', { date: '2020-01-31' })])[0].data.properties ?? {};
+    check('run order: a context that defines date still wins', business.note === '2020-01-31', `note ${String(business.note)}`);
+}
+
+// ---------------------------------------------------------------------------
 // A transform's output columns are what it produces, before it has ever run.
 //
 // Group By, the joins, Add Column, Coalesce, the window aggregate and the AI

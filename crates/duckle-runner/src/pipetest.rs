@@ -56,7 +56,7 @@ use duckle_duckdb_engine::{DuckdbEngine, PipelineDoc};
 /// takes no `--workspace`, so the fallback is all there is.
 ///
 /// Order follows the CLI run path: saved connections first, then the env pass
-/// (which carries vault), then time builtins, then the workspace pass. A
+/// (which carries vault), then the workspace pass, then time builtins. A
 /// connection field stored as an ENV placeholder therefore still resolves.
 fn resolve_for_test(doc: &mut PipelineDoc, pipeline: &Path) -> Result<(), String> {
     let workspace =
@@ -64,8 +64,7 @@ fn resolve_for_test(doc: &mut PipelineDoc, pipeline: &Path) -> Result<(), String
     let env_file = workspace.join("secrets.env");
     duckle_secrets::resolve_connection_refs(&workspace, &mut doc.nodes)?;
     crate::apply_env_pass(doc, &workspace, &env_file)?;
-    duckle_duckdb_engine::context::apply_time_builtins(doc);
-    duckle_duckdb_engine::context::apply_workspace_context(doc, &workspace);
+    duckle_duckdb_engine::context::apply_workspace_context_then_time(doc, &workspace);
     Ok(())
 }
 

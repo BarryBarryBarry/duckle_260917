@@ -393,6 +393,20 @@ pub fn apply_workspace_context(doc: &mut PipelineDoc, workspace: &Path) {
     }
 }
 
+/// The workspace context, then the date/time builtins over the result: the one
+/// order a run resolves its placeholders in.
+///
+/// A context may define a name a builtin also answers, such as a business
+/// `date`, and a context value may contain a builtin, such as `exports/${date}`.
+/// The scheduler resolves through [`resolve_workspace`] and then the builtins,
+/// and the desktop editor lets a context win too, but the runner and the server
+/// stamped the builtins first: today's date replaced the context's `date`, and
+/// a `${date}` that a context value brought in was left in the path literally.
+pub fn apply_workspace_context_then_time(doc: &mut PipelineDoc, workspace: &Path) {
+    apply_workspace_context(doc, workspace);
+    apply_time_builtins(doc);
+}
+
 /// Resolve user-supplied runtime parameters (`${KEY}` -> value) in every node
 /// property, in place. The web dashboard's "run with parameters" form sends
 /// these so an operator can override context variables for a single manual run

@@ -751,10 +751,10 @@ fn pipeline_trust_report(
     if check_drift.unwrap_or(false) {
         if let Ok(mut doc) = serde_json::from_value::<PipelineDoc>(pipeline.clone()) {
             let engine = engine()?;
-            duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
             if let Some(ws) = workspace_path.as_deref() {
                 duckle_duckdb_engine::context::apply_workspace_context(&mut doc, std::path::Path::new(ws));
             }
+            duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
             let resolved = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
             return Ok(duckle_duckdb_engine::trust::trust_report(&resolved, Some(&engine)));
         }
