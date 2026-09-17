@@ -11732,6 +11732,16 @@ impl DuckdbEngine {
         }
         let count = rows.len();
         let materialized = materialize_jsonobjects_as_table(&self.bin, db, &spec.node_id, &rows);
+        // Inside a run, the answer waits for the run: rows in the run's database
+        // are not delivered until the run that reads them succeeds. See
+        // `execute_pipeline_with_events`.
+        if let (Some(acks), true) = (&self.webhook_acks, materialized.is_ok()) {
+            acks.lock().unwrap_or_else(|p| p.into_inner()).extend(pending);
+            return Ok(format!(
+                "webhook: collected {} request(s) on :{} -> {}",
+                count, spec.port, spec.node_id
+            ));
+        }
         // Persist-then-ack: 200 once the rows are durably written; 503 on
         // failure so a well-behaved sender retries instead of dropping the
         // event. A sender that already timed out waiting will also retry,

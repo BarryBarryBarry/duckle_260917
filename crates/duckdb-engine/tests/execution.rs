@@ -11242,6 +11242,71 @@ fn src_webhook_collects_inbound_http_requests() {
     assert_eq!(ev2, "login");
 }
 
+/// A webhook sender is told the truth about the RUN, not just about the node.
+///
+/// src.webhook answered 200 as soon as its rows were in the run's database, and
+/// a sender does not retry a 200. When a later node then failed, the rows were
+/// gone with the failed run and the event was lost. The answer now waits for
+/// the run: 200 when it succeeded, 503 so the sender retries when it did not.
+#[test]
+fn a_webhook_sender_is_told_to_retry_when_the_run_fails_after_the_webhook() {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::time::Duration;
+
+    let engine = engine_or_skip!();
+    let send = |port: u16| {
+        std::thread::spawn(move || {
+            let body = r#"{"id":1,"event":"signup"}"#;
+            for _ in 0..200 {
+                if let Ok(mut s) = TcpStream::connect(("127.0.0.1", port)) {
+                    let req = format!(
+                        "POST /hook HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = s.write_all(req.as_bytes());
+                    let mut resp = String::new();
+                    let _ = s.set_read_timeout(Some(Duration::from_secs(60)));
+                    let _ = s.read_to_string(&mut resp);
+                    return resp.lines().next().unwrap_or("").to_string();
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            String::from("never connected")
+        })
+    };
+    let free_port = || TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let tmp = tempfile::tempdir().unwrap();
+    let pipeline = |port: u16, sql: &str| {
+        doc(
+            json!([
+                node("w", "src.webhook", json!({ "port": port, "maxRequests": 1, "timeoutMs": 15000 })),
+                node("q", "code.sql", json!({ "sql": sql })),
+                node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "out.csv"), "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "w", "q"), main_edge("e2", "q", "k")]),
+        )
+    };
+
+    let port = free_port();
+    let client = send(port);
+    let r = engine.execute_pipeline(&pipeline(port, "SELECT * FROM input JOIN no_such_table USING (id)"));
+    assert_ne!(r.status, "ok", "the downstream node was meant to fail");
+    let answer = client.join().unwrap();
+    assert!(
+        answer.contains("503"),
+        "the sender was told its event was delivered by a run that failed: {answer}"
+    );
+
+    let port = free_port();
+    let client = send(port);
+    let r = engine.execute_pipeline(&pipeline(port, "SELECT * FROM input"));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let answer = client.join().unwrap();
+    assert!(answer.contains("200"), "a successful run must still answer 200: {answer}");
+}
+
 /// #258: a cost ceiling with no prices could never fire. Caught at COMPILE
 /// time, so `duckle validate` reports it rather than a run discovering it after
 /// the first stage has started spending.
