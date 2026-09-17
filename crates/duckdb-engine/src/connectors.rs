@@ -15511,11 +15511,12 @@ impl DuckdbEngine {
         // Applied to everything that reaches the wire, because an API may take
         // its cursor in any of them.
         let sub = |t: &str| t.replace(INCREMENTAL_PLACEHOLDER, &mark);
+        let sub_url = |t: &str| fill_incremental_url(t, &mark);
         let spec = &{
             let mut s2 = spec.clone();
             if s2.incremental_field.is_some() {
-                s2.url = sub(&s2.url);
-                s2.url_template = s2.url_template.as_deref().map(sub);
+                s2.url = sub_url(&s2.url);
+                s2.url_template = s2.url_template.as_deref().map(sub_url);
                 s2.body = s2.body.as_deref().map(sub);
                 s2.headers = s2.headers.iter().map(|(k, v)| (k.clone(), sub(v))).collect();
             }
@@ -18014,11 +18015,27 @@ pub(crate) const INCREMENTAL_PLACEHOLDER: &str = "{incremental}";
 /// ISO-8601 work without a date parser, since it sorts lexically by design. A
 /// format that does not sort lexically (`03/04/2026`) is not usable as a cursor
 /// here, and would not be usable as one against the API either.
+/// The URL with `{incremental}` filled in, the mark percent-encoded like every
+/// other value spliced into a URL. Raw, a `+02:00` offset reached the API as a
+/// space. A body or header takes the mark as it is.
+pub(crate) fn fill_incremental_url(url: &str, mark: &str) -> String {
+    url.replace(INCREMENTAL_PLACEHOLDER, &percent_encode_path(mark))
+}
+
 pub(crate) fn mark_is_newer(candidate: &str, current: &str) -> bool {
-    match (candidate.parse::<f64>(), current.parse::<f64>()) {
-        (Ok(a), Ok(b)) => a > b,
-        _ => candidate > current,
+    if let (Ok(a), Ok(b)) = (candidate.parse::<f64>(), current.parse::<f64>()) {
+        return a > b;
     }
+    // Two RFC 3339 timestamps are compared as the instants they name. As text a
+    // fractional second sorted before the whole second (`.` is below `Z`) and an
+    // offset sorted by its local clock, so the mark could stop at an older row.
+    if let (Ok(a), Ok(b)) = (
+        chrono::DateTime::parse_from_rfc3339(candidate),
+        chrono::DateTime::parse_from_rfc3339(current),
+    ) {
+        return a > b;
+    }
+    candidate > current
 }
 
 /// Raise `mark` to this row's value, if the row carries a higher one.
@@ -19706,6 +19723,55 @@ mod dhis2_summary_tests {
 mod connector_helper_tests {
     use super::{bson_flag_matches, jsonnative_quote_inner, python_temp_paths};
     use mongodb::bson::Bson;
+
+    /// #257: a REST incremental mark that is an RFC 3339 timestamp is compared
+    /// as the instant it names. Compared as text, a fractional second sorted
+    /// BEFORE the whole second (`.` is below `Z`) and an offset sorted by its
+    /// local clock, so the mark stopped at an older row and the next run asked
+    /// for, and appended, the same rows again.
+    #[test]
+    fn an_rfc3339_mark_is_compared_as_an_instant_not_as_text() {
+        use super::mark_is_newer;
+        assert!(
+            mark_is_newer("2026-09-17T10:00:00.5Z", "2026-09-17T10:00:00Z"),
+            "half a second later is newer"
+        );
+        assert!(
+            mark_is_newer("2026-09-17T11:00:00Z", "2026-09-17T12:00:00+02:00"),
+            "11:00Z is an hour after 12:00+02:00"
+        );
+        assert!(
+            !mark_is_newer("2026-09-17T12:00:00+02:00", "2026-09-17T11:00:00Z"),
+            "12:00+02:00 is an hour before 11:00Z"
+        );
+        assert!(
+            !mark_is_newer("2026-09-17T10:00:00+00:00", "2026-09-17T10:00:00Z"),
+            "one instant spelled two ways is not newer"
+        );
+        // Everything that already worked still does.
+        assert!(mark_is_newer("2026-03-05", "2026-01-01"));
+        assert!(mark_is_newer("10", "9"), "numbers compare as numbers");
+        assert!(mark_is_newer("2026-03-05T00:00:00Z", "1970-01-01"), "mixed forms fall back to text");
+    }
+
+    /// #257: the mark is percent-encoded where it enters a URL, like every other
+    /// value spliced into one. Raw, a `+02:00` offset reached the API as a space
+    /// and the API answered for a different time or refused the request.
+    #[test]
+    fn the_incremental_mark_is_encoded_where_it_enters_a_url() {
+        assert_eq!(
+            super::fill_incremental_url(
+                "https://api.example/changes?since={incremental}",
+                "2026-09-17T12:00:00+02:00"
+            ),
+            "https://api.example/changes?since=2026-09-17T12%3A00%3A00%2B02%3A00"
+        );
+        assert_eq!(
+            super::fill_incremental_url("https://api.example/c?since={incremental}", "2026-03-05"),
+            "https://api.example/c?since=2026-03-05",
+            "a mark with nothing to escape is unchanged"
+        );
+    }
 
     #[test]
     fn a_url_template_names_a_column_or_fails_loudly() {
