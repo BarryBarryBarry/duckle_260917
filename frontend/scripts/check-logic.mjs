@@ -2,6 +2,9 @@
 //
 // Same arrangement as check-secret-fields.mjs: the modules under test are
 // TypeScript, and anything that reaches for a live Tauri window is stubbed.
+// tauri-bridge itself is NOT stubbed, unlike there: most web-edition bugs live
+// in it, so the checks call the real bridge over a stubbed `invoke`, which
+// stands where the web shim stands in the browser build.
 import esbuild from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -15,7 +18,6 @@ const bundle = resolve(tmpdir(), `duckle-check-logic-${process.pid}.mjs`);
 const stubTauri = {
     name: 'stub-tauri',
     setup(build) {
-        build.onResolve({ filter: /(^|\/)tauri-bridge$/ }, () => ({ path: 'stub', namespace: 'stub' }));
         build.onResolve({ filter: /(^|\/)tauri-dialog$/ }, () => ({ path: 'stub', namespace: 'stub' }));
         build.onResolve({ filter: /^@tauri-apps\// }, () => ({ path: 'stub', namespace: 'stub' }));
         build.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({

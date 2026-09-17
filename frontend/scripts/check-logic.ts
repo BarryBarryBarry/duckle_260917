@@ -19,7 +19,7 @@ import { UndoHistory, type CanvasSnapshot } from '../src/undo-history';
 import { saveItemPayload } from '../src/workspace';
 import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
-import type { Schedule } from '../src/tauri-bridge';
+import { cancelPipeline, type Schedule } from '../src/tauri-bridge';
 
 // The frontend directory, injected by check-logic.mjs: the bundle runs from a
 // temp dir, so neither import.meta.url nor the cwd can be trusted to find it.
@@ -633,6 +633,27 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         bare !== null && !('timezone' in bare) && !('exclude' in bare),
         `sent ${JSON.stringify(bare)}`,
     );
+}
+
+// ---------------------------------------------------------------------------
+// The web editor's Stop button asks the server to stop the run.
+//
+// cancelPipeline returned at once outside the desktop app, so in the web
+// edition Stop sent nothing and the run went on to write its sinks. The server
+// half (cancel_pipeline, scoped to the caller's own runs) is tested in serve.rs.
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as {
+        __checkLogicInvoke?: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    };
+    const asked: string[] = [];
+    g.__checkLogicInvoke = async cmd => {
+        asked.push(cmd);
+        return { cancelled: 1 };
+    };
+    await cancelPipeline();
+    g.__checkLogicInvoke = undefined;
+    check('web stop: Stop asks the server to cancel', asked.includes('cancel_pipeline'), `asked ${JSON.stringify(asked)}`);
 }
 
 // ---------------------------------------------------------------------------

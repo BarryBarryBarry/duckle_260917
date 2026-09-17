@@ -758,7 +758,9 @@ export async function workspaceCiStatus(workspacePath: string): Promise<CiStatus
 }
 
 export async function cancelPipeline(): Promise<void> {
-    if (!isTauri()) return;
+    // The web edition asks its server too. This returned at once outside the
+    // desktop app, so Stop sent nothing and the run went on to write its sinks.
+    if (!isTauri() && !isWebBackend()) return;
     try {
         await invoke('cancel_pipeline');
     } catch (err) {

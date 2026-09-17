@@ -429,6 +429,57 @@ struct WebState {
     /// Who may use this editor. Same policy object the console uses, so one
     /// set of accounts covers both.
     console: console_auth::Console,
+    /// Runs the editor started that are still going, for the Stop button.
+    editor_runs: EditorRuns,
+}
+
+/// Editor runs in flight on this server, so the Stop button can reach them.
+///
+/// Stop did nothing in the web edition: the browser never asked the server, and
+/// each run built a throwaway engine nobody held a handle to, so a stopped run
+/// kept going and still wrote its sinks. Each run is tagged with who started
+/// it, because on a shared server one person's Stop must not end another's run.
+#[derive(Default)]
+struct EditorRuns {
+    next: std::sync::atomic::AtomicU64,
+    runs: Mutex<HashMap<u64, (String, DuckdbEngine)>>,
+}
+
+impl EditorRuns {
+    /// Register a run for as long as the returned guard lives.
+    fn start(&self, owner: &str, engine: &DuckdbEngine) -> EditorRun<'_> {
+        let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.runs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(id, (owner.to_string(), engine.clone()));
+        EditorRun { runs: self, id }
+    }
+
+    /// Ask every run `owner` started to stop; how many that was.
+    fn cancel(&self, owner: &str) -> usize {
+        let runs = self.runs.lock().unwrap_or_else(|p| p.into_inner());
+        let mut n = 0;
+        for (who, engine) in runs.values() {
+            if who == owner {
+                engine.request_cancel();
+                n += 1;
+            }
+        }
+        n
+    }
+}
+
+/// Removes its run from [`EditorRuns`] when dropped, a panicking run included.
+struct EditorRun<'a> {
+    runs: &'a EditorRuns,
+    id: u64,
+}
+
+impl Drop for EditorRun<'_> {
+    fn drop(&mut self) {
+        self.runs.runs.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.id);
+    }
 }
 
 pub fn run_web() -> Result<(), String> {
@@ -466,6 +517,7 @@ pub fn run_web() -> Result<(), String> {
         host: args.host.clone(),
         run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::load(&workspace)),
         console,
+        editor_runs: EditorRuns::default(),
     });
     let addr = format!("{}:{}", args.host, args.port);
     let listener = TcpListener::bind(&addr).map_err(|e| format!("bind {}: {}", addr, e))?;
@@ -579,7 +631,7 @@ fn handle_web(mut stream: TcpStream, state: &WebState) -> Result<(), String> {
             audit::Outcome::Allowed,
         );
         let body = req.body.clone();
-        return run_stream(&mut stream, state, &body);
+        return run_stream(&mut stream, state, &who, &body);
     }
     let reply = route_web(&req, state);
     write_reply(&mut stream, &reply)
@@ -642,7 +694,7 @@ fn route_web(req: &Request, state: &WebState) -> Reply {
             // opaque "Failed to fetch". Catch it and answer with a real 500 the
             // editor can show.
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                dispatch_cmd(state, &cmd, &req.body)
+                dispatch_cmd(state, &who, &cmd, &req.body)
             }));
             return match outcome {
                 Ok(r) => r,
@@ -790,10 +842,14 @@ fn connection_secret_cmd(workspace: &Path, cmd: &str, body: &[u8]) -> Result<Str
     }
 }
 
-fn dispatch_cmd(state: &WebState, cmd: &str, body: &[u8]) -> Reply {
+fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body: &[u8]) -> Reply {
     match cmd {
         // Drives the editor's runtime indicator offline -> ready.
         "ping" => respond_json(&Value::String("pong".into())),
+        // The Stop button: the caller's own runs, never anyone else's.
+        "cancel_pipeline" => {
+            respond_json(&json!({ "cancelled": state.editor_runs.cancel(&who.label) }))
+        }
         // Connection secrets, encrypted at rest with the same AES-256-GCM
         // primitives and the same per-workspace key the desktop app uses, so a
         // workspace stays readable whichever edition wrote it.
@@ -840,8 +896,10 @@ fn dispatch_cmd(state: &WebState, cmd: &str, body: &[u8]) -> Reply {
             duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
             duckle_duckdb_engine::context::apply_workspace_context(&mut doc, &state.workspace);
             let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
-            let (_guard, pool, queued_ms) = state.run_lock.acquire(&doc.resource_pool);
             let engine = DuckdbEngine::new(state.duckdb.clone());
+            // Registered before the queue, so a Stop pressed while it waits lands.
+            let _running = state.editor_runs.start(&who.label, &engine);
+            let (_guard, pool, queued_ms) = state.run_lock.acquire(&doc.resource_pool);
             let receipt =
                 begin_editor_run(&state.workspace, &doc, &name, "web", Some((pool, queued_ms)));
             let result = engine.execute_pipeline_named(&doc, &name);
@@ -1170,7 +1228,12 @@ fn begin_editor_run(
 
 /// `event: result` line. The frontend turns these back into the same live
 /// per-node animation the desktop gets from the Tauri Channel.
-fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(), String> {
+fn run_stream(
+    stream: &mut TcpStream,
+    state: &WebState,
+    who: &console_auth::Identity,
+    body: &[u8],
+) -> Result<(), String> {
     let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let mut doc: PipelineDoc = match serde_json::from_value(args.get("pipeline").cloned().unwrap_or(Value::Null)) {
         Ok(d) => d,
@@ -1207,11 +1270,13 @@ fn run_stream(stream: &mut TcpStream, state: &WebState, body: &[u8]) -> Result<(
     stream.write_all(head.as_bytes()).map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
 
+    let engine = DuckdbEngine::new(state.duckdb.clone());
+    // Registered before the queue, so a Stop pressed while it waits lands.
+    let _running = state.editor_runs.start(&who.label, &engine);
     let (_guard, pool, queued_ms) = state.run_lock.acquire(&doc.resource_pool);
     // A second handle to the same socket for the event callback (the run is
     // synchronous, so events stream first, the result line follows).
     let mut ev = stream.try_clone().map_err(|e| e.to_string())?;
-    let engine = DuckdbEngine::new(state.duckdb.clone());
     // Run-to-here is still a run, and the one an operator is most likely to
     // want to find again.
     let receipt = begin_editor_run(
@@ -5613,6 +5678,7 @@ mod tests {
             host: "0.0.0.0".into(),
             run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
             console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
         };
         let mut req = request("POST", "/api/cmd/complete_node_sql", Some("Bearer s3cret"));
         req.body = serde_json::to_vec(&serde_json::json!({
@@ -5767,6 +5833,7 @@ mod tests {
             host: "0.0.0.0".into(),
             run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
             console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
         };
         let mut req = request("POST", "/api/cmd/analyze_node_sql", Some("Bearer s3cret"));
         req.body = serde_json::to_vec(&serde_json::json!({
@@ -5815,6 +5882,7 @@ mod tests {
             host: "0.0.0.0".into(),
             run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
             console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
         };
         let mut req = request("POST", "/api/cmd/external_components", Some("Bearer s3cret"));
         req.body = b"{}".to_vec();
@@ -6164,6 +6232,7 @@ mod tests {
             host: "0.0.0.0".into(),
             run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
             console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
         };
 
         let anonymous = request("POST", "/api/run_stream", None);
@@ -6180,6 +6249,89 @@ mod tests {
         let signed_in = request("POST", "/api/run_stream", Some(&bearer));
         web_gate(&signed_in, &state, console_auth::Role::Operator, "editor.api")
             .expect("a credentialed operator must still be allowed to run");
+    }
+
+    /// The web editor's Stop button stops the run it started, and only that.
+    ///
+    /// Stop did nothing in the web edition: the browser never asked the server,
+    /// and the server kept no handle on a run it could cancel, so the run went on
+    /// and still wrote its sinks. Driven through the real streaming route over a
+    /// socket. The run waits five seconds before its sink, and the Stop is sent
+    /// as soon as the run is registered, so a sink file means Stop did nothing.
+    #[test]
+    fn the_web_stop_button_cancels_the_run_its_caller_started() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::write(ws.join("in.csv"), "id\n1\n2\n").unwrap();
+        let out = ws.join("out.csv");
+        let state = std::sync::Arc::new(WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from(duckdb),
+            dist: ws.clone(),
+            host: "127.0.0.1".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "127.0.0.1", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        });
+        let owner = state.console.identify(Some("Bearer s3cret"), None).expect("the owner signs in");
+        let bob = state.console.create_account("bob", console_auth::Role::Operator).unwrap();
+
+        let pipeline = serde_json::json!({
+            "pipelineName": "stoppable",
+            "pipeline": {
+                "nodes": [
+                    { "id": "s", "position": {"x":0,"y":0}, "data": { "label": "in", "componentId": "src.csv",
+                      "properties": { "path": ws.join("in.csv").to_string_lossy(), "hasHeader": true } } },
+                    { "id": "w", "position": {"x":0,"y":0}, "data": { "label": "wait", "componentId": "ctl.wait",
+                      "properties": { "duration": 5000, "unit": "ms" } } },
+                    { "id": "k", "position": {"x":0,"y":0}, "data": { "label": "out", "componentId": "snk.csv",
+                      "properties": { "path": out.to_string_lossy(), "hasHeader": true } } }
+                ],
+                "edges": [
+                    { "id": "e1", "source": "s", "target": "w", "data": { "connectionType": "main" } },
+                    { "id": "e2", "source": "w", "target": "k", "data": { "connectionType": "main" } }
+                ]
+            }
+        });
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_state = state.clone();
+        let body = serde_json::to_vec(&pipeline).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            super::run_stream(&mut stream, &server_state, &owner, &body)
+        });
+        let client = std::thread::spawn(move || {
+            let mut conn = std::net::TcpStream::connect(addr).unwrap();
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut conn, &mut text);
+            text
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while state.editor_runs.runs.lock().unwrap().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the run never started");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let stop = |bearer: &str| {
+            let mut req = request("POST", "/api/cmd/cancel_pipeline", Some(bearer));
+            req.body = b"{}".to_vec();
+            let reply = route_web(&req, &state);
+            assert_eq!(reply.code(), 200, "{}", String::from_utf8_lossy(&reply.body));
+            serde_json::from_slice::<serde_json::Value>(&reply.body).unwrap()["cancelled"].clone()
+        };
+        assert_eq!(stop(&format!("Bearer {bob}")), 0, "another person's Stop must not end this run");
+        assert_eq!(stop("Bearer s3cret"), 1, "the owner's Stop must reach the run");
+
+        server.join().unwrap().expect("the stream completes");
+        let events = client.join().unwrap();
+        assert!(events.contains("\"status\":\"cancelled\""), "the run did not stop: {events}");
+        assert!(!out.exists(), "a stopped run still wrote its sink");
+        assert!(state.editor_runs.runs.lock().unwrap().is_empty(), "a finished run stayed registered");
     }
 
     fn a_role_that_is_not_enough_is_refused_not_admitted() {
