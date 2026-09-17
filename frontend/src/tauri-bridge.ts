@@ -1338,7 +1338,24 @@ export async function settingsGetProxy(workspace: string): Promise<string | null
  * in-app updater through the proxy.
  */
 export async function settingsSetProxy(workspace: string, url: string | null): Promise<void> {
+    refuseMachineSettingOnWeb('proxy');
     await invoke('settings_set_proxy', { workspace, url });
+}
+
+/**
+ * The web edition has no command for the settings that configure the machine
+ * running pipelines - proxy, AI endpoint, power, memory cap, unsigned extensions,
+ * context file - and the web shim turns a missing command into a quiet success,
+ * so Settings said "Saved" while nothing was stored. There they are the server's
+ * to set, and letting a browser change them on a shared server would be wrong
+ * anyway, so saving one says where it lives instead.
+ */
+function refuseMachineSettingOnWeb(what: string): void {
+    if (isWebBackend()) {
+        throw new Error(
+            `The ${what} setting is not saved from the web editor: it belongs to the server running duckle-runner, and is set there with its flags and environment.`,
+        );
+    }
 }
 
 // ---- Per-workspace memory cap (#102) -----------------------------------
@@ -1358,6 +1375,7 @@ export async function settingsGetMemoryLimit(workspace: string): Promise<number 
  * DUCKLE_MEMORY_LIMIT for every run (batched and per-stage). Pass null to clear.
  */
 export async function settingsSetMemoryLimit(workspace: string, mb: number | null): Promise<void> {
+    refuseMachineSettingOnWeb('memory limit');
     await invoke('settings_set_memory_limit', { workspace, mb });
 }
 
@@ -1393,6 +1411,7 @@ export async function settingsGetPower(workspace: string): Promise<PowerConfig> 
  * run that tries to spill.
  */
 export async function settingsSetPower(workspace: string, cfg: Omit<PowerConfig, 'cpuCount'>): Promise<void> {
+    refuseMachineSettingOnWeb('power');
     await invoke('settings_set_power', {
         workspace,
         maxConcurrentRuns: cfg.maxConcurrentRuns,
@@ -1417,6 +1436,7 @@ export async function settingsGetAllowUnsigned(workspace: string): Promise<boole
  * CLI (via DUCKLE_ALLOW_UNSIGNED_EXTENSIONS). Default off keeps signed-only.
  */
 export async function settingsSetAllowUnsigned(workspace: string, allow: boolean): Promise<void> {
+    refuseMachineSettingOnWeb('unsigned extensions');
     await invoke('settings_set_allow_unsigned', { workspace, allow });
 }
 
@@ -1434,6 +1454,7 @@ export async function settingsGetContextFile(workspace: string): Promise<string 
 
 /** Persist the global-context file path. Pass null to clear. */
 export async function settingsSetContextFile(workspace: string, path: string | null): Promise<void> {
+    refuseMachineSettingOnWeb('context file');
     await invoke('settings_set_context_file', { workspace, path });
 }
 
@@ -1470,6 +1491,7 @@ export async function settingsSetAi(
     workspace: string,
     cfg: { baseUrl: string | null; model: string | null; apiKey: string | null },
 ): Promise<void> {
+    refuseMachineSettingOnWeb('AI endpoint');
     await invoke('settings_set_ai', {
         workspace,
         baseUrl: cfg.baseUrl,

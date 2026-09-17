@@ -28,6 +28,12 @@ import {
     scheduleList,
     scheduleRunNow,
     scheduleUpsert,
+    settingsSetAi,
+    settingsSetAllowUnsigned,
+    settingsSetContextFile,
+    settingsSetMemoryLimit,
+    settingsSetPower,
+    settingsSetProxy,
     type Schedule,
 } from '../src/tauri-bridge';
 
@@ -903,6 +909,40 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         );
     }
     g.fetch = realFetch;
+}
+
+// ---------------------------------------------------------------------------
+// Web Settings do not say "Saved" for settings nothing stores.
+//
+// The web server has no command for the proxy, AI endpoint, power, memory,
+// unsigned-extension or context-file settings, and the shim turns the missing
+// command into a quiet success, so Save said "Saved" and nothing changed. They
+// configure the machine that runs pipelines, so in the web edition they are set
+// on the server, and saving one now says so.
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as {
+        __checkLogicInvoke?: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    };
+    g.__checkLogicInvoke = async () => null;
+    const setters: [string, () => Promise<unknown>][] = [
+        ['proxy', () => settingsSetProxy('/ws', 'http://proxy:8080')],
+        ['AI endpoint', () => settingsSetAi('/ws', { baseUrl: 'http://ai', model: null, apiKey: null })],
+        ['power', () => settingsSetPower('/ws', { maxConcurrentRuns: 2, memoryLimitMb: null, spillDir: null })],
+        ['memory limit', () => settingsSetMemoryLimit('/ws', 512)],
+        ['unsigned extensions', () => settingsSetAllowUnsigned('/ws', true)],
+        ['context file', () => settingsSetContextFile('/ws', 'ctx.env')],
+    ];
+    for (const [what, set] of setters) {
+        let refused = '';
+        try {
+            await set();
+        } catch (err) {
+            refused = String(err);
+        }
+        check(`web settings: saving the ${what} says it is not stored here`, refused.includes('server'), `resolved as saved`);
+    }
+    g.__checkLogicInvoke = undefined;
 }
 
 // ---------------------------------------------------------------------------
