@@ -34,6 +34,9 @@ import {
     settingsSetMemoryLimit,
     settingsSetPower,
     settingsSetProxy,
+    watermarkClear,
+    watermarkList,
+    watermarkSet,
     type Schedule,
 } from '../src/tauri-bridge';
 
@@ -943,6 +946,40 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         check(`web settings: saving the ${what} says it is not stored here`, refused.includes('server'), `resolved as saved`);
     }
     g.__checkLogicInvoke = undefined;
+}
+
+// ---------------------------------------------------------------------------
+// The web Backfill panel works: the server answers its commands.
+//
+// The server implements watermark_list, watermark_set and watermark_clear for
+// this panel, but the bridge returned at once outside the desktop app and the
+// panel said "Backfill is available in the desktop app".
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as {
+        __checkLogicInvoke?: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    };
+    const asked: string[] = [];
+    g.__checkLogicInvoke = async cmd => {
+        asked.push(cmd);
+        return cmd === 'watermark_list' ? [{ nodeId: 'i', kind: 'incremental', value: '2026-01-01' }] : null;
+    };
+    const listed = await watermarkList('/ws', 'orders');
+    await watermarkSet('/ws', 'orders', 'i', 'incremental', '2026-02-01');
+    await watermarkClear('/ws', 'orders', 'i');
+    g.__checkLogicInvoke = undefined;
+    check('web backfill: the saved state is listed from the server', listed.length === 1, `listed ${JSON.stringify(listed)}`);
+    check(
+        'web backfill: setting and clearing reach the server',
+        asked.includes('watermark_set') && asked.includes('watermark_clear'),
+        `asked ${JSON.stringify(asked)}`,
+    );
+    const modal = readFileSync(resolve(__FRONTEND_DIR__, 'src/workflow-ui/BackfillModal.tsx'), 'utf8');
+    check(
+        'web backfill: the panel is not desktop-only',
+        !modal.includes('Backfill is available in the desktop app.'),
+        'the panel still turns the web edition away',
+    );
 }
 
 // ---------------------------------------------------------------------------

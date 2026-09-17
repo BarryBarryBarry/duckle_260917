@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { History, RotateCcw, Save, Trash2, X } from 'lucide-react';
-import { isTauri } from '../tauri-dialog';
 import {
     watermarkClear,
     watermarkList,
@@ -116,9 +115,7 @@ export default function BackfillModal({ pipelineName, workspacePath, onClose }: 
 
                     {error ? <div className="backfill-error">{error}</div> : null}
 
-                    {!isTauri() ? (
-                        <div className="backfill-empty">Backfill is available in the desktop app.</div>
-                    ) : loading ? (
+                    {loading ? (
                         <div className="backfill-empty">Loading…</div>
                     ) : entries.length === 0 ? (
                         <div className="backfill-empty">

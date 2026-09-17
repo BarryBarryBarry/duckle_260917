@@ -398,7 +398,10 @@ export async function watermarkList(
     workspacePath: string,
     pipelineName: string,
 ): Promise<WatermarkEntry[]> {
-    if (!isTauri()) return [];
+    // The web edition's server answers watermark_list, watermark_set and
+    // watermark_clear. These returned at once outside the desktop app, so the
+    // web Backfill panel could neither show nor change saved state.
+    if (!isTauri() && !isWebBackend()) return [];
     try {
         return await invoke<WatermarkEntry[]>('watermark_list', {
             workspacePath,
@@ -418,7 +421,7 @@ export async function watermarkSet(
     value: string,
     valueType?: string,
 ): Promise<void> {
-    if (!isTauri()) return;
+    if (!isTauri() && !isWebBackend()) return;
     await invoke('watermark_set', {
         workspacePath,
         pipelineName,
@@ -434,7 +437,7 @@ export async function watermarkClear(
     pipelineName: string,
     nodeId: string,
 ): Promise<void> {
-    if (!isTauri()) return;
+    if (!isTauri() && !isWebBackend()) return;
     await invoke('watermark_clear', { workspacePath, pipelineName, nodeId });
 }
 
