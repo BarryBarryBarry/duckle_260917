@@ -1071,7 +1071,7 @@ export default function App() {
         },
         [activeJobId, markDirty],
     );
-    const { undo, redo } = useUndoRedo(
+    const { undo, redo, noteEdit } = useUndoRedo(
         activeJobId,
         activePipeline as unknown as CanvasSnapshot,
         applyPipelineSnapshot,
@@ -1276,6 +1276,10 @@ export default function App() {
 
     const handleUpdateNode = useCallback(
         (id: string, patch: Partial<DuckleNodeData>) => {
+            // A declared schema shares `data.schema` with run output, so undo
+            // history cannot see the edit on its own; this handler only receives
+            // genuine user edits, so it says so.
+            if ('schema' in patch) noteEdit();
             setNodes(ns =>
                 ns.map(n => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n)),
             );
@@ -1291,7 +1295,7 @@ export default function App() {
                 }, 800);
             }
         },
-        [setNodes, markDirty],
+        [setNodes, markDirty, noteEdit],
     );
 
     const selectedNode = useMemo(

@@ -15,6 +15,7 @@ import { discoverParams, resolveForRun } from '../src/run-resolve';
 import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterBuilderField';
 import { scheduleForSave } from '../src/schedule-save';
 import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
+import { UndoHistory, type CanvasSnapshot } from '../src/undo-history';
 import type { Schedule } from '../src/tauri-bridge';
 
 // The frontend directory, injected by check-logic.mjs: the bundle runs from a
@@ -286,6 +287,110 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         hook > start && field.slice(start, hook).includes('pickNamesNodeConnection(field)'),
         'handleChange calls onPickConnection for every connection-ref field, transportRef included',
     );
+}
+
+// ---------------------------------------------------------------------------
+// Undo reaches every edit, and only edits.
+//
+// Three ways a step was lost: an edit the history key could not see (a node's
+// SQL name, a declared schema) was not a step, so the next undo reverted it
+// along with the step before; an undo pressed while an edit was still inside
+// its 350 ms debounce skipped that edit for good; and switching pipeline inside
+// the debounce cancelled the pending edit. Driven with a fake clock, so "inside
+// the debounce" is exact.
+// ---------------------------------------------------------------------------
+{
+    const timers = new Map<number, () => void>();
+    let nextTimer = 0;
+    const timer = (fn: () => void, _ms: number) => {
+        const id = nextTimer++;
+        timers.set(id, fn);
+        return () => {
+            timers.delete(id);
+        };
+    };
+    const settle = () => {
+        for (const [id, fn] of [...timers]) {
+            timers.delete(id);
+            fn();
+        }
+    };
+    const snap = (data: Record<string, unknown>, x = 0): CanvasSnapshot => ({
+        nodes: [{ id: 'n', position: { x, y: 0 }, data: { label: 'n', componentId: 'xf.filter', ...data } }],
+        edges: [],
+    });
+    const fresh = (initial: CanvasSnapshot) => {
+        timers.clear();
+        const h = new UndoHistory('a', initial, timer, () => {});
+        h.observe('a', initial);
+        return h;
+    };
+    const same = (a: CanvasSnapshot | null, b: CanvasSnapshot) => a === b;
+
+    {
+        const s0 = snap({});
+        const h = fresh(s0);
+        const s1 = snap({ alias: 'orders' });
+        h.observe('a', s1);
+        settle();
+        check('undo: renaming a node\'s SQL name is a step', same(h.undo(), s0), 'undo did not return to the old name');
+    }
+    {
+        const s0 = snap({ schema: [{ name: 'id', type: 'int64' }] });
+        const h = fresh(s0);
+        const s1 = snap({ schema: [{ name: 'id', type: 'string' }] });
+        h.noteEdit();
+        h.observe('a', s1);
+        settle();
+        check('undo: editing a declared schema is a step', same(h.undo(), s0), 'undo did not return to the old schema');
+    }
+    {
+        const s0 = snap({});
+        const h = fresh(s0);
+        h.observe('a', snap({ schema: [{ name: 'id', type: 'int64' }], sampleRows: [{ id: 1 }] }));
+        settle();
+        check('undo: a run preview is not a step', h.undo() === null, 'a run filling schema and rows became undoable');
+    }
+    {
+        const s0 = snap({}, 0);
+        const h = fresh(s0);
+        const s1 = snap({}, 100);
+        h.observe('a', s1);
+        settle();
+        const s2 = snap({}, 200);
+        h.observe('a', s2); // still inside the debounce
+        const u = h.undo();
+        check('undo: an undo inside the debounce goes back one step, not two', same(u, s1), `went to x=${u?.nodes[0].position.x}`);
+        if (u) h.observe('a', u);
+        const r = h.redo();
+        check('undo: and redo brings the edit back', same(r, s2), `redo went to x=${r?.nodes[0].position.x}`);
+    }
+    {
+        const s0 = snap({}, 0);
+        const h = fresh(s0);
+        h.observe('a', snap({}, 100));
+        h.observe('a', snap({ sampleRows: [{ id: 1 }] }, 100)); // preview lands inside the debounce
+        settle();
+        check('undo: a preview inside the debounce does not cancel the pending edit', same(h.undo(), s0), 'the move was lost');
+    }
+    {
+        const s0 = snap({}, 0);
+        const h = fresh(s0);
+        const s1 = snap({}, 100);
+        h.observe('a', s1);
+        h.observe('b', snap({}, 5)); // switch pipeline inside the debounce
+        settle();
+        h.observe('a', s1);
+        check('undo: switching pipeline inside the debounce keeps the edit', same(h.undo(), s0), 'the move was lost');
+    }
+    {
+        const s0 = snap({}, 0);
+        const h = fresh(s0);
+        h.observe('a', snap({}, 100));
+        h.observe('a', snap({}, 0)); // dragged back where it was
+        settle();
+        check('undo: a burst that ends where it started is not a step', h.undo() === null, 'a no-op burst became a step');
+    }
 }
 
 if (failures.length) {
