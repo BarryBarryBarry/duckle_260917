@@ -67,6 +67,7 @@ export class UndoHistory {
     private pending: Pending | null = null;
     private suppress = false; // true while applying an undo/redo
     private editNoted = false;
+    private scope: string | undefined;
     private job: string;
     private latest: CanvasSnapshot;
 
@@ -85,11 +86,32 @@ export class UndoHistory {
         return this.stacks[job];
     }
 
-    /** The active pipeline as it is now. */
-    observe(job: string, snapshot: CanvasSnapshot): void {
+    /**
+     * The active pipeline as it is now, in `scope` - the workspace it belongs to.
+     *
+     * History was keyed by pipeline id alone, and ids repeat across workspaces
+     * (every new one starts at j1), so after a switch Ctrl+Z put the other
+     * workspace's pipeline on this canvas and autosave wrote it. A new scope
+     * starts with no history; an edit still in its debounce belonged to the old
+     * one and is dropped with it.
+     */
+    observe(job: string, snapshot: CanvasSnapshot, scope = ''): void {
         this.latest = snapshot;
         const noted = this.editNoted;
         this.editNoted = false;
+
+        if (this.scope !== scope) {
+            this.pending?.cancel();
+            this.pending = null;
+            this.stacks = {};
+            this.baseline = {};
+            this.suppress = false;
+            this.scope = scope;
+            this.job = job;
+            this.baseline[job] = snapshot;
+            this.changed();
+            return;
+        }
 
         // Pipeline switched: re-baseline, never record across pipelines. An edit
         // still inside its debounce belongs to the pipeline it was made in, so

@@ -1072,6 +1072,9 @@ export default function App() {
         [activeJobId, markDirty],
     );
     const { undo, redo, noteEdit } = useUndoRedo(
+        // A reload re-reads the files (after a git pull, say), so undo must not
+        // reach back to what was on the canvas before it.
+        `${workspacePathState ?? ''}#${reloadNonce}`,
         activeJobId,
         activePipeline as unknown as CanvasSnapshot,
         applyPipelineSnapshot,

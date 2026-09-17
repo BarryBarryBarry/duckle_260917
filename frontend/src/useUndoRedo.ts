@@ -15,6 +15,8 @@ const browserTimer = (fn: () => void, ms: number) => {
 };
 
 export function useUndoRedo(
+    /** The workspace the pipelines belong to; a new one starts a fresh history. */
+    scope: string,
     activeJobId: string,
     activePipeline: CanvasSnapshot,
     apply: (snapshot: CanvasSnapshot) => void,
@@ -29,8 +31,8 @@ export function useUndoRedo(
 
     // Record history on meaningful changes (debounced inside UndoHistory).
     useEffect(() => {
-        history.current!.observe(activeJobId, activePipeline);
-    }, [activePipeline, activeJobId]);
+        history.current!.observe(activeJobId, activePipeline, scope);
+    }, [activePipeline, activeJobId, scope]);
     useEffect(() => () => history.current!.dispose(), []);
 
     const undo = useCallback(() => {

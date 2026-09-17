@@ -401,6 +401,25 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         settle();
         check('undo: a burst that ends where it started is not a step', h.undo() === null, 'a no-op burst became a step');
     }
+    {
+        // History was keyed by pipeline id alone, and ids repeat across
+        // workspaces (every new one starts at j1). After switching workspace, Ctrl+Z
+        // put the OTHER workspace's pipeline onto this canvas, and autosave wrote it.
+        timers.clear();
+        const other = snap({}, 0);
+        const h = new UndoHistory('a', other, timer, () => {});
+        h.observe('a', other, 'C:/work/one');
+        h.observe('a', snap({}, 100), 'C:/work/one');
+        settle();
+        const mine = snap({ label: 'mine' }, 500);
+        h.observe('a', mine, 'C:/work/two');
+        const u = h.undo();
+        check(
+            'undo: switching workspace leaves nothing of the previous one to undo into',
+            u === null,
+            `undo restored a pipeline from the previous workspace (x=${u?.nodes[0].position.x})`,
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
