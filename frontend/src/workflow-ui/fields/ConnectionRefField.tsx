@@ -10,6 +10,20 @@ type Props = {
     onChange: (v: string) => void;
 };
 
+/**
+ * Whether a pick in this field names the node's saved connection.
+ *
+ * `onPickConnection` writes `connectionRef`, and only that field is the node's
+ * connection. A REST node's HTTP transport (`transportRef`) is a connection-ref
+ * field too, and calling the hook for it did two wrong things at once: it
+ * replaced the node's saved auth connection with the transport, and, since both
+ * updates spread the same pre-pick properties, the second write erased the
+ * first, so the transport itself was never saved.
+ */
+export function pickNamesNodeConnection(field: Pick<Field, 'key'>): boolean {
+    return field.key === 'connectionRef';
+}
+
 export function ConnectionRefField({ field, value, onChange }: Props) {
     const { repoItems, onPickConnection } = useContext(FieldContext);
 
@@ -37,7 +51,7 @@ export function ConnectionRefField({ field, value, onChange }: Props) {
 
     const handleChange = (id: string) => {
         onChange(id);
-        if (id && onPickConnection) {
+        if (id && onPickConnection && pickNamesNodeConnection(field)) {
             const item = connections.find(c => c.id === id);
             if (item?.payload) onPickConnection(item.payload as ConnectionPayload, id);
         }

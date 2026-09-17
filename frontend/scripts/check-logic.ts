@@ -14,6 +14,7 @@ import { livePreviewable } from '../src/live-preview';
 import { discoverParams, resolveForRun } from '../src/run-resolve';
 import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterBuilderField';
 import { scheduleForSave } from '../src/schedule-save';
+import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
 import type { Schedule } from '../src/tauri-bridge';
 
 // The frontend directory, injected by check-logic.mjs: the bundle runs from a
@@ -250,6 +251,40 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'schedule save: a new schedule carries no settings it was never given',
         fresh.timezone === undefined && fresh.exclude === undefined && fresh.name === 'Schedule',
         `got ${JSON.stringify(fresh)}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Picking a REST node's HTTP transport does not replace its saved connection.
+//
+// Every connection-ref field called onPickConnection, which writes
+// connectionRef. For transportRef that swapped the node's auth connection for
+// the transport, and the two updates both spread the pre-pick properties, so the
+// transport pick itself was erased.
+// ---------------------------------------------------------------------------
+{
+    check(
+        'connection pick: the saved-connection field names the node connection',
+        pickNamesNodeConnection({ key: 'connectionRef' }),
+        'picking a saved connection no longer sets connectionRef',
+    );
+    check(
+        'connection pick: the HTTP transport field does not',
+        !pickNamesNodeConnection({ key: 'transportRef' }),
+        'picking a transport would replace the node connection',
+    );
+    const field = readFileSync(resolve(__FRONTEND_DIR__, 'src/workflow-ui/fields/ConnectionRefField.tsx'), 'utf8');
+    const start = field.indexOf('const handleChange = ');
+    const hook = start < 0 ? -1 : field.indexOf('onPickConnection(', start);
+    check(
+        'connection pick: the change handler is still where it was',
+        start >= 0 && hook > start,
+        'handleChange moved or changed shape; update this check to follow it',
+    );
+    check(
+        'connection pick: the change handler asks before calling onPickConnection',
+        hook > start && field.slice(start, hook).includes('pickNamesNodeConnection(field)'),
+        'handleChange calls onPickConnection for every connection-ref field, transportRef included',
     );
 }
 
