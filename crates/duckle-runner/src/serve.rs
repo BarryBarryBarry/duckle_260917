@@ -1240,6 +1240,48 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
             let report = duckle_duckdb_engine::trust::trust_report(&pipeline, None);
             respond_json(&report)
         }
+        // The Data Catalog panel: the engine calls the desktop commands make,
+        // against this server's workspace, never the one the request names.
+        "workspace_catalog" => catalog_reply(duckle_duckdb_engine::catalog::view(&state.workspace)),
+        "workspace_catalog_rebuild" => catalog_reply(
+            duckle_duckdb_engine::catalog::build_and_save(&state.workspace)
+                .and_then(|_| duckle_duckdb_engine::catalog::view(&state.workspace)),
+        ),
+        "workspace_catalog_annotate" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let text = |key: &str| args.get(key).and_then(|v| v.as_str()).map(str::to_string);
+            let tags = args
+                .get("tags")
+                .and_then(|v| v.as_array())
+                .map(|list| list.iter().filter_map(|t| t.as_str().map(str::to_string)).collect());
+            match duckle_duckdb_engine::catalog::annotate(
+                &state.workspace,
+                args.get("pipelines").and_then(|v| v.as_bool()).unwrap_or(false),
+                &text("name").unwrap_or_default(),
+                text("owner"),
+                text("contact"),
+                text("description"),
+                tags,
+            ) {
+                Ok(()) => catalog_reply(duckle_duckdb_engine::catalog::view(&state.workspace)),
+                Err(e) => respond_err("400 Bad Request", &e),
+            }
+        }
+        "workspace_catalog_inspect" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let asset = args.get("asset").and_then(|v| v.as_str()).unwrap_or_default();
+            match duckle_duckdb_engine::catalog::inspect_target(&state.workspace, asset) {
+                Ok((format, props)) => match DuckdbEngine::new(state.duckdb.clone()).inspect(&format, props) {
+                    Ok(inspection) => respond_json(&json!(inspection
+                        .schema
+                        .iter()
+                        .map(|c| c.name.clone())
+                        .collect::<Vec<_>>())),
+                    Err(e) => respond_err("422 Unprocessable Entity", &e.to_string()),
+                },
+                Err(e) => respond_err("400 Bad Request", &e),
+            }
+        }
         // Tells the browser editor which server workspace it is editing, so it
         // can auto-load it (there is no native folder picker on the web).
         "web_bootstrap" => respond_json(&serde_json::json!({ "workspace": state.workspace.to_string_lossy() }),
@@ -1436,6 +1478,13 @@ fn run_stream(
         .map_err(|e| e.to_string())?;
     stream.flush().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn catalog_reply(view: Result<duckle_duckdb_engine::catalog::CatalogView, String>) -> Reply {
+    match view {
+        Ok(view) => respond_json(&json!(view)),
+        Err(e) => respond_err("500 Internal Server Error", &e),
+    }
 }
 
 /// Web-editor autodetect (issue #148). The browser cannot read the server's
@@ -6520,6 +6569,81 @@ mod tests {
             "an id that is not a file name must not name a path: {}",
             escaped.display()
         );
+    }
+
+    /// The web editor's Data Catalog shows the workspace's assets and saves what
+    /// is written about them.
+    ///
+    /// The web server had none of the catalog commands, which the web shim turns
+    /// into an empty answer, so the panel said "No assets yet" for a workspace
+    /// full of pipelines and an owner typed into it went nowhere. The panel's four
+    /// commands make the engine calls the desktop makes, against this server's
+    /// workspace rather than the one the request names.
+    #[test]
+    fn the_web_data_catalog_shows_and_annotates_the_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::write(ws.join("orders.csv"), "id,amount\n1,10\n").unwrap();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(
+            ws.join("pipelines").join("p_orders.json"),
+            serde_json::json!({
+                "name": "orders",
+                "nodes": [{ "id": "s", "data": { "componentId": "src.csv",
+                    "properties": { "path": ws.join("orders.csv").to_string_lossy(), "hasHeader": true } } }],
+                "edges": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let duckdb = std::env::var("DUCKLE_DUCKDB_BIN").ok();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from(duckdb.clone().unwrap_or_else(|| "duckdb".into())),
+            dist: ws.clone(),
+            host: "127.0.0.1".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "127.0.0.1", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        let cmd = |name: &str, body: serde_json::Value| {
+            let mut req = request("POST", &format!("/api/cmd/{name}"), Some("Bearer s3cret"));
+            req.body = serde_json::to_vec(&body).unwrap();
+            let reply = route_web(&req, &state);
+            (reply.code(), serde_json::from_slice::<serde_json::Value>(&reply.body).unwrap_or_default())
+        };
+
+        let (code, view) = cmd("workspace_catalog", serde_json::json!({ "workspace": "/somewhere/else" }));
+        assert_eq!(code, 200, "{view}");
+        let asset = view["assets"][0]["id"].as_str().expect("the pipeline's source is an asset").to_string();
+
+        let (code, view) = cmd(
+            "workspace_catalog_annotate",
+            serde_json::json!({ "workspace": "/somewhere/else", "pipelines": false, "name": asset,
+                "owner": "data-eng", "contact": null, "description": null, "tags": ["finance"] }),
+        );
+        assert_eq!(code, 200, "{view}");
+        let annotated = view["assets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["id"] == asset.as_str())
+            .expect("the annotated asset");
+        assert_eq!(annotated["owner"], "data-eng", "{annotated}");
+        assert_eq!(annotated["tags"], serde_json::json!(["finance"]), "{annotated}");
+
+        assert_eq!(cmd("workspace_catalog_rebuild", serde_json::json!({})).0, 200);
+        let (code, refused) = cmd("workspace_catalog_inspect", serde_json::json!({ "asset": "nothing-reads-this" }));
+        assert_eq!(code, 400, "{refused}");
+        assert!(
+            refused["error"].as_str().unwrap_or_default().contains("nothing in this workspace READS"),
+            "{refused}"
+        );
+        if duckdb.is_some() {
+            let (code, columns) = cmd("workspace_catalog_inspect", serde_json::json!({ "asset": asset }));
+            assert_eq!(code, 200, "{columns}");
+            assert_eq!(columns, serde_json::json!(["id", "amount"]));
+        }
     }
 
     /// The web editor knows the values in the server's global context file.

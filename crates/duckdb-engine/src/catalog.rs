@@ -1423,6 +1423,40 @@ pub fn load(workspace: &Path) -> Result<Option<Catalog>, String> {
     serde_json::from_str(&text).map(Some).map_err(|e| format!("parse catalog.json: {e}"))
 }
 
+/// The source node an asset's live schema is read through: its inspect format
+/// and that node's saved properties.
+///
+/// Found by a node that READS the asset, so inspecting authenticates exactly the
+/// way the pipeline does rather than inventing a second way to connect. The
+/// catalog keeps names, not configuration, so the pipeline is re-read for the
+/// node's live properties. Every surface that inspects an asset asks here.
+pub fn inspect_target(workspace: &Path, asset: &str) -> Result<(String, Value), String> {
+    let cat = load(workspace)?.ok_or("no catalog has been built for this workspace yet")?;
+    let touch = cat
+        .touches
+        .iter()
+        .find(|t| t.asset == asset && t.component_id.starts_with("src."))
+        .ok_or_else(|| {
+            format!("nothing in this workspace READS {asset}, so there is no node to inspect it through")
+        })?;
+    let path = discover_pipeline_files(workspace)
+        .into_iter()
+        .find(|p| p.file_stem().map(|s| s.to_string_lossy() == touch.pipeline_id.as_str()).unwrap_or(false))
+        .ok_or_else(|| format!("pipeline {} is no longer in this workspace", touch.pipeline_id))?;
+    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let doc: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let node = doc
+        .get("nodes")
+        .and_then(|n| n.as_array())
+        .and_then(|nodes| {
+            nodes.iter().find(|n| n.get("id").and_then(|i| i.as_str()) == Some(&touch.node_id))
+        })
+        .ok_or_else(|| format!("node {} is no longer in {}", touch.node_id, touch.pipeline_id))?;
+    let props = node.pointer("/data/properties").cloned().unwrap_or(Value::Null);
+    let format = touch.component_id.strip_prefix("src.").unwrap_or(&touch.component_id);
+    Ok((format.to_string(), props))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

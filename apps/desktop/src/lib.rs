@@ -1071,37 +1071,10 @@ fn workspace_catalog_annotate(
 /// does rather than inventing a second way to connect.
 #[tauri::command]
 fn workspace_catalog_inspect(workspace: String, asset: String) -> Result<Vec<String>, String> {
-    use duckle_duckdb_engine::catalog;
-    let ws = std::path::Path::new(&workspace);
-    let cat = catalog::load(ws)?.ok_or("no catalog has been built for this workspace yet")?;
-    let touch = cat
-        .touches
-        .iter()
-        .find(|t| t.asset == asset && t.component_id.starts_with("src."))
-        .ok_or_else(|| {
-            format!("nothing in this workspace READS {asset}, so there is no node to inspect it through")
-        })?;
-
-    // Re-read the pipeline for that node's live properties: the catalog keeps
-    // names, not configuration, and inspecting needs the connection details.
-    let path = catalog::discover_pipeline_files(ws)
-        .into_iter()
-        .find(|p| p.file_stem().map(|s| s.to_string_lossy() == touch.pipeline_id.as_str()).unwrap_or(false))
-        .ok_or_else(|| format!("pipeline {} is no longer in this workspace", touch.pipeline_id))?;
-    let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let doc: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    let node = doc
-        .get("nodes")
-        .and_then(|n| n.as_array())
-        .and_then(|nodes| {
-            nodes.iter().find(|n| n.get("id").and_then(|i| i.as_str()) == Some(&touch.node_id))
-        })
-        .ok_or_else(|| format!("node {} is no longer in {}", touch.node_id, touch.pipeline_id))?;
-    let props = node.pointer("/data/properties").cloned().unwrap_or(serde_json::Value::Null);
-    let format = touch.component_id.strip_prefix("src.").unwrap_or(&touch.component_id);
-
+    let (format, props) =
+        duckle_duckdb_engine::catalog::inspect_target(std::path::Path::new(&workspace), &asset)?;
     let engine = engine()?;
-    let inspection = engine.inspect(format, props).map_err(|e| e.to_string())?;
+    let inspection = engine.inspect(&format, props).map_err(|e| e.to_string())?;
     Ok(inspection.schema.iter().map(|c| c.name.clone()).collect())
 }
 
