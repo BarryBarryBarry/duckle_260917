@@ -1001,6 +1001,14 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
         //
         // The workspace is ALWAYS this server's, never the one in the payload:
         // a browser must not be able to point a state edit at another folder.
+        // The global context file's values, which the editor needs before a run:
+        // to know which ${KEY} is already bound, and to let the file win over a
+        // static context default as it does on the desktop. This server's own
+        // workspace is read, never the one the request names.
+        "settings_load_context_vars" => respond_json(
+            &serde_json::to_value(duckle_duckdb_engine::context::context_file_vars(&state.workspace))
+                .unwrap_or(json!({})),
+        ),
         // The History tab. Same answer as the desktop's run_history: this
         // pipeline's retained runs, newest first. The id names the history file,
         // so one that is not a plain file name is refused.
@@ -6512,6 +6520,37 @@ mod tests {
             "an id that is not a file name must not name a path: {}",
             escaped.display()
         );
+    }
+
+    /// The web editor knows the values in the server's global context file.
+    ///
+    /// The server had no settings_load_context_vars, which the web shim turns into
+    /// an empty answer, so Run asked for a ${KEY} the file defines. And because the
+    /// browser substitutes a static context's value before the run reaches the
+    /// server, a key in both kept the static default where the desktop takes the
+    /// file's value. The workspace named in the request is not the one read.
+    #[test]
+    fn the_web_editor_reads_the_servers_global_context_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join(".duckle")).unwrap();
+        std::fs::write(ws.join(".duckle").join("settings.json"), r#"{"context_file":"run.env"}"#).unwrap();
+        std::fs::write(ws.join("run.env"), "REGION=eu-west\nBATCH=42\n").unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from("duckdb"),
+            dist: ws.clone(),
+            host: "127.0.0.1".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "127.0.0.1", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        let mut req = request("POST", "/api/cmd/settings_load_context_vars", Some("Bearer s3cret"));
+        req.body = serde_json::to_vec(&serde_json::json!({ "workspace": "/somewhere/else" })).unwrap();
+        let reply = route_web(&req, &state);
+        assert_eq!(reply.code(), 200, "{}", String::from_utf8_lossy(&reply.body));
+        let vars: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(vars, serde_json::json!({ "REGION": "eu-west", "BATCH": "42" }));
     }
 
     /// The web editor's History tab lists the pipeline's runs, and the runs the
