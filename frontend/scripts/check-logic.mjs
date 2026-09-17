@@ -19,8 +19,11 @@ const stubTauri = {
         build.onResolve({ filter: /(^|\/)tauri-dialog$/ }, () => ({ path: 'stub', namespace: 'stub' }));
         build.onResolve({ filter: /^@tauri-apps\// }, () => ({ path: 'stub', namespace: 'stub' }));
         build.onLoad({ filter: /.*/, namespace: 'stub' }, () => ({
+            // A check can stand in for the backend by setting
+            // globalThis.__checkLogicInvoke; otherwise every command answers
+            // null, which is what the web shim makes of a 404.
             contents:
-                'export const invoke = async () => null;' +
+                'export const invoke = async (cmd, args) => globalThis.__checkLogicInvoke ? globalThis.__checkLogicInvoke(cmd, args) : null;' +
                 'export class Channel {}' +
                 'export const isTauri = () => false;' +
                 'export default {};',

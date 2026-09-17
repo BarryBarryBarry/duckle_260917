@@ -16,6 +16,7 @@ import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterB
 import { scheduleForSave } from '../src/schedule-save';
 import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
 import { UndoHistory, type CanvasSnapshot } from '../src/undo-history';
+import { saveItemPayload } from '../src/workspace';
 import type { Schedule } from '../src/tauri-bridge';
 
 // The frontend directory, injected by check-logic.mjs: the bundle runs from a
@@ -391,6 +392,58 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         settle();
         check('undo: a burst that ends where it started is not a step', h.undo() === null, 'a no-op burst became a step');
     }
+}
+
+// ---------------------------------------------------------------------------
+// A connection whose secrets cannot be encrypted is not written in clear text.
+//
+// The server refuses to encrypt for a role that may not, and says encrypting is
+// strict so a failure never falls through to plaintext. The editor caught the
+// refusal and wrote the payload it had been given, password and all. Driven
+// through the real saveItemPayload against a fake web backend that records
+// every file write.
+// ---------------------------------------------------------------------------
+{
+    type Invoke = (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    const g = globalThis as unknown as { fetch: typeof fetch; __checkLogicInvoke?: Invoke };
+    const realFetch = g.fetch;
+    const writes: string[] = [];
+    g.fetch = (async (url: string, init?: { body?: string }) => {
+        const op = String(url).replace('/api/fs/', '');
+        const body = JSON.parse(init?.body ?? '{}') as { content?: string };
+        if (op === 'write') writes.push(body.content ?? '');
+        return new Response(JSON.stringify(op === 'exists' ? { exists: true } : {}), { status: 200 });
+    }) as unknown as typeof fetch;
+    const secret = 'hunter2-not-for-disk';
+    const payload = { kind: 'postgres', host: 'db.local', username: 'u', password: secret };
+    const backends: [string, Invoke][] = [
+        ['refused by the server', async () => {
+            throw new Error('connection_encrypt_payload: HTTP 403 forbidden');
+        }],
+        ['missing from the backend (a 404 the shim turns into null)', async () => null],
+    ];
+    for (const [why, invoke] of backends) {
+        writes.length = 0;
+        g.__checkLogicInvoke = invoke;
+        const ok = await saveItemPayload('/ws', 'connection', 'c1', payload);
+        check(
+            `connection save: encryption ${why} writes nothing`,
+            writes.length === 0,
+            `wrote ${JSON.stringify(writes)}`,
+        );
+        check(`connection save: encryption ${why} reports a failed save`, ok === false, 'reported saved');
+    }
+    writes.length = 0;
+    g.__checkLogicInvoke = async (_cmd, args) =>
+        JSON.stringify({ ...JSON.parse(String(args.payloadJson)), password: 'enc:v2:sealed' });
+    const ok = await saveItemPayload('/ws', 'connection', 'c1', payload);
+    check(
+        'connection save: an encrypted payload is still written',
+        ok === true && writes.length === 1 && writes[0].includes('enc:v2:sealed') && !writes[0].includes(secret),
+        `ok=${ok}, wrote ${JSON.stringify(writes)}`,
+    );
+    g.__checkLogicInvoke = undefined;
+    g.fetch = realFetch;
 }
 
 if (failures.length) {

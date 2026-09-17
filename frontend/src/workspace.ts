@@ -124,27 +124,31 @@ async function fs(): Promise<FsLib> {
 }
 
 // Encrypt / decrypt a connection payload's sensitive fields (password, tokens,
-// keys) via the desktop crypto commands, which use a per-workspace key under
-// `.duckle/keys/`. On any error we fall back to the original payload so a save
-// never loses data and a load never blocks. `${...}` placeholders and
-// non-secret fields are left untouched by the command.
+// keys) via the crypto commands, which use a per-workspace key under
+// `.duckle/keys/`. `${...}` placeholders and non-secret fields are left
+// untouched by the command.
+//
+// Encrypting throws rather than falling back. It used to return the payload it
+// was given on any error, so a server that refused to encrypt (a role that may
+// not) had the password written to connections/*.json in clear text, and a
+// backend without the command - which the web shim answers with null - had the
+// connection overwritten with `null`. A failed save keeps the item changed, so
+// the editor retries it; decrypting stays lenient so a load never blocks.
 async function encryptConnectionPayload(
     workspace: string,
     connectionId: string,
     payload: unknown,
 ): Promise<unknown> {
-    try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const enc = await invoke<string>('connection_encrypt_payload', {
-            workspace,
-            connectionId,
-            payloadJson: JSON.stringify(payload),
-        });
-        return JSON.parse(enc);
-    } catch (err) {
-        console.error('encrypt connection failed', err);
-        return payload;
+    const { invoke } = await import('@tauri-apps/api/core');
+    const enc = await invoke<string | null>('connection_encrypt_payload', {
+        workspace,
+        connectionId,
+        payloadJson: JSON.stringify(payload),
+    });
+    if (typeof enc !== 'string') {
+        throw new Error('connection_encrypt_payload is not available on this backend');
     }
+    return JSON.parse(enc);
 }
 
 async function decryptConnectionPayload(
