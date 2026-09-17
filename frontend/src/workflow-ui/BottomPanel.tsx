@@ -44,9 +44,13 @@ export default function BottomPanel({
 
     // Auto-expand Output tab when a run finishes. Only then: the editor builds a
     // new run result for every streamed event, and reacting to each one took the
-    // tab back to Output, and re-expanded the panel, all through the run.
+    // tab back to Output, and re-expanded the panel, all through the run. And once
+    // per result: going back to the pipeline that ran shows the same result again,
+    // which is not a run ending.
+    const openedFor = useRef<RunResult | null>(null);
     useEffect(() => {
-        if (runResult && !isRunning) {
+        if (runResult && !isRunning && openedFor.current !== runResult) {
+            openedFor.current = runResult;
             setTab('output');
             setCollapsed(false);
         }

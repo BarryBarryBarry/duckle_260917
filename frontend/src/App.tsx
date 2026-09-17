@@ -1327,6 +1327,12 @@ export default function App() {
     );
 
     const [runResult, setRunResult] = useState<RunResult | null>(null);
+    // The pipeline the run result belongs to. The canvas badges, the Output tab
+    // and the Problems count show it only while that pipeline is open: a
+    // duplicated pipeline keeps its node ids, so a global result made the copy
+    // look as if it had run.
+    const [runResultFor, setRunResultFor] = useState<string | null>(null);
+    const shownRunResult = runResultFor === activeJobId ? runResult : null;
 
     const handleEvent = useCallback(
         (evt: PipelineEvent) => {
@@ -1489,6 +1495,7 @@ export default function App() {
             }
             setIsRunning(true);
             setRunResult(null);
+            setRunResultFor(activeJobId);
             const start = performance.now();
             try {
                 // Inline SQL routines + substitute ${context.var} (and the
@@ -1544,6 +1551,7 @@ export default function App() {
             isRunningRef.current = true;
             setIsRunning(true);
             setRunResult(null);
+            setRunResultFor(activeJobId);
             const start = performance.now();
             const pipelineName = repo.find(r => r.id === activeJobId)?.name ?? activeJobId;
             void settingsLoadContextVars(workspacePathState ?? '')
@@ -2460,7 +2468,7 @@ export default function App() {
     // maximized then immediately restored. Do not re-add one.
 
     return (
-        <RunStatusContext.Provider value={runResult?.nodes ?? {}}>
+        <RunStatusContext.Provider value={shownRunResult?.nodes ?? {}}>
         <div className="app">
             <WindowResizeHandles />
             <header
@@ -2787,7 +2795,7 @@ export default function App() {
                         nodes={nodes}
                         planNodes={planNodes}
                         edges={edges}
-                        runResult={runResult}
+                        runResult={shownRunResult}
                         isRunning={isRunning}
                         nodeLabels={nodeLabels}
                         workspacePath={workspacePathState}
@@ -2820,7 +2828,7 @@ export default function App() {
             </main>
 
             <BottomPanel
-                runResult={runResult}
+                runResult={shownRunResult}
                 isRunning={isRunning}
                 nodeLabels={nodeLabels}
                 terminalNodeIds={terminalNodeIds}

@@ -955,6 +955,39 @@ function context(name: string, vars: Record<string, string>): RepoItem {
 }
 
 // ---------------------------------------------------------------------------
+// A run's badges and results belong to the pipeline that ran.
+//
+// The canvas badges, the Output tab and the Problems count all read one run
+// result, whichever pipeline's tab was open. A duplicated pipeline keeps its
+// node ids, so after running the original the copy showed every node as run
+// and "Run succeeded", although it never ran.
+// ---------------------------------------------------------------------------
+{
+    const app = readFileSync(resolve(__FRONTEND_DIR__, 'src/App.tsx'), 'utf8');
+    const consumers = [
+        /<RunStatusContext\.Provider value=\{(\w+)\?\.nodes/,
+        /<EditorTabs[\s\S]*?runResult=\{(\w+)\}/,
+        /<BottomPanel[\s\S]*?runResult=\{(\w+)\}/,
+    ].map(re => app.match(re)?.[1] ?? '(not found)');
+    check(
+        'run scope: the canvas, editor tabs and bottom panel show only the open pipeline run',
+        consumers.every(name => name !== 'runResult' && name !== '(not found)') &&
+            /setRunResultFor\(activeJobId\)/.test(app),
+        `they read ${JSON.stringify(consumers)}`,
+    );
+    // Going back to the pipeline that ran shows its result again, which is not a
+    // run ending: the panel must not reopen Output, and expand, on a tab switch.
+    const panel = readFileSync(resolve(__FRONTEND_DIR__, 'src/workflow-ui/BottomPanel.tsx'), 'utf8');
+    const start = panel.indexOf('// Auto-expand Output tab when a run finishes.');
+    const effect = start < 0 ? '' : panel.slice(start, panel.indexOf(']);', start) + 3);
+    check(
+        'run scope: returning to a pipeline does not reopen Output for a result already shown',
+        /(\w+)\.current !== runResult/.test(effect),
+        `the effect reopens on every appearance of a result: ${effect.replace(/\s+/g, ' ')}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // A run resolves the context first and the date builtins over the result.
 //
 // That is the order of the scheduler, and now of the runner and the server. The
