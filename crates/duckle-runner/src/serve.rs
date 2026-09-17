@@ -278,52 +278,7 @@ pub fn run() -> Result<(), String> {
     std::env::set_var("DUCKLE_LOG_DIR", workspace.join("logs"));
     apply_workspace_memory_limit(&workspace);
 
-    // #259: anything still marked `running` was not finished by a process that
-    // is alive now, because this one is starting. Say so, rather than leaving a
-    // receipt claiming a run is in progress forever. `interrupted` is
-    // deliberately distinct from `error`: the run did not fail, it stopped
-    // being observed, and a caller that conflates them retries work that may
-    // well have completed.
-    let reclaimed =
-        duckle_duckdb_engine::retry::reconcile(&workspace, &|pid| pid == std::process::id());
-    if !reclaimed.is_empty() {
-        eprintln!(
-            "duckle: {} run(s) were still marked running and are now interrupted: {}",
-            reclaimed.len(),
-            reclaimed.join(", ")
-        );
-    }
-    // #295: and the same for a backfill's slices, which had the reconciler but
-    // no caller. A slice left `running` by a killed process is not claimable
-    // (only `requested` is) and `retry` only moves `failed` and `interrupted`,
-    // so nothing could ever pick it up again and the backfill was stuck for
-    // good. This is the one call that makes it recoverable.
-    let slices =
-        duckle_duckdb_engine::backfill::reconcile(&workspace, &|pid| pid == std::process::id());
-    if !slices.is_empty() {
-        eprintln!(
-            "duckle: {} backfill(s) had slices still marked running and are now interrupted: {}",
-            slices.len(),
-            slices.join(", ")
-        );
-    }
-    // #325: and the third reconciler that had no caller. A publication whose
-    // event append failed is a gap in an index, not lost work - the run record
-    // carries everything the event does. But nothing rebuilt it, so the
-    // warning history.rs prints ("will not be seen until the log is
-    // reconciled") named a recovery that never came, and the downstream
-    // consumer simply never ran. Bounded by the sweep watermark, so it rebuilds
-    // gaps without putting back what retention removed.
-    let rebuilt = duckle_duckdb_engine::materialize::reconcile(
-        &workspace,
-        &discover_pipelines(&workspace).into_iter().map(|(_, id, _)| id).collect::<Vec<_>>(),
-    );
-    if !rebuilt.is_empty() {
-        eprintln!(
-            "duckle: {} publication event(s) were missing from the log and have been rebuilt",
-            rebuilt.len()
-        );
-    }
+    reconcile_at_startup(&workspace);
 
     // Decide who may use this console before binding anything. An exposed bind
     // with no credential does not refuse to start any more - it comes up
@@ -492,52 +447,7 @@ pub fn run_web() -> Result<(), String> {
     std::env::set_var("DUCKLE_LOG_DIR", workspace.join("logs"));
     apply_workspace_memory_limit(&workspace);
 
-    // #259: anything still marked `running` was not finished by a process that
-    // is alive now, because this one is starting. Say so, rather than leaving a
-    // receipt claiming a run is in progress forever. `interrupted` is
-    // deliberately distinct from `error`: the run did not fail, it stopped
-    // being observed, and a caller that conflates them retries work that may
-    // well have completed.
-    let reclaimed =
-        duckle_duckdb_engine::retry::reconcile(&workspace, &|pid| pid == std::process::id());
-    if !reclaimed.is_empty() {
-        eprintln!(
-            "duckle: {} run(s) were still marked running and are now interrupted: {}",
-            reclaimed.len(),
-            reclaimed.join(", ")
-        );
-    }
-    // #295: and the same for a backfill's slices, which had the reconciler but
-    // no caller. A slice left `running` by a killed process is not claimable
-    // (only `requested` is) and `retry` only moves `failed` and `interrupted`,
-    // so nothing could ever pick it up again and the backfill was stuck for
-    // good. This is the one call that makes it recoverable.
-    let slices =
-        duckle_duckdb_engine::backfill::reconcile(&workspace, &|pid| pid == std::process::id());
-    if !slices.is_empty() {
-        eprintln!(
-            "duckle: {} backfill(s) had slices still marked running and are now interrupted: {}",
-            slices.len(),
-            slices.join(", ")
-        );
-    }
-    // #325: and the third reconciler that had no caller. A publication whose
-    // event append failed is a gap in an index, not lost work - the run record
-    // carries everything the event does. But nothing rebuilt it, so the
-    // warning history.rs prints ("will not be seen until the log is
-    // reconciled") named a recovery that never came, and the downstream
-    // consumer simply never ran. Bounded by the sweep watermark, so it rebuilds
-    // gaps without putting back what retention removed.
-    let rebuilt = duckle_duckdb_engine::materialize::reconcile(
-        &workspace,
-        &discover_pipelines(&workspace).into_iter().map(|(_, id, _)| id).collect::<Vec<_>>(),
-    );
-    if !rebuilt.is_empty() {
-        eprintln!(
-            "duckle: {} publication event(s) were missing from the log and have been rebuilt",
-            rebuilt.len()
-        );
-    }
+    reconcile_at_startup(&workspace);
     // The editor writes files, edits connections and runs pipelines, so it is
     // at least as powerful as the console and gets the same rule: loopback is
     // open, anything else needs a credential before the socket is bound.
@@ -2825,6 +2735,59 @@ fn sign_in(state: &State, req: &Request) -> Reply {
 
 /// Scan the workspace for pipeline files (a `.json` with a top-level `nodes`
 /// array), skipping bookkeeping folders. Returns (absolute path, id, value).
+/// Put right what an earlier process left behind, before this one takes work.
+///
+/// One function for `serve` and `web`, which each carried an identical copy of
+/// this - and had each been handed the same wrong answer to "is that process
+/// alive": only this one. So starting either declared EVERY other process's
+/// live runs and backfill slices interrupted, including the desktop's own when
+/// it opened the web panel, and a backfill retry then ran a still-running slice
+/// a second time beside itself. Liveness is now actually checked.
+fn reconcile_at_startup(workspace: &Path) {
+    let alive = &duckle_duckdb_engine::runlock::process_alive;
+
+    // #259: anything still marked `running` whose process has gone was not
+    // finished. Say so, rather than leaving a receipt claiming a run is in
+    // progress forever. `interrupted` is deliberately distinct from `error`: the
+    // run did not fail, it stopped being observed, and a caller that conflates
+    // them retries work that may well have completed.
+    let reclaimed = duckle_duckdb_engine::retry::reconcile(workspace, alive);
+    if !reclaimed.is_empty() {
+        eprintln!(
+            "duckle: {} run(s) were still marked running and are now interrupted: {}",
+            reclaimed.len(),
+            reclaimed.join(", ")
+        );
+    }
+    // #295: and the same for a backfill's slices, which had the reconciler but
+    // no caller. A slice left `running` by a killed process is not claimable
+    // (only `requested` is) and `retry` only moves `failed` and `interrupted`,
+    // so nothing could ever pick it up again and the backfill was stuck for
+    // good. This is the one call that makes it recoverable.
+    let slices = duckle_duckdb_engine::backfill::reconcile(workspace, alive);
+    if !slices.is_empty() {
+        eprintln!(
+            "duckle: {} backfill(s) had slices still marked running and are now interrupted: {}",
+            slices.len(),
+            slices.join(", ")
+        );
+    }
+    // #325: and the third reconciler that had no caller. A publication whose
+    // event append failed is a gap in an index, not lost work - the run record
+    // carries everything the event does. Bounded by the sweep watermark, so it
+    // rebuilds gaps without putting back what retention removed.
+    let rebuilt = duckle_duckdb_engine::materialize::reconcile(
+        workspace,
+        &discover_pipelines(workspace).into_iter().map(|(_, id, _)| id).collect::<Vec<_>>(),
+    );
+    if !rebuilt.is_empty() {
+        eprintln!(
+            "duckle: {} publication event(s) were missing from the log and have been rebuilt",
+            rebuilt.len()
+        );
+    }
+}
+
 fn discover_pipelines(workspace: &Path) -> Vec<(PathBuf, String, Value)> {
     let mut out = Vec::new();
     // One walk, shared with the catalog. Each keeping its own copy of the
@@ -6406,6 +6369,53 @@ mod tests {
         assert_eq!(schedules::load(ws).unwrap().len(), list.len(), "re-imported on restart");
     }
 
+    /// `serve` and `web` reconcile at startup through one function, and it must
+    /// leave another process's live run alone.
+    ///
+    /// Both used to pass "only this process is alive", so starting either one -
+    /// including the desktop opening its web panel on the same workspace -
+    /// declared every other live run interrupted. The other runner here is a
+    /// real, different process.
+    #[test]
+    fn startup_reconcile_leaves_another_processes_live_run_alone() {
+        use duckle_duckdb_engine::retry;
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+
+        #[cfg(windows)]
+        let mut other = std::process::Command::new("cmd")
+            .args(["/C", "ping", "-n", "60", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn the other runner");
+        #[cfg(unix)]
+        let mut other = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .expect("spawn the other runner");
+
+        retry::begin(ws, "run-live", "manual", "daily", "/p.json", "hash", None);
+        let mut r = retry::load(ws, "run-live").unwrap();
+        r.pid = Some(other.id());
+        retry::write(ws, &r).unwrap();
+
+        super::reconcile_at_startup(ws);
+        assert_eq!(
+            retry::load(ws, "run-live").unwrap().state,
+            retry::RUNNING,
+            "starting serve declared another process's live run interrupted"
+        );
+
+        other.kill().expect("kill the other runner");
+        other.wait().expect("reap it");
+        super::reconcile_at_startup(ws);
+        assert_eq!(
+            retry::load(ws, "run-live").unwrap().state,
+            retry::INTERRUPTED,
+            "a run whose process has gone was not reclaimed"
+        );
+    }
+
     #[test]
     fn normalize_cron_pads_five_fields_and_validates() {
         // A standard 5-field cron gets a "0 " seconds field prepended so the
@@ -6600,25 +6610,32 @@ mod tests {
     /// repo; its twin for run receipts was called here twice.
     ///
     /// Read from the source because the symptom is invisible until someone
-    /// kills a backfill and tries to resume it days later. The needle is built
-    /// from pieces so it cannot match itself in this file.
+    /// kills a backfill and tries to resume it days later. Both start paths go
+    /// through one startup reconcile, so the check is that both call it and that
+    /// it reconciles backfills and run receipts. The needles are built from
+    /// pieces so they cannot match themselves in this file.
     #[test]
     fn a_killed_backfill_is_reconciled_when_the_server_starts() {
         let src = include_str!("serve.rs");
-        let needle = format!("backfill::{}(&workspace", "reconcile");
+        let startup = format!("{}(&workspace);", "reconcile_at_startup");
         let calls = src
             .lines()
             .map(str::trim_start)
-            .filter(|l| l.contains(&needle))
+            .filter(|l| l.starts_with(&startup))
             .count();
         assert!(
             calls >= 2,
-            "backfill slices are reconciled at {calls} of the two server start paths, so a              backfill killed mid-run stays stuck in `running` and can never be retried"
+            "the startup reconcile runs at {calls} of the two server start paths, so a \
+             backfill killed mid-run stays stuck in `running` and can never be retried"
+        );
+        assert!(
+            src.contains(&format!("backfill::{}(workspace", "reconcile")),
+            "backfill slices are no longer reconciled at startup"
         );
         // And the run-receipt twin is still there, so this test cannot pass by
         // one having replaced the other.
         assert!(
-            src.contains(&format!("retry::{}(&workspace", "reconcile")),
+            src.contains(&format!("retry::{}(workspace", "reconcile")),
             "run receipts are no longer reconciled at startup"
         );
     }

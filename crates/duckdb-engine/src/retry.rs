@@ -1167,13 +1167,32 @@ mod tests {
 
     /// The dangerous direction: a second runner on the same workspace must not
     /// declare the first one's live run dead.
+    ///
+    /// This used to record its OWN pid and ask "is this process alive", so both
+    /// runners were the test process and the case it is named for could not
+    /// fail - while serve, handed exactly that predicate, did the thing this
+    /// forbids to every other live process. The first runner here is a real,
+    /// different process, and liveness is the answer production uses.
     #[test]
     fn reconcile_leaves_a_live_run_alone() {
         let tmp = tempfile::tempdir().unwrap();
+        let mut other = crate::runlock::test_sleeper();
         begin(tmp.path(), "run-live", "manual", "daily", "/p.json", "hash", None);
-        let changed = reconcile(tmp.path(), &|pid| pid == std::process::id());
-        assert!(changed.is_empty(), "a running process still owns its run");
+        let mut r = load(tmp.path(), "run-live").unwrap();
+        r.pid = Some(other.id());
+        write(tmp.path(), &r).unwrap();
+
+        let changed = reconcile(tmp.path(), &crate::runlock::process_alive);
+        assert!(changed.is_empty(), "another runner's live run was declared dead: {changed:?}");
         assert_eq!(load(tmp.path(), "run-live").unwrap().state, RUNNING);
+
+        // And once that process really has gone, the same call reclaims it -
+        // a fix that only ever said "alive" would pass the half above.
+        other.kill().expect("kill the other runner");
+        other.wait().expect("reap it");
+        let changed = reconcile(tmp.path(), &crate::runlock::process_alive);
+        assert_eq!(changed, vec!["run-live".to_string()], "a dead runner's run was not reclaimed");
+        assert_eq!(load(tmp.path(), "run-live").unwrap().state, INTERRUPTED);
     }
 
     /// A receipt written before states existed finished one way or another.

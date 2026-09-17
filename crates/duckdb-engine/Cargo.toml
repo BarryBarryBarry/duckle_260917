@@ -282,5 +282,12 @@ flate2 = "1"
 
 # flock(2) for the cross-process run lock. Windows uses a share-mode open,
 # which is in std, so this is unix-only. Already in the tree transitively.
+# Also kill(pid, 0) for `runlock::process_alive`.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# OpenProcess + GetExitCodeProcess for `runlock::process_alive`, which std has
+# no equivalent of on Windows. 0.61 is already compiled into the tree for tokio,
+# so this adds two feature flags rather than a dependency.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }

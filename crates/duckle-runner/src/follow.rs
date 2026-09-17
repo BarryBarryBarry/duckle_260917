@@ -228,7 +228,14 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
     // #259: the watcher gets its own durable identity, separate from the runs
     // it causes. Reconcile first, so a watcher killed last time shows as
     // interrupted rather than as still running forever.
-    let _ = duckle_duckdb_engine::follow_session::reconcile(&workspace, &|_| false);
+    //
+    // With a REAL liveness answer. This passed "nothing is alive", so starting
+    // one follower marked every other follower still watching the workspace
+    // interrupted - their sessions said they had stopped while they carried on.
+    let _ = duckle_duckdb_engine::follow_session::reconcile(
+        &workspace,
+        &duckle_duckdb_engine::runlock::process_alive,
+    );
     let session_id = duckle_duckdb_engine::follow_session::new_session_id(&name);
     let mut session = duckle_duckdb_engine::follow_session::begin(
         &workspace,
