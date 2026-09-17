@@ -227,6 +227,10 @@ struct State {
     /// done. `running` above is pipeline ids only and cannot answer "how is
     /// run X going" - a different question.
     runs: Mutex<std::collections::HashMap<String, LiveRun>>,
+    /// #325: delivery outcomes the ledger would not take, by delivery id. See
+    /// `pump_deliveries`: held so the next tick writes them instead of running
+    /// the consumer a second time.
+    unrecorded_deliveries: Mutex<HashMap<String, duckle_duckdb_engine::subscribe::Delivery>>,
 }
 
 /// #259: one asynchronous run. `finished` is None while it is queued or
@@ -325,6 +329,7 @@ pub fn run() -> Result<(), String> {
         },
         oidc_endpoints: Mutex::new(None),
         oidc_logins: Mutex::new(Default::default()),
+        unrecorded_deliveries: Mutex::new(Default::default()),
     });
 
     // Fold any pre-unification console store into schedules.json before the
@@ -3856,6 +3861,28 @@ fn delivery_params(
 /// which is the state that otherwise looks identical to "never triggered".
 fn pump_deliveries(state: &State) {
     use duckle_duckdb_engine::subscribe::{self, DeliveryState};
+    // An outcome is written to the ledger, or held until it can be. The write
+    // used to be ignored, and a delivery whose consumer HAD run but was never
+    // written down still looked owed, so every tick ran the consumer again: a
+    // duplicate run per tick for as long as the ledger stayed unwritable.
+    let held = || state.unrecorded_deliveries.lock().unwrap_or_else(|p| p.into_inner());
+    let record_or_hold = |delivery: subscribe::Delivery| {
+        if let Err(e) = subscribe::record(&state.workspace, delivery.clone()) {
+            eprintln!(
+                "duckle-runner: the outcome of {} for {} could not be recorded ({e}); \
+                 holding it so the consumer is not run again",
+                delivery.event_id, delivery.pipeline_id
+            );
+            held().insert(delivery.delivery_id.clone(), delivery);
+        }
+    };
+    // What earlier ticks could not write, first.
+    let waiting: Vec<subscribe::Delivery> = held().values().cloned().collect();
+    for delivery in waiting {
+        if subscribe::record(&state.workspace, delivery.clone()).is_ok() {
+            held().remove(&delivery.delivery_id);
+        }
+    }
     let now = chrono::Utc::now().to_rfc3339();
     let pending = subscribe::pending(&state.workspace, &now);
     if pending.is_empty() {
@@ -3893,6 +3920,10 @@ fn pump_deliveries(state: &State) {
             .map(|e| (e.event_id.clone(), e))
             .collect();
     for mut delivery in pending {
+        // Its outcome is known and only the write is missing.
+        if held().contains_key(&delivery.delivery_id) {
+            continue;
+        }
         delivery.attempts += 1;
         // A subscription binding a field the publication does not carry is a
         // standing misconfiguration, and it fails HERE - before a run exists -
@@ -3900,7 +3931,7 @@ fn pump_deliveries(state: &State) {
         if let Some(why) = delivery.parameter_error.clone() {
             delivery.state = DeliveryState::Failed;
             delivery.last_error = Some(format!("parameters could not be bound: {why}"));
-            let _ = subscribe::record(&state.workspace, delivery);
+            record_or_hold(delivery);
             continue;
         }
         if let Some(loop_path) = looping.get(&delivery.pipeline_id) {
@@ -3908,7 +3939,7 @@ fn pump_deliveries(state: &State) {
             delivery.last_error = Some(format!(
                 "not delivered: {loop_path} would trigger each other forever. Narrow the assets                  this subscription matches, or set a producer."
             ));
-            let _ = subscribe::record(&state.workspace, delivery);
+            record_or_hold(delivery);
             continue;
         }
         let Some(file) = pipes.get(&delivery.pipeline_id).map(|p| p.display().to_string()) else {
@@ -3918,7 +3949,7 @@ fn pump_deliveries(state: &State) {
             delivery.state = DeliveryState::Failed;
             delivery.last_error =
                 Some(format!("no pipeline {:?} in this workspace", delivery.pipeline_id));
-            let _ = subscribe::record(&state.workspace, delivery);
+            record_or_hold(delivery);
             continue;
         };
         // The same on-disk lock a scheduled run takes. Two runs of one pipeline
@@ -3966,7 +3997,7 @@ fn pump_deliveries(state: &State) {
                 );
             }
         }
-        let _ = subscribe::record(&state.workspace, delivery);
+        record_or_hold(delivery);
     }
 }
 
@@ -5397,6 +5428,7 @@ mod tests {
             oidc: None,
             oidc_endpoints: Mutex::new(None),
             oidc_logins: Mutex::new(Default::default()),
+        unrecorded_deliveries: Mutex::new(Default::default()),
         })
     }
 
@@ -5486,6 +5518,7 @@ mod tests {
             oidc: None,
             oidc_endpoints: Mutex::new(None),
             oidc_logins: Mutex::new(Default::default()),
+        unrecorded_deliveries: Mutex::new(Default::default()),
         })
     }
 
@@ -6319,6 +6352,62 @@ mod tests {
             .expect("a credentialed operator must still be allowed to run");
     }
 
+    /// #325: a consumer that ran is not run again because its delivery could not
+    /// be written down.
+    ///
+    /// The pump ignored a failed write to the delivery ledger. The delivery then
+    /// still looked owed, so every tick ran the consumer again - a duplicate run
+    /// per tick for as long as the ledger stayed unwritable, which is the one
+    /// thing the delivery id exists to prevent. No DuckDB needed: every attempt,
+    /// even a failing one, leaves a run-history record to count.
+    #[test]
+    fn a_delivery_that_could_not_be_recorded_is_not_run_again() {
+        use duckle_duckdb_engine::{materialize, subscribe};
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(ws.join("pipelines").join("consumer.json"), r#"{"nodes":[],"edges":[]}"#).unwrap();
+        let sub = subscribe::Subscription {
+            id: "s1".into(),
+            pipeline_id: "consumer".into(),
+            assets: vec!["/lake/orders".into()],
+            producer: None,
+            enabled: true,
+            parameters: Default::default(),
+        };
+        std::fs::write(subscribe::store_path(&ws), serde_json::to_string(&vec![sub]).unwrap()).unwrap();
+        let event = materialize::Event {
+            event_id: "mat-nightly-1".into(),
+            pipeline_id: "nightly".into(),
+            run_id: Some("run-1".into()),
+            release_id: None,
+            partition_key: None,
+            trigger: "scheduled".into(),
+            committed_at: "2026-09-17T10:00:00Z".into(),
+            assets: vec!["/lake/orders".into()],
+        };
+        let log = materialize::log_path(&ws);
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::fs::write(&log, format!("{}\n", serde_json::to_string(&event).unwrap())).unwrap();
+        // The ledger cannot be written: a directory stands where the file goes.
+        std::fs::create_dir_all(subscribe::deliveries_path(&ws)).unwrap();
+
+        let state = local_state(&ws);
+        let runs = || duckle_duckdb_engine::load_run_history(&ws, "consumer").len();
+        super::pump_deliveries(&state);
+        assert_eq!(runs(), 1, "the publication must trigger the consumer once");
+        super::pump_deliveries(&state);
+        assert_eq!(runs(), 1, "an unrecorded delivery was run again on the next tick");
+
+        // Once the ledger can be written, the delivery lands - still without a rerun.
+        std::fs::remove_dir(subscribe::deliveries_path(&ws)).unwrap();
+        super::pump_deliveries(&state);
+        assert_eq!(runs(), 1, "recording the delivery late ran the consumer again");
+        let recorded = subscribe::deliveries(&ws);
+        assert_eq!(recorded.len(), 1, "the delivery never reached the ledger: {recorded:?}");
+        assert_eq!(recorded.values().next().unwrap().state, subscribe::DeliveryState::Delivered);
+    }
+
     /// #259: a web editor run is recorded against the pipeline FILE, so
     /// `duckle-runner retry` can find it.
     ///
@@ -6739,6 +6828,7 @@ mod tests {
             oidc: None,
             oidc_endpoints: Mutex::new(None),
             oidc_logins: Mutex::new(Default::default()),
+        unrecorded_deliveries: Mutex::new(Default::default()),
         };
 
         let leaked = read_pipeline_file(&state, "connections/prod-db.json");
@@ -7346,6 +7436,7 @@ mod serve_honours_the_schedule {
             oidc: None,
             oidc_endpoints: Mutex::new(None),
             oidc_logins: Mutex::new(Default::default()),
+        unrecorded_deliveries: Mutex::new(Default::default()),
         };
         let projected = load_schedules(&state).expect("a projection");
         let one = projected.get("p").expect("the schedule");
