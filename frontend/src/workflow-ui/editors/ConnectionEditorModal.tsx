@@ -15,9 +15,11 @@ type ConnectionType = {
     label: string;
     fields: Array<keyof ConnectionPayload>;
     defaultPort?: number;
+    /** Labels that differ for this kind, where the shared wording would mislead. */
+    labels?: Partial<Record<keyof ConnectionPayload, string>>;
 };
 
-const CONNECTION_TYPES: ConnectionType[] = [
+export const CONNECTION_TYPES: ConnectionType[] = [
     {
         kind: 'postgres',
         label: 'PostgreSQL',
@@ -103,9 +105,18 @@ const CONNECTION_TYPES: ConnectionType[] = [
         fields: ['bucket', 'region', 'accessKey', 'secretKey', 'sessionToken', 'endpoint', 'urlStyle', 'useSsl'],
     },
     {
+        // What the engine's GCS secret is built from: HMAC interoperability keys,
+        // plus the region, endpoint and TLS settings a regional or private bucket
+        // needs. This offered a bucket and an "Account / Project" field that
+        // nothing reads, so a node using the connection read the bucket as nobody.
         kind: 'gcs',
         label: 'Google Cloud Storage',
-        fields: ['bucket', 'accountName'],
+        fields: ['bucket', 'region', 'accessKey', 'secretKey', 'sessionToken', 'endpoint', 'urlStyle', 'useSsl'],
+        labels: {
+            accessKey: 'HMAC access key',
+            secretKey: 'HMAC secret',
+            endpoint: 'Endpoint (blank for storage.googleapis.com)',
+        },
     },
     {
         kind: 'azure-blob',
@@ -285,7 +296,7 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                                 return (
                                     <div className="modal-field" key={field}>
                                         <label className="modal-field-label">
-                                            {FIELD_LABELS[field] ?? field}
+                                            {meta?.labels?.[field] ?? FIELD_LABELS[field] ?? field}
                                         </label>
                                         <select
                                             className="modal-input"
@@ -310,7 +321,7 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                                 return (
                                     <div className="modal-field" key={field}>
                                         <label className="modal-field-label">
-                                            {FIELD_LABELS[field] ?? field}
+                                            {meta?.labels?.[field] ?? FIELD_LABELS[field] ?? field}
                                         </label>
                                         <KeyValueField
                                             value={values.headers}
@@ -323,7 +334,7 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                                 return (
                                     <div className="modal-field" key={field}>
                                         <label className="modal-field-label">
-                                            {FIELD_LABELS[field] ?? field}
+                                            {meta?.labels?.[field] ?? FIELD_LABELS[field] ?? field}
                                         </label>
                                         <select
                                             className="modal-input"
@@ -344,7 +355,7 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                                 return (
                                     <div className="modal-field" key={field}>
                                         <label className="modal-field-label">
-                                            {FIELD_LABELS[field] ?? field}
+                                            {meta?.labels?.[field] ?? FIELD_LABELS[field] ?? field}
                                         </label>
                                         <select
                                             className="modal-input"
@@ -365,7 +376,7 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                                 return (
                                     <div className="modal-field" key={field}>
                                         <label className="modal-field-label">
-                                            {FIELD_LABELS[field] ?? field}
+                                            {meta?.labels?.[field] ?? FIELD_LABELS[field] ?? field}
                                         </label>
                                         <select
                                             className="modal-input"
@@ -382,7 +393,7 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                             return (
                                 <div className="modal-field" key={field}>
                                     <label className="modal-field-label">
-                                        {FIELD_LABELS[field] ?? field}
+                                        {meta?.labels?.[field] ?? FIELD_LABELS[field] ?? field}
                                     </label>
                                     <input
                                         type={isSecret ? 'password' : isNumber ? 'number' : 'text'}

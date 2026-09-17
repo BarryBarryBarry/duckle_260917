@@ -18,6 +18,7 @@ import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRef
 import { UndoHistory, type CanvasSnapshot } from '../src/undo-history';
 import { saveItemPayload, saveNow } from '../src/workspace';
 import { annotationPatch } from '../src/catalog-annotate';
+import { CONNECTION_TYPES } from '../src/workflow-ui/editors/ConnectionEditorModal';
 import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
 import {
@@ -805,6 +806,34 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'catalog: the form re-seeds only for a different asset',
         deps === '}, [asset.id]);',
         `the re-seed effect depends on ${deps}, which changes on every reload`,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A saved Google Cloud Storage connection carries what a GCS node authenticates with.
+//
+// The connection offered a bucket and an "Account / Project" field that nothing
+// reads, and none of the HMAC key, secret, region or endpoint the engine's GCS
+// secret is built from, so a node using the connection read the bucket as
+// nobody. The keys the engine reads are taken from its source, so the two cannot
+// drift apart quietly.
+// ---------------------------------------------------------------------------
+{
+    const engine = readFileSync(resolve(__FRONTEND_DIR__, '../crates/duckdb-engine/src/lib.rs'), 'utf8');
+    const branch = engine.slice(engine.indexOf('"gcs" => {'), engine.indexOf('"azureblob" =>'));
+    const read = [...branch.matchAll(/get\("([A-Za-z]+)"\)/g)].map(m => m[1]);
+    const offered = CONNECTION_TYPES.find(t => t.kind === 'gcs')?.fields ?? [];
+    const missing = read.filter(k => !(offered as string[]).includes(k));
+    check('gcs connection: the engine branch was found', read.includes('accessKey'), `read ${JSON.stringify(read)}`);
+    check(
+        'gcs connection: every credential the GCS secret reads can be saved on the connection',
+        missing.length === 0,
+        `the connection cannot hold ${JSON.stringify(missing)}`,
+    );
+    check(
+        'gcs connection: no field that nothing reads',
+        !(offered as string[]).includes('accountName'),
+        'accountName is offered and never read for GCS',
     );
 }
 
