@@ -93,6 +93,16 @@ function csvList(v: string, type: string): string {
         .join(', ');
 }
 
+/** The typed value of a "contains", "starts with" or "ends with" condition as
+ *  a LIKE pattern that matches it literally. Without this a % or _ in the value
+ *  was a wildcard, so "contains 50%" also kept "50 units". Pair it with
+ *  LIKE_ESCAPE; "matches" takes a real pattern and does not use it. */
+function likeLiteral(v: string): string {
+    return v.replace(/[\\%_]/g, '\\$&');
+}
+
+const LIKE_ESCAPE = " ESCAPE '\\'";
+
 /** Quote a column name as a SQL identifier so names with spaces, mixed
  *  case, or reserved words survive. Mirrors the engine's quote_ident:
  *  wrap in double quotes and double any embedded double quote. The
@@ -136,11 +146,11 @@ export function conditionToSql(c: Condition, columnType: string): string {
         case 'not_like':
             return col + ' NOT LIKE ' + quoteValue(v, 'string');
         case 'starts_with':
-            return col + ' LIKE ' + quoteValue(v + '%', 'string');
+            return col + ' LIKE ' + quoteValue(likeLiteral(v) + '%', 'string') + LIKE_ESCAPE;
         case 'ends_with':
-            return col + ' LIKE ' + quoteValue('%' + v, 'string');
+            return col + ' LIKE ' + quoteValue('%' + likeLiteral(v), 'string') + LIKE_ESCAPE;
         case 'contains':
-            return col + ' LIKE ' + quoteValue('%' + v + '%', 'string');
+            return col + ' LIKE ' + quoteValue('%' + likeLiteral(v) + '%', 'string') + LIKE_ESCAPE;
         case 'is_null':
             return col + ' IS NULL';
         case 'is_not_null':

@@ -12,6 +12,7 @@ import type { DuckleNodeData } from '../src/pipeline-types';
 import type { RepoItem } from '../src/repo-types';
 import { livePreviewable } from '../src/live-preview';
 import { discoverParams, resolveForRun } from '../src/run-resolve';
+import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterBuilderField';
 
 // The frontend directory, injected by check-logic.mjs: the bundle runs from a
 // temp dir, so neither import.meta.url nor the cwd can be trusted to find it.
@@ -129,6 +130,66 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'live preview: the preview entry point refuses a sink before starting a run',
         claim > entry && app.slice(entry, claim).includes('livePreviewable('),
         'triggerLivePreview starts a partial run without asking livePreviewable, so editing a sink writes',
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The filter builder's "contains", "starts with" and "ends with" are literal.
+//
+// They compiled to LIKE with the typed value spliced into the pattern, so a %
+// or _ in it was a wildcard: "contains 50%" also kept "50 units", and "starts
+// with a_b" kept "axb". The generated SQL runs in DuckDB (plan/builders.rs
+// build_filter). The oracle below is SQL LIKE itself - % any run, _ one
+// character, the ESCAPE character makes the next one literal, anything else
+// literal, whole string - checked once against DuckDB 1.5.4, so each generated
+// pattern must keep exactly the rows plain string matching keeps.
+// ---------------------------------------------------------------------------
+{
+    const likeMatches = (sql: string, text: string): boolean | string => {
+        const m = /^"c" (?:NOT )?LIKE '((?:[^']|'')*)'(?: ESCAPE '((?:[^']|'')*)')?$/.exec(sql);
+        if (!m) return `not a LIKE this oracle understands: ${sql}`;
+        const pattern = m[1].replace(/''/g, "'");
+        const escape = m[2]?.replace(/''/g, "'");
+        let re = '';
+        for (let i = 0; i < pattern.length; i++) {
+            const ch = pattern[i];
+            if (escape !== undefined && ch === escape && i + 1 < pattern.length) {
+                re += pattern[++i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            } else if (ch === '%') re += '[\\s\\S]*';
+            else if (ch === '_') re += '[\\s\\S]';
+            else re += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+        return new RegExp('^' + re + '$').test(text);
+    };
+    const literal: Record<string, (text: string, v: string) => boolean> = {
+        contains: (t, v) => t.includes(v),
+        starts_with: (t, v) => t.startsWith(v),
+        ends_with: (t, v) => t.endsWith(v),
+    };
+    const values = ['50%', 'a_b', 'back\\slash', "it's", '100%_\\', 'plain'];
+    const texts = [
+        '50%', '50 units', '150%', 'a_b', 'axb', 'a_bc', 'xa_b', 'back\\slash', 'backslash', "it's",
+        'its', '100%_\\', '100xy\\', '100%_\\ tail', 'plain', 'plainer', 'a plain', '',
+    ];
+    for (const op of Object.keys(literal) as FilterOp[]) {
+        for (const v of values) {
+            const sql = conditionToSql({ id: 'x', column: 'c', op, value: v }, 'string');
+            for (const t of texts) {
+                const got = likeMatches(sql, t);
+                const want = literal[op](t, v);
+                check(
+                    `filter builder: ${op} ${JSON.stringify(v)} on ${JSON.stringify(t)}`,
+                    got === want,
+                    typeof got === 'string' ? got : `kept=${got}, a literal ${op} keeps=${want}; SQL: ${sql}`,
+                );
+            }
+        }
+    }
+    // "matches" is the one op whose value IS a pattern; it must stay one.
+    check(
+        'filter builder: "matches" still treats % as a wildcard',
+        likeMatches(conditionToSql({ id: 'x', column: 'c', op: 'like', value: '50%' }, 'string'), '50 units') === true,
+        'the escaping leaked into the pattern operator',
     );
 }
 
