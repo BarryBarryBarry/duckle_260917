@@ -979,6 +979,7 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
                 &result.status,
                 duckle_duckdb_engine::retry::nodes_of(&result),
             );
+            record_editor_history(&state.workspace, args.get("pipelineId").and_then(|v| v.as_str()), &result, "web");
             match serde_json::to_value(&result) {
                 Ok(v) => respond_json(&v),
                 Err(e) => respond_err("500 Internal Server Error", &e.to_string()),
@@ -1000,6 +1001,20 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
         //
         // The workspace is ALWAYS this server's, never the one in the payload:
         // a browser must not be able to point a state edit at another folder.
+        // The History tab. Same answer as the desktop's run_history: this
+        // pipeline's retained runs, newest first. The id names the history file,
+        // so one that is not a plain file name is refused.
+        "run_history" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            match args.get("pipelineId").and_then(|v| v.as_str()).filter(|id| plain_file_name(id)) {
+                Some(id) => {
+                    let mut records = load_run_history(&state.workspace, id);
+                    records.reverse();
+                    respond_json(&serde_json::to_value(&records).unwrap_or(json!([])))
+                }
+                None => respond_err("400 Bad Request", "missing or invalid pipelineId"),
+            }
+        }
         "watermark_list" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
             match args.get("pipelineName").and_then(|v| v.as_str()) {
@@ -1270,15 +1285,9 @@ fn begin_editor_run(
     // and retry could not find the pipeline of any web run. Both values come
     // from the browser, so one that is not a plain file name does not get to
     // name a path.
-    let plain = |s: &str| {
-        !s.is_empty()
-            && s != "."
-            && s != ".."
-            && !s.contains(['/', '\\', ':', '\0'])
-    };
     let stem = pipeline_id
-        .filter(|id| plain(id))
-        .or(Some(name).filter(|n| plain(n)))
+        .filter(|id| plain_file_name(id))
+        .or(Some(name).filter(|n| plain_file_name(n)))
         .unwrap_or("web");
     let receipt = duckle_duckdb_engine::retry::begin(
         workspace,
@@ -1310,6 +1319,27 @@ fn begin_editor_run(
             let _ = duckle_duckdb_engine::retry::write(workspace, &receipt);
             receipt
         }
+    }
+}
+
+/// A value from the browser that may name a file: not empty, not `.` or `..`,
+/// and with no separator, drive colon or NUL.
+fn plain_file_name(s: &str) -> bool {
+    !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\', ':', '\0'])
+}
+
+/// Add an editor run to its pipeline's run history, which the History tab
+/// reads, as the desktop does for its own runs. A run with no usable id has no
+/// history file to add to.
+fn record_editor_history(
+    workspace: &Path,
+    pipeline_id: Option<&str>,
+    result: &duckle_duckdb_engine::RunResult,
+    trigger: &str,
+) {
+    if let Some(id) = pipeline_id.filter(|id| plain_file_name(id)) {
+        let record = RunRecord::from_result_in(workspace, id, result, trigger);
+        duckle_duckdb_engine::record_run(workspace, id, record);
     }
 }
 
@@ -1385,6 +1415,12 @@ fn run_stream(
         receipt,
         &result.status,
         duckle_duckdb_engine::retry::nodes_of(&result),
+    );
+    record_editor_history(
+        &state.workspace,
+        args.get("pipelineId").and_then(|v| v.as_str()),
+        &result,
+        if target.is_some() { "web-partial" } else { "web" },
     );
     let rj = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
     stream
@@ -6476,6 +6512,79 @@ mod tests {
             "an id that is not a file name must not name a path: {}",
             escaped.display()
         );
+    }
+
+    /// The web editor's History tab lists the pipeline's runs, and the runs the
+    /// editor starts are among them.
+    ///
+    /// The server had no run_history command, which the web shim turns into an
+    /// empty answer, and neither editor run path added to run history, so the
+    /// tab always said there was none. Both paths are driven: the command and the
+    /// streaming route over a socket. The id comes from the browser and names the
+    /// history file, so one that is not a plain file name is refused.
+    #[test]
+    fn the_web_history_tab_lists_the_runs_the_editor_started() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from("duckdb"),
+            dist: ws.clone(),
+            host: "127.0.0.1".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "127.0.0.1", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        let cmd = |name: &str, body: serde_json::Value| {
+            let mut req = request("POST", &format!("/api/cmd/{name}"), Some("Bearer s3cret"));
+            req.body = serde_json::to_vec(&body).unwrap();
+            let reply = route_web(&req, &state);
+            (reply.code(), serde_json::from_slice::<serde_json::Value>(&reply.body).unwrap_or_default())
+        };
+        let earlier: duckle_duckdb_engine::RunRecord = serde_json::from_str(
+            r#"{"at":"2026-01-01T00:00:00Z","status":"ok","duration_ms":1,"rows":0,"node_count":1,"trigger":"scheduled"}"#,
+        )
+        .unwrap();
+        duckle_duckdb_engine::append_run_record(&ws, "p_7f3a", earlier).unwrap();
+        let run = serde_json::json!({
+            "pipeline": { "nodes": [], "edges": [] },
+            "pipelineId": "p_7f3a",
+            "pipelineName": "Orders nightly",
+        });
+
+        assert_eq!(cmd("run_pipeline", run.clone()).0, 200);
+
+        let owner = state.console.identify(Some("Bearer s3cret"), None).expect("the owner signs in");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = serde_json::to_vec(&run).unwrap();
+        std::thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let (mut stream, _) = listener.accept().unwrap();
+                super::run_stream(&mut stream, &state, &owner, &body)
+            });
+            let mut conn = std::net::TcpStream::connect(addr).unwrap();
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut conn, &mut text);
+            server.join().unwrap().expect("the stream completes");
+            assert!(text.contains("event: result"), "the streamed run did not finish: {text}");
+        });
+
+        let (code, listed) = cmd("run_history", serde_json::json!({ "workspacePath": "/elsewhere", "pipelineId": "p_7f3a" }));
+        assert_eq!(code, 200, "{listed}");
+        let triggers: Vec<&str> = listed
+            .as_array()
+            .expect("a list of runs")
+            .iter()
+            .map(|r| r["trigger"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(triggers, ["web", "web", "scheduled"], "newest first, with both editor runs in it");
+
+        assert_eq!(cmd("run_history", serde_json::json!({ "pipelineId": "../outside" })).0, 400);
+        let mut escaping = run.clone();
+        escaping["pipelineId"] = "../outside".into();
+        cmd("run_pipeline", escaping);
+        assert!(!ws.join("outside.json").exists(), "an id that is not a file name named a history file");
     }
 
     /// The web editor's Schedules dialog reads and writes the workspace's real

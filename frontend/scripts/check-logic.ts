@@ -34,6 +34,7 @@ import {
     settingsSetContextFile,
     settingsSetMemoryLimit,
     settingsSetPower,
+    runHistory,
     settingsSetProxy,
     watermarkClear,
     watermarkList,
@@ -967,6 +968,30 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     check('rename subtitle: the form shape is counted', fromForm === 'rename 2', `got ${fromForm}`);
     const older = deriveNodeSubtitle('xf.rename', { renames: [{ from: 'a', to: 'b' }] });
     check('rename subtitle: the older array shape still counts', older === 'rename 1', `got ${older}`);
+}
+
+// ---------------------------------------------------------------------------
+// The web History tab reads the server's run history.
+//
+// runHistory returned an empty list at once outside the desktop app, so the tab
+// always said there was no run history.
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as {
+        __checkLogicInvoke?: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    };
+    let asked: { cmd: string; args: Record<string, unknown> } | null = null;
+    g.__checkLogicInvoke = async (cmd, args) => {
+        asked = { cmd, args };
+        return [{ at: '2026-09-17T10:00:00Z', status: 'ok', duration_ms: 5, rows: 3, node_count: 2, trigger: 'web' }];
+    };
+    const records = await runHistory('/ws', 'p_7f3a');
+    g.__checkLogicInvoke = undefined;
+    check(
+        'web history: the tab asks the server for the pipeline history',
+        records.length === 1 && JSON.stringify(asked) === JSON.stringify({ cmd: 'run_history', args: { workspacePath: '/ws', pipelineId: 'p_7f3a' } }),
+        `asked ${JSON.stringify(asked)}, got ${JSON.stringify(records)}`,
+    );
 }
 
 // ---------------------------------------------------------------------------

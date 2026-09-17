@@ -368,7 +368,10 @@ export async function runHistory(
     workspacePath: string,
     pipelineId: string,
 ): Promise<RunRecord[]> {
-    if (!isTauri()) return [];
+    // The web edition's server keeps the same runs/<id>.json history. This
+    // returned at once outside the desktop app, so the web History tab always
+    // said there was no run history.
+    if (!isTauri() && !isWebBackend()) return [];
     try {
         return await invoke<RunRecord[]>('run_history', {
             workspacePath,
