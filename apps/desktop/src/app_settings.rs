@@ -91,9 +91,13 @@ fn store(workspace: &Path, s: &AppSettings) -> Result<(), String> {
     std::fs::write(settings_path(workspace), json).map_err(|e| format!("write settings: {e}"))
 }
 
-/// Load the workspace's saved proxy and apply it to the engine HTTP layer.
-/// Best-effort: a missing / unreadable settings file leaves the current
-/// (environment-derived) proxy in place.
+/// Load the workspace's saved settings and apply them to the process.
+///
+/// Every setting is applied, set or not. This used to apply only the ones the
+/// workspace HAD, so opening a workspace with none inherited the previous
+/// workspace's proxy, memory cap and opt-in to unsigned extensions. A setting
+/// this workspace leaves unset goes back to what the app was launched with
+/// (`launch_env`), which for a proxy is the environment-derived one.
 pub fn apply_for_workspace(workspace: &str) {
     if workspace.is_empty() {
         return;
@@ -104,34 +108,36 @@ pub fn apply_for_workspace(workspace: &str) {
         .clone()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
-    if proxy.is_some() {
-        duckle_duckdb_engine::tls::set_proxy(proxy);
-    }
+    duckle_duckdb_engine::tls::set_proxy(proxy);
     // #102: apply the per-workspace memory cap as DUCKLE_MEMORY_LIMIT (the env
     // var the engine reads in both batched and per-stage modes).
-    if let Some(mb) = s.memory_limit_mb.filter(|m| *m > 0) {
-        std::env::set_var("DUCKLE_MEMORY_LIMIT", format!("{}MB", mb));
-    }
+    apply_memory_limit(s.memory_limit_mb);
     // #143: opt-in unsigned-extension loading for this workspace.
-    if s.allow_unsigned_extensions == Some(true) {
-        std::env::set_var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS", "1");
-    }
+    apply_allow_unsigned(s.allow_unsigned_extensions == Some(true));
     apply_power(&s);
 }
 
+fn apply_memory_limit(mb: Option<u32>) {
+    let cap = mb.filter(|m| *m > 0).map(|m| format!("{}MB", m));
+    duckle_duckdb_engine::launch_env::set_or_restore("DUCKLE_MEMORY_LIMIT", cap.as_deref());
+}
+
+fn apply_allow_unsigned(allow: bool) {
+    duckle_duckdb_engine::launch_env::set_or_restore(
+        "DUCKLE_ALLOW_UNSIGNED_EXTENSIONS",
+        allow.then_some("1"),
+    );
+}
+
 /// Publish the power-mode settings as the env vars the scheduler and engine
-/// read. Unset means "leave the host on its own default", so switching to a
-/// workspace that has never configured power mode does not silently inherit
-/// the last one's settings.
+/// read. Unset means "leave the host on its own default" - what the app was
+/// launched with - so switching to a workspace that has never configured power
+/// mode does not silently inherit the last one's settings.
 fn apply_power(s: &AppSettings) {
-    match s.max_concurrent_runs.filter(|n| *n > 0) {
-        Some(n) => std::env::set_var("DUCKLE_MAX_CONCURRENT_RUNS", n.to_string()),
-        None => std::env::remove_var("DUCKLE_MAX_CONCURRENT_RUNS"),
-    }
-    match s.spill_dir.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
-        Some(d) => std::env::set_var("DUCKLE_TEMP_DIR", d),
-        None => std::env::remove_var("DUCKLE_TEMP_DIR"),
-    }
+    let runs = s.max_concurrent_runs.filter(|n| *n > 0).map(|n| n.to_string());
+    duckle_duckdb_engine::launch_env::set_or_restore("DUCKLE_MAX_CONCURRENT_RUNS", runs.as_deref());
+    let spill = s.spill_dir.as_deref().map(str::trim).filter(|d| !d.is_empty());
+    duckle_duckdb_engine::launch_env::set_or_restore("DUCKLE_TEMP_DIR", spill);
 }
 
 #[tauri::command]
@@ -178,10 +184,7 @@ pub fn settings_set_power(
     store(Path::new(&workspace), &s)?;
     // Apply immediately so the current session picks it up without a relaunch.
     apply_power(&s);
-    match s.memory_limit_mb {
-        Some(m) => std::env::set_var("DUCKLE_MEMORY_LIMIT", format!("{}MB", m)),
-        None => std::env::remove_var("DUCKLE_MEMORY_LIMIT"),
-    }
+    apply_memory_limit(s.memory_limit_mb);
     Ok(())
 }
 
@@ -227,10 +230,7 @@ pub fn settings_set_memory_limit(workspace: String, mb: Option<u32>) -> Result<(
     s.memory_limit_mb = mb;
     store(Path::new(&workspace), &s)?;
     // Apply immediately so the current session's runs use it without a relaunch.
-    match mb {
-        Some(m) => std::env::set_var("DUCKLE_MEMORY_LIMIT", format!("{}MB", m)),
-        None => std::env::remove_var("DUCKLE_MEMORY_LIMIT"),
-    }
+    apply_memory_limit(mb);
     Ok(())
 }
 
@@ -251,11 +251,7 @@ pub fn settings_set_allow_unsigned(workspace: String, allow: bool) -> Result<(),
     s.allow_unsigned_extensions = if allow { Some(true) } else { None };
     store(Path::new(&workspace), &s)?;
     // Apply immediately so the current session's runs use it without a relaunch.
-    if allow {
-        std::env::set_var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS", "1");
-    } else {
-        std::env::remove_var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS");
-    }
+    apply_allow_unsigned(allow);
     Ok(())
 }
 
@@ -333,4 +329,43 @@ pub fn ai_config(workspace: &str) -> (Option<String>, Option<String>, Option<Str
     let s = load(Path::new(workspace));
     let clean = |o: Option<String>| o.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
     (clean(s.ai_base_url), clean(s.ai_model), clean(s.ai_api_key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Opening a workspace applied only the settings it HAD, so one with none
+    /// inherited the previous workspace's memory cap and, worse, its opt-in to
+    /// unsigned DuckDB extensions. No other desktop test touches these
+    /// variables, and the cap is generous so a run elsewhere is unaffected.
+    #[test]
+    fn opening_a_workspace_without_settings_does_not_inherit_the_last_ones() {
+        let opted_in = tempfile::tempdir().unwrap();
+        let settings = AppSettings {
+            memory_limit_mb: Some(4096),
+            allow_unsigned_extensions: Some(true),
+            ..Default::default()
+        };
+        store(opted_in.path(), &settings).unwrap();
+        let plain = tempfile::tempdir().unwrap();
+        let unset = || {
+            (
+                std::env::var_os("DUCKLE_MEMORY_LIMIT"),
+                std::env::var_os("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS"),
+            )
+        };
+        let before = unset();
+
+        apply_for_workspace(opted_in.path().to_str().unwrap());
+        assert_eq!(std::env::var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS").as_deref(), Ok("1"));
+        assert_eq!(std::env::var("DUCKLE_MEMORY_LIMIT").as_deref(), Ok("4096MB"));
+
+        apply_for_workspace(plain.path().to_str().unwrap());
+        assert_eq!(
+            unset(),
+            before,
+            "a workspace with no settings kept the previous one's cap and unsigned-extension opt-in"
+        );
+    }
 }

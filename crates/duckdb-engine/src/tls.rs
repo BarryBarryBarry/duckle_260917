@@ -153,13 +153,15 @@ fn env_secs(name: &str) -> Option<u64> {
 /// Mirrors the value into HTTPS_PROXY / HTTP_PROXY so the reqwest clients (engine
 /// + model downloads, the in-app updater) pick it up too, and invalidates the
 /// cached ureq agent so the next REST / cloud call rebuilds with the proxy.
+///
+/// Clearing puts both variables back as the app was launched with them. It used
+/// to leave the copied value there, and `current_proxy` falls back to the
+/// environment, so a cleared proxy stayed in effect until a restart.
 pub fn set_proxy(url: Option<String>) {
     let url = url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     *PROXY_OVERRIDE.write().unwrap() = url.clone();
-    if let Some(u) = &url {
-        std::env::set_var("HTTPS_PROXY", u);
-        std::env::set_var("HTTP_PROXY", u);
-    }
+    crate::launch_env::set_or_restore("HTTPS_PROXY", url.as_deref());
+    crate::launch_env::set_or_restore("HTTP_PROXY", url.as_deref());
     *AGENT_CACHE.lock().unwrap() = None;
 }
 
