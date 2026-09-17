@@ -1278,6 +1278,14 @@ export async function buildBundle(
     passphrase?: string,
     targetOs?: TargetOs,
 ): Promise<string> {
+    // A bundle is an executable written where Duckle runs, and the web edition
+    // has nowhere in the browser to put one. The server has no build command,
+    // so this used to resolve empty and Build did nothing at all.
+    if (isWebBackend()) {
+        throw new Error(
+            `Build is not available in the web editor. On the server, run: duckle-runner build --workspace <workspace> --pipeline-id ${pipelineId} --out <file>`,
+        );
+    }
     return await invoke<string>('build_pipeline_bundle', {
         workspacePath,
         pipelineId,

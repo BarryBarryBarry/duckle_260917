@@ -23,6 +23,7 @@ import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
 import { deriveNodeSubtitle } from '../src/node-subtitle';
 import {
+    buildBundle,
     cancelPipeline,
     runPipeline,
     scheduleDelete,
@@ -968,6 +969,35 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     check('rename subtitle: the form shape is counted', fromForm === 'rename 2', `got ${fromForm}`);
     const older = deriveNodeSubtitle('xf.rename', { renames: [{ from: 'a', to: 'b' }] });
     check('rename subtitle: the older array shape still counts', older === 'rename 1', `got ${older}`);
+}
+
+// ---------------------------------------------------------------------------
+// Build pipeline in the web editor says where a bundle is built.
+//
+// The server has no build command, which the web shim answers as an empty
+// success, so Build showed "Building..." and then nothing at all.
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as {
+        __checkLogicInvoke?: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    };
+    const asked: string[] = [];
+    g.__checkLogicInvoke = async cmd => {
+        asked.push(cmd);
+        return null;
+    };
+    let refusal = '';
+    try {
+        await buildBundle('/ws', 'p_7f3a', 'orders.exe', null, 'env');
+    } catch (e) {
+        refusal = e instanceof Error ? e.message : String(e);
+    }
+    g.__checkLogicInvoke = undefined;
+    check(
+        'web build: Build explains itself instead of doing nothing',
+        refusal.includes('duckle-runner build') && refusal.includes('p_7f3a') && asked.length === 0,
+        `refusal ${JSON.stringify(refusal)}, asked ${JSON.stringify(asked)}`,
+    );
 }
 
 // ---------------------------------------------------------------------------
