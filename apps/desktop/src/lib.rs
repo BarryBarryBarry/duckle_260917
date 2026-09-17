@@ -790,6 +790,14 @@ fn schedule_set_workspace(path: String) -> Result<(), String> {
         // layer so REST / cloud connectors and the updater route through it
         // without the user setting a system env var (#80).
         app_settings::apply_for_workspace(&path);
+        // Runs and backfill slices a killed or quit Duckle left marked
+        // `running`. Only a console starting up reconciled them, so a workspace
+        // used from this app stayed "in flight" for good. Liveness is an OS
+        // check, so a run another process is still doing is left alone.
+        let ws = PathBuf::from(&path);
+        std::thread::spawn(move || {
+            duckle_duckdb_engine::recovery::reclaim_abandoned(&ws);
+        });
     }
     let p = if path.is_empty() {
         None

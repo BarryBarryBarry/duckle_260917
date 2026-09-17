@@ -2463,6 +2463,10 @@ fn run_retry() -> ExitCode {
         return ExitCode::from(2);
     };
     let workspace = workspace.unwrap_or_else(|| PathBuf::from("."));
+    // A run killed under the CLI is marked in flight until something reconciles
+    // it, and without a console nothing did. This is where an operator comes
+    // for that run.
+    duckle_duckdb_engine::recovery::reclaim_abandoned(&workspace);
 
     // The receipt names the pipeline, so a retry does not ask the operator to
     // remember which file a run came from.

@@ -83,6 +83,7 @@ pub mod talend;
 pub mod trust;
 pub mod launch_env;
 pub mod ndjson;
+pub mod recovery;
 pub mod tls;
 pub mod watermark;
 pub mod xsd;
