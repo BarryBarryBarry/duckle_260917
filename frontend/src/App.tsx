@@ -60,6 +60,7 @@ import { RunStatusContext } from './canvas/run-status-context';
 import { layoutByDependency } from './canvas/layout';
 import { validatePipeline } from './validation';
 import { resolveForRun, discoverParams, builtinVars, buildContextVars } from './run-resolve';
+import { livePreviewable } from './live-preview';
 import WorkspacePickerModal from './workflow-ui/WorkspacePickerModal';
 import { AccountChip, ProfileSetupModal } from './workflow-ui/AccountMenu';
 import {
@@ -1263,7 +1264,7 @@ export default function App() {
         // has no preview rows). Debounced so click-dragging a marquee selection
         // does not fire a run per intermediate selection.
         const componentId = (sel?.data as DuckleNodeData | undefined)?.componentId ?? '';
-        if (liveModeRef.current && sel && !componentId.startsWith('snk.')) {
+        if (liveModeRef.current && sel && livePreviewable(componentId)) {
             if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
             const target = sel.id;
             liveTimerRef.current = setTimeout(() => {
@@ -1529,6 +1530,7 @@ export default function App() {
     // always reaches the latest closure (fresh nodes/edges) at debounce time.
     const triggerLivePreview = useCallback(
         (nodeId: string) => {
+            if (!livePreviewable(nodes.find(n => n.id === nodeId)?.data.componentId)) return;
             if (validation.errorCount > 0) return;
             if (isRunningRef.current) return;
             isRunningRef.current = true;
@@ -1581,7 +1583,7 @@ export default function App() {
         // usual node animation). Skip sinks - running to a sink writes and yields
         // no preview rows. If nothing is selected, the next node you click or
         // edit triggers the preview instead.
-        if (turningOn && selectedNode && !(selectedNode.data.componentId ?? '').startsWith('snk.')) {
+        if (turningOn && selectedNode && livePreviewable(selectedNode.data.componentId)) {
             const target = selectedNode.id;
             liveTimerRef.current = setTimeout(() => {
                 liveTimerRef.current = null;

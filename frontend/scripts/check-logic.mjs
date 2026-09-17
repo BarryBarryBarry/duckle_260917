@@ -35,6 +35,7 @@ await esbuild.build({
     platform: 'node',
     format: 'esm',
     outfile: bundle,
+    define: { __FRONTEND_DIR__: JSON.stringify(resolve(here, '..')) },
     plugins: [stubTauri],
     logLevel: 'warning',
 });
