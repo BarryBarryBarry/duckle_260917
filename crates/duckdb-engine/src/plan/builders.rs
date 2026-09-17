@@ -3421,7 +3421,8 @@ pub(crate) fn build_standardize(inputs: &NodeInputs, props: &JsonValue) -> Resul
                 // 1.5.4 for empty strings, NULL, single characters, repeated
                 // spaces (preserved) and already-uppercase input.
                 "title" => format!(
-                    "array_to_string(list_transform(string_split({}, ' '),                      lambda w: upper(w[1]) || lower(w[2:])), ' ')",
+                    "array_to_string(list_transform(string_split({}, ' '), \
+                     lambda w: upper(w[1]) || lower(w[2:])), ' ')",
                     expr
                 ),
                 _ => expr,
@@ -8723,7 +8724,8 @@ pub(crate) fn build_ip_parse(inputs: &NodeInputs, props: &JsonValue) -> Result<S
     let col = quote_ident(&column);
     let expr = if fn_name == "masklen" {
         format!(
-            "COALESCE(TRY_CAST(NULLIF(split_part(CAST(CAST({col} AS INET) AS VARCHAR), '/', 2), '')              AS INTEGER), CASE family(CAST({col} AS INET)) WHEN 6 THEN 128 WHEN 4 THEN 32 END)"
+            "COALESCE(TRY_CAST(NULLIF(split_part(CAST(CAST({col} AS INET) AS VARCHAR), '/', 2), '') \
+             AS INTEGER), CASE family(CAST({col} AS INET)) WHEN 6 THEN 128 WHEN 4 THEN 32 END)"
         )
     } else {
         format!("{fn_name}(CAST({col} AS INET))")
@@ -8929,7 +8931,8 @@ pub(crate) fn build_fixedwidth_source(
                 &owned
             }
             None => {
-                return Err("Fixed-width source: set columnWidths (e.g. 10,20,8), or a columns                             array of {name, start, width} each"
+                return Err("Fixed-width source: set columnWidths (e.g. 10,20,8), or a columns \
+                            array of {name, start, width} each"
                     .to_string())
             }
         },
@@ -9321,11 +9324,13 @@ pub(crate) fn build_excel_source(
                 // format:"excel" is still honoured above and is now only needed
                 // to force the serial reading on an ambiguous column.
                 (None, DataType::Date) => format!(
-                    "COALESCE(try_cast({id} AS DATE), (TIMESTAMP '1899-12-30' +                      try_cast({id} AS DOUBLE) * INTERVAL 1 DAY)::DATE) AS {id}",
+                    "COALESCE(try_cast({id} AS DATE), (TIMESTAMP '1899-12-30' + \
+                     try_cast({id} AS DOUBLE) * INTERVAL 1 DAY)::DATE) AS {id}",
                     id = id
                 ),
                 (None, DataType::Timestamp) => format!(
-                    "COALESCE(try_cast({id} AS TIMESTAMP), TIMESTAMP '1899-12-30' +                      try_cast({id} AS DOUBLE) * INTERVAL 1 DAY) AS {id}",
+                    "COALESCE(try_cast({id} AS TIMESTAMP), TIMESTAMP '1899-12-30' + \
+                     try_cast({id} AS DOUBLE) * INTERVAL 1 DAY) AS {id}",
                     id = id
                 ),
                 _ => format!("CAST({id} AS {ty}) AS {id}", id = id, ty = data_type_to_duckdb_sql(&c.data_type)),
@@ -9572,7 +9577,9 @@ fn refuse_unimplemented_file_mode(
         return Ok(());
     }
     Err(EngineError::Unsupported(format!(
-        "{component_id}: write mode '{mode}' is not implemented for a file sink - it writes with          COPY, which always replaces the file. Running this would have REPLACED the existing data          rather than {}. Remove the mode, or write to a database sink, which does implement it.",
+        "{component_id}: write mode '{mode}' is not implemented for a file sink - it writes with \
+         COPY, which always replaces the file. Running this would have REPLACED the existing data \
+         rather than {}. Remove the mode, or write to a database sink, which does implement it.",
         if mode.eq_ignore_ascii_case("append") {
             "adding to it"
         } else {

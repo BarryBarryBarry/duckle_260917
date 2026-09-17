@@ -432,7 +432,8 @@ pub fn check_authentication_strength(
         // `hwk` is saying either second factor will do, not both.
         let Some(got) = claims.get("amr").and_then(Value::as_array) else {
             return Err(format!(
-                "the identity provider returned no amr claim, so it did not report multi-factor                  authentication; this console requires one of: {}",
+                "the identity provider returned no amr claim, so it did not report multi-factor \
+                 authentication; this console requires one of: {}",
                 amr_required.join(", ")
             ));
         };

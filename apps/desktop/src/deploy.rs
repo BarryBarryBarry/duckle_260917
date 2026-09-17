@@ -175,7 +175,8 @@ pub fn claim(
     let code = setup_code.trim();
     if code.is_empty() {
         return Err(
-            "this server needs the setup code it printed when it started. Read it from the              server's own output - the terminal it runs in, or `docker logs` - and paste it here."
+            "this server needs the setup code it printed when it started. Read it from the \
+             server's own output - the terminal it runs in, or `docker logs` - and paste it here."
                 .into(),
         );
     }

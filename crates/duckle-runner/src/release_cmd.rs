@@ -68,7 +68,8 @@ fn dependency_gate(workspace: &Path, release: &Release) -> Vec<String> {
     //    activation is about to overwrite.
     if release.body.files.is_empty() {
         problems.push(
-            "this release stored no content, so activating it would move a pointer without              changing what runs. Rebuild it with a newer Duckle."
+            "this release stored no content, so activating it would move a pointer without \
+             changing what runs. Rebuild it with a newer Duckle."
                 .to_string(),
         );
     }
@@ -305,7 +306,8 @@ pub fn run() -> ExitCode {
             let d = release::drift(&ws, &release);
             if !d.is_empty() && !args.force {
                 eprintln!(
-                    "duckle-runner release activate: the workspace differs from this release,                      and activating would overwrite it. Nothing was changed."
+                    "duckle-runner release activate: the workspace differs from this release, \
+                     and activating would overwrite it. Nothing was changed."
                 );
                 for f in &d.changed {
                     eprintln!("  would overwrite  {f}");

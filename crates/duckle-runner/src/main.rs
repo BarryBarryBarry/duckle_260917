@@ -1704,7 +1704,9 @@ ies)"),
             "subscriptions",
             "trigger-cycle",
             format!(
-                "these pipelines would trigger each other forever: {cycle}. Narrow the assets a                  subscription matches, or set a producer, so the chain does not come back to                  where it started."
+                "these pipelines would trigger each other forever: {cycle}. Narrow the assets a \
+                 subscription matches, or set a producer, so the chain does not come back to \
+                 where it started."
             ),
         ));
         if !json_out && !machine {
@@ -2798,7 +2800,9 @@ fn run_retention() -> ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: duckle-runner retention status|prune [--workspace DIR] [--json]                  [--dry-run] [--cache-days N] [--logs-days N] [--receipts-keep N]                  [--materializations-days N] [--deliveries-days N]"
+                "usage: duckle-runner retention status|prune [--workspace DIR] [--json] \
+                 [--dry-run] [--cache-days N] [--logs-days N] [--receipts-keep N] \
+                 [--materializations-days N] [--deliveries-days N]"
             );
             ExitCode::from(2)
         }

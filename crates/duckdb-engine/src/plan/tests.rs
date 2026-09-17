@@ -2764,7 +2764,8 @@
             "compareColumns": ["v"],
         });
         let sql = build_scd3(&ni, &declared).expect(
-            "the keys the form writes must build; anything else is a component              nobody can configure from the GUI",
+            "the keys the form writes must build; anything else is a component \
+             nobody can configure from the GUI",
         );
         assert!(
             sql.contains("p.\"v\" AS \"previous_v\""),

@@ -623,7 +623,10 @@ mod plan_arms {
                 let mut named: Vec<&str> = ids.iter().map(String::as_str).collect();
                 named.sort_unstable();
                 problems.push(format!(
-                    "{:?} REQUIRE {:?} and no field declares it, so no node the editor can                      produce will plan. Either the form writes a different name than the arm                      reads, or the component is drawn by a synthesizer branch meant for another                      family (the src.couchdb bug).",
+                    "{:?} REQUIRE {:?} and no field declares it, so no node the editor can \
+                     produce will plan. Either the form writes a different name than the arm \
+                     reads, or the component is drawn by a synthesizer branch meant for another \
+                     family (the src.couchdb bug).",
                     named,
                     key.join("/")
                 ));

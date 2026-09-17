@@ -8731,7 +8731,8 @@ impl DuckdbEngine {
         // it were the whole thing.
         if let Some(reason) = walk_cut_short {
             return Ok(format!(
-                "{}{} html: the page walk stopped early, so these {} row(s) are not the whole                  result",
+                "{}{} html: the page walk stopped early, so these {} row(s) are not the whole \
+                 result",
                 crate::INCOMPLETE_MARKER,
                 reason,
                 count
@@ -8807,7 +8808,9 @@ impl DuckdbEngine {
                     // network because one of its files said so. That is the
                     // unpinned fetch nobody asked for.
                     return Err(format!(
-                        "{loc} is remote, but the schema it is imported from is a local file. A                          local schema set is not allowed to fetch over the network. Point at a                          local copy of it."
+                        "{loc} is remote, but the schema it is imported from is a local file. A \
+                         local schema set is not allowed to fetch over the network. Point at a \
+                         local copy of it."
                     ));
                 }
                 let text = if child_remote {
@@ -13257,7 +13260,10 @@ impl DuckdbEngine {
                                         // the output.
                                         if row.get(k).is_some() {
                                             return Err(EngineError::Query(format!(
-                                                "ai.llm: the reply has a field {k:?}, which is                                                  already a column on the input row - expanding it                                                  would overwrite the caller's own value. Rename                                                  the column, or turn off expanding the reply."
+                                                "ai.llm: the reply has a field {k:?}, which is \
+                                                 already a column on the input row - expanding it \
+                                                 would overwrite the caller's own value. Rename \
+                                                 the column, or turn off expanding the reply."
                                             )));
                                         }
                                         obj.insert(k.clone(), v.clone());
@@ -16188,7 +16194,8 @@ impl DuckdbEngine {
                 .unwrap_or(true);
             if failed > 0 {
                 eprintln!(
-                    "duckle: rest: {failed} parent(s) failed, so the incremental mark was NOT                      advanced - the next run re-reads this window rather than stepping over it"
+                    "duckle: rest: {failed} parent(s) failed, so the incremental mark was NOT \
+                     advanced - the next run re-reads this window rather than stepping over it"
                 );
             }
             if moved && failed == 0 {

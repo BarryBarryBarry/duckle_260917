@@ -795,7 +795,10 @@ pub fn plan(
             run_id,
             "retry:parameters-changed",
             format!(
-                "run {run_id} was given different parameters from the ones this retry would use                  ({}). Its recorded outputs were computed under the old values, so reusing them                  would produce an answer that belongs to neither set. Pass --allow-changed to                  retry with reuse disabled.",
+                "run {run_id} was given different parameters from the ones this retry would use \
+                 ({}). Its recorded outputs were computed under the old values, so reusing them \
+                 would produce an answer that belongs to neither set. Pass --allow-changed to \
+                 retry with reuse disabled.",
                 differing.join(", ")
             ),
         );

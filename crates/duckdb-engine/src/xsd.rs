@@ -422,7 +422,9 @@ fn resolve_location(base: &str, href: &str) -> Option<String> {
 fn merge(into: &mut Schema, from: Schema, chain: &[String]) -> Result<(), EngineError> {
     let clash = |kind: &str, name: &str| {
         EngineError::Config(format!(
-            "xsd: two schemas in this set declare a different {kind} called {name:?}. This module              looks types up by local name, so it cannot tell them apart, and picking one would              change column types with nothing to show for it. Reached by: {}",
+            "xsd: two schemas in this set declare a different {kind} called {name:?}. This module \
+             looks types up by local name, so it cannot tell them apart, and picking one would \
+             change column types with nothing to show for it. Reached by: {}",
             chain_of(chain)
         ))
     };
@@ -513,7 +515,8 @@ pub fn derive_resolved(
     while let Some((location, text, chain)) = stack.pop() {
         if chain.len() > MAX_DEPTH {
             return Err(EngineError::Config(format!(
-                "xsd: imports nest more than {MAX_DEPTH} deep, which is past anything a real                  schema set needs. Reached by: {}",
+                "xsd: imports nest more than {MAX_DEPTH} deep, which is past anything a real \
+                 schema set needs. Reached by: {}",
                 chain_of(&chain)
             )));
         }
@@ -538,7 +541,8 @@ pub fn derive_resolved(
             }
             if loaded.len() >= MAX_DEPENDENCIES {
                 return Err(EngineError::Config(format!(
-                    "xsd: this schema set pulls in more than {MAX_DEPENDENCIES} documents.                      Reached by: {}",
+                    "xsd: this schema set pulls in more than {MAX_DEPENDENCIES} documents. \
+                     Reached by: {}",
                     chain_of(&chain)
                 )));
             }
@@ -570,7 +574,8 @@ pub fn derive_resolved(
 pub fn derive(xsd: &str, row_path: &str) -> Result<Vec<Column>, EngineError> {
     derive_resolved(xsd, row_path, "", &mut |loc| {
         Err(format!(
-            "this schema references {loc}, and it was supplied as text with no location to              resolve that from. Deriving from what is visible would produce a partial column list."
+            "this schema references {loc}, and it was supplied as text with no location to \
+             resolve that from. Deriving from what is visible would produce a partial column list."
         ))
     })
     .map(|(cols, _)| cols)

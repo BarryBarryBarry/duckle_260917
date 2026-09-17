@@ -576,7 +576,8 @@ mod tests {
             };
             assert!(
                 p.chunks.iter().all(|c| c.predicate.contains(id.as_str())),
-                "{component} promises one consistent state ({id}) but no chunk reads as of it,                  so N independent queries are being described as one snapshot"
+                "{component} promises one consistent state ({id}) but no chunk reads as of it, \
+                 so N independent queries are being described as one snapshot"
             );
         }
     }

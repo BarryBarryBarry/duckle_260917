@@ -937,7 +937,9 @@ impl DuckdbEngine {
         // declining to save state.
         if format == "ducklake.maintain" {
             return Err(EngineError::Unsupported(
-                "src.ducklake.maintain cannot be autodetected: finding out what it returns would                  mean performing the maintenance operation. It emits what it did, so run it to                  see the columns."
+                "src.ducklake.maintain cannot be autodetected: finding out what it returns would \
+                 mean performing the maintenance operation. It emits what it did, so run it to \
+                 see the columns."
                     .to_string(),
             ));
         }
@@ -8368,12 +8370,14 @@ mod inspect_prelude_tests {
             let prelude = engine.source_prelude(format, &props);
             assert!(
                 prelude.contains("SECRET"),
-                "autodetect of {format:?} reads a cloud URL with credentials set and creates no                  secret, so it authenticates as nobody: {prelude:?}"
+                "autodetect of {format:?} reads a cloud URL with credentials set and creates no \
+                 secret, so it authenticates as nobody: {prelude:?}"
             );
         }
         assert!(
             checked >= 4,
-            "only {checked} credentialled format(s) were exercised - the props are no longer              enough to make a secret, so this test proves nothing"
+            "only {checked} credentialled format(s) were exercised - the props are no longer \
+             enough to make a secret, so this test proves nothing"
         );
     }
 

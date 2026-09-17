@@ -2636,7 +2636,8 @@ mod freshness_and_the_history_window {
         assert_eq!(
             judged(&after),
             Some(crate::sla::State::Fresh),
-            "an asset written correctly and inside its allowance must not become stale              because OTHER runs pushed its record out of the history window"
+            "an asset written correctly and inside its allowance must not become stale \
+             because OTHER runs pushed its record out of the history window"
         );
     }
 }

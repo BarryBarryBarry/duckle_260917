@@ -192,7 +192,8 @@ pub fn append_run_record(
     // event.
     if let Err(e) = crate::materialize::append(workspace, pipeline_id, &publication) {
         eprintln!(
-            "duckle: {pipeline_id} published but its materialization event was not recorded              ({e}). Downstream triggers will not see it until the log is reconciled."
+            "duckle: {pipeline_id} published but its materialization event was not recorded \
+             ({e}). Downstream triggers will not see it until the log is reconciled."
         );
     }
     // Refresh the OpenMetrics textfile alongside the history. Best-effort:

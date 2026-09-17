@@ -251,7 +251,10 @@ pub fn check(doc: &PipelineDoc) -> Vec<Finding> {
                 property: Some("matchBy".into()),
                 suggestion: None,
                 message: format!(
-                    "{component} now matches columns by position, as this node asks. Until                      recently the setting was accepted and ignored, and the columns were                      matched by name - so this node's output may differ from its last run.                      Set matchBy to name to keep the old result."
+                    "{component} now matches columns by position, as this node asks. Until \
+                     recently the setting was accepted and ignored, and the columns were \
+                     matched by name - so this node's output may differ from its last run. \
+                     Set matchBy to name to keep the old result."
                 ),
                 fails: false,
             });
@@ -918,7 +921,8 @@ mod tests {
         for unsupported in ["name", "address", "dob", "passport"] {
             assert!(
                 !offered.contains(unsupported),
-                "the form offers {unsupported:?} as a type and pii_patterns cannot detect it:                  {offered}"
+                "the form offers {unsupported:?} as a type and pii_patterns cannot detect it: \
+                 {offered}"
             );
         }
         // And the four that ARE supported have to be named somewhere, or the

@@ -241,7 +241,8 @@ fn report(policy: &Policy, d: &Decision) -> Vec<LedgerPrune> {
             records: d.dropped_deliveries,
             kept: d.kept_deliveries.len(),
             reason: format!(
-                "delivered more than {days} days ago; pending and failed are kept, and so is                  anything whose publication is still on the log"
+                "delivered more than {days} days ago; pending and failed are kept, and so is \
+                 anything whose publication is still on the log"
             ),
         });
     }

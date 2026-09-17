@@ -372,7 +372,8 @@ pub fn execute_with(
                             Some(run_id),
                             None,
                             Some(
-                                "the read finished but no output was committed, so there is                                  nothing to reuse and the slice is not done"
+                                "the read finished but no output was committed, so there is \
+                                 nothing to reuse and the slice is not done"
                                     .to_string(),
                             ),
                         ),
