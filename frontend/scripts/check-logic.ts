@@ -13,6 +13,8 @@ import type { RepoItem } from '../src/repo-types';
 import { livePreviewable } from '../src/live-preview';
 import { discoverParams, resolveForRun } from '../src/run-resolve';
 import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterBuilderField';
+import { scheduleForSave } from '../src/schedule-save';
+import type { Schedule } from '../src/tauri-bridge';
 
 // The frontend directory, injected by check-logic.mjs: the bundle runs from a
 // temp dir, so neither import.meta.url nor the cwd can be trusted to find it.
@@ -190,6 +192,64 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'filter builder: "matches" still treats % as a wildcard',
         likeMatches(conditionToSql({ id: 'x', column: 'c', op: 'like', value: '50%' }, 'string'), '50 units') === true,
         'the escaping leaked into the pattern operator',
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Saving in the desktop Schedules dialog keeps what the dialog does not show.
+//
+// A schedule's timezone, exclusion calendar, misfire policy and catch-up bounds
+// are set through the server API. The dialog has no control for them and built
+// a fresh record from its own fields, and the desktop upsert replaces the whole
+// record, so renaming a schedule put a Brussels 03:00 job back on the machine's
+// clock and switched its maintenance calendar off.
+// ---------------------------------------------------------------------------
+{
+    const loaded: Schedule = {
+        id: 's1',
+        pipeline_id: 'p1',
+        name: 'Nightly',
+        enabled: true,
+        kind: { type: 'cron', expr: '0 0 3 * * *' },
+        timezone: 'Europe/Brussels',
+        exclude: { weekdays: ['sunday'], dates: ['2026-12-25'] },
+        misfire: 'latest',
+        catchup: { maxCatchupRuns: 5, maxCatchupAgeDays: 7 },
+    };
+    const saved = scheduleForSave(loaded, {
+        id: 's1',
+        pipelineId: 'p1',
+        name: '  Nightly load  ',
+        enabled: false,
+        kind: { type: 'cron', expr: '0 30 3 * * *' },
+    });
+    const kept = (k: keyof Schedule) => JSON.stringify(saved[k]) === JSON.stringify(loaded[k]);
+    for (const k of ['timezone', 'exclude', 'misfire', 'catchup'] as const) {
+        check(
+            `schedule save: ${k} survives an edit in the dialog`,
+            kept(k),
+            `sent ${JSON.stringify(saved[k])}, the store had ${JSON.stringify(loaded[k])}`,
+        );
+    }
+    check(
+        'schedule save: the fields the dialog edits are the edited values',
+        saved.name === 'Nightly load' &&
+            saved.enabled === false &&
+            saved.kind.type === 'cron' &&
+            saved.kind.expr === '0 30 3 * * *',
+        `got ${JSON.stringify(saved)}`,
+    );
+    const fresh = scheduleForSave(undefined, {
+        id: '',
+        pipelineId: 'p1',
+        name: ' ',
+        enabled: true,
+        kind: { type: 'interval', seconds: 60 },
+    });
+    check(
+        'schedule save: a new schedule carries no settings it was never given',
+        fresh.timezone === undefined && fresh.exclude === undefined && fresh.name === 'Schedule',
+        `got ${JSON.stringify(fresh)}`,
     );
 }
 

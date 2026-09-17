@@ -13,6 +13,7 @@ import {
     X,
 } from 'lucide-react';
 import { isTauri } from '../tauri-dialog';
+import { scheduleForSave } from '../schedule-save';
 import {
     runHistory,
     scheduleDelete,
@@ -145,13 +146,10 @@ export default function ScheduleEditorModal({
                         type: 'interval',
                         seconds: joinInterval(editing.intervalValue, editing.intervalUnit),
                     };
-        const draft: Schedule = {
-            id: editing.id,
-            pipeline_id: pipelineId,
-            name: editing.name.trim() || 'Schedule',
-            enabled: editing.enabled,
-            kind,
-        };
+        const draft = scheduleForSave(
+            schedules.find(s => s.id === editing.id),
+            { id: editing.id, pipelineId, name: editing.name, enabled: editing.enabled, kind },
+        );
         try {
             await scheduleUpsert(draft);
             setEditing(null);

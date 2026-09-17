@@ -997,6 +997,15 @@ export type Schedule = {
     name: string;
     enabled: boolean;
     kind: ScheduleKind;
+    /**
+     * Set through the server's schedule API (#318, #296). No desktop control edits
+     * these, but the desktop upsert replaces the whole record, so an editor must
+     * send back what it loaded or saving wipes them.
+     */
+    timezone?: string;
+    exclude?: { weekdays?: string[]; dates?: string[] };
+    misfire?: 'skip' | 'latest' | 'all';
+    catchup?: { maxCatchupRuns: number; maxCatchupAgeDays: number };
     last_run_at?: string;
     last_run_status?: 'ok' | 'error' | 'cancelled';
     last_run_duration_ms?: number;
