@@ -19354,14 +19354,24 @@ fn resolve_subpipeline_in(reference: &str, root: &std::path::Path) -> String {
     // A reference is written the way the job wrote it - usually the child's bare name,
     // sometimes with an extension, occasionally a path. Try the arrangements a workspace
     // actually uses before going looking.
-    let file = format!(
-        "{}.json",
-        std::path::Path::new(reference)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| reference.to_string())
-    );
-    for candidate in [root.join(reference), root.join("pipelines").join(&file)] {
+    //
+    // Two spellings of the same pipeline are in use and a parent carries one reference
+    // across both: the editor and the sample workspaces name the file
+    // `<id>.pipeline.json`, and the desktop writes `<id>.json` when it seeds a
+    // workspace from those samples. So `.pipeline` is stripped from the stem and both
+    // names are looked for, here and in the walk below. Accepting only one of them left
+    // the repo's own csv_split sample unable to find its child in place.
+    let stem = std::path::Path::new(reference)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| reference.to_string());
+    let stem = stem.strip_suffix(".pipeline").unwrap_or(&stem).to_string();
+    let names = [format!("{stem}.json"), format!("{stem}.pipeline.json")];
+    for candidate in [
+        root.join(reference),
+        root.join("pipelines").join(&names[0]),
+        root.join("pipelines").join(&names[1]),
+    ] {
         if candidate.is_file() {
             return candidate.display().to_string();
         }
@@ -19393,7 +19403,7 @@ fn resolve_subpipeline_in(reference: &str, root: &std::path::Path) -> String {
                 {
                     queue.push(path);
                 }
-            } else if name == file.as_str() {
+            } else if names.iter().any(|n| name == n.as_str()) {
                 found.push(path);
             }
         }
@@ -20191,6 +20201,34 @@ mod context_var_tests {
             miss, "NOT_THERE.json",
             "and a name that is nowhere comes back as asked, so the error names it"
         );
+    }
+
+    #[test]
+    fn a_child_named_the_way_the_editor_saves_it_resolves_either_way() {
+        // The editor and the sample workspaces name a pipeline file
+        // `<id>.pipeline.json`, and the desktop writes the same pipeline out as
+        // `<id>.json` when it seeds a workspace. A parent carries ONE reference
+        // across both, so both spellings have to resolve, whichever the parent
+        // wrote: the repo's own csv_split sample failed in place with
+        // "read '_csv_split_child': No such file or directory", and spelling the
+        // reference with the long extension would have broken the seeded copy
+        // instead of fixing anything.
+        let editor = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(editor.path().join("pipelines")).unwrap();
+        std::fs::write(editor.path().join("pipelines").join("child.pipeline.json"), "{}").unwrap();
+        let seeded = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(seeded.path().join("pipelines")).unwrap();
+        std::fs::write(seeded.path().join("pipelines").join("child.json"), "{}").unwrap();
+
+        for (what, root) in [("as the editor saves it", editor.path()), ("as a seeded workspace holds it", seeded.path())] {
+            for reference in ["child", "child.json", "child.pipeline.json"] {
+                let hit = super::resolve_subpipeline_in(reference, root);
+                assert!(
+                    std::path::Path::new(&hit).is_file(),
+                    "{what}: `{reference}` did not resolve, it came back as {hit}"
+                );
+            }
+        }
     }
 
     #[test]
