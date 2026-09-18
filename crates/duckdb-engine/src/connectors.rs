@@ -9774,10 +9774,8 @@ impl DuckdbEngine {
             .map_err(|e| EngineError::Query(format!("rabbit: tokio rt: {}", e)))?;
         let total: Result<usize, String> = rt.block_on(async {
             use lapin::options::BasicPublishOptions;
-            use lapin::{BasicProperties, Connection, ConnectionProperties};
-            let conn = Connection::connect(&spec.url, ConnectionProperties::default())
-                .await
-                .map_err(|e| format!("connect: {}", e))?;
+            use lapin::BasicProperties;
+            let conn = rabbit_connect(&spec.url, AMQP_CONNECT_TIMEOUT).await?;
             let channel = conn
                 .create_channel()
                 .await
@@ -9844,10 +9842,7 @@ impl DuckdbEngine {
             .map_err(|e| EngineError::Query(format!("rabbit: tokio rt: {}", e)))?;
         let result: Result<usize, String> = rt.block_on(async {
             use lapin::options::{BasicAckOptions, BasicGetOptions};
-            use lapin::{Connection, ConnectionProperties};
-            let conn = Connection::connect(&spec.url, ConnectionProperties::default())
-                .await
-                .map_err(|e| format!("connect: {}", e))?;
+            let conn = rabbit_connect(&spec.url, AMQP_CONNECT_TIMEOUT).await?;
             let channel = conn
                 .create_channel()
                 .await
@@ -19416,6 +19411,44 @@ fn resolve_subpipeline_in(reference: &str, root: &std::path::Path) -> String {
     }
 }
 
+/// How long an AMQP connect waits for the broker before giving up.
+///
+/// The same budget the HTTP transports use for their connect (`tls.rs`), for the
+/// same reason: "the peer is not answering" is a fast failure everywhere else in
+/// the engine, and a run that cannot be told apart from a hang cannot be
+/// operated. The node's own `timeoutMs` is not this number - that one is an idle
+/// timeout, how long to keep waiting for a quiet queue.
+const AMQP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Open an AMQP connection, giving up after `budget`.
+///
+/// `lapin::Connection::connect` carries no timeout of its own. A broker that
+/// accepts the socket and then never sends the AMQP Start frame - a listener on
+/// the port that is not a broker, a proxy that connected upstream and stalled, a
+/// broker wedged mid-handshake - leaves the await pending for the life of the
+/// process: no error, no progress, and the run's own deadline never reached
+/// because it is not evaluated until the connect returns. That is not
+/// theoretical. It left a CI leg running for six hours, at zero CPU, until the
+/// runner killed the orphan test process.
+async fn rabbit_connect(
+    url: &str,
+    budget: std::time::Duration,
+) -> Result<lapin::Connection, String> {
+    match tokio::time::timeout(
+        budget,
+        lapin::Connection::connect(url, lapin::ConnectionProperties::default()),
+    )
+    .await
+    {
+        Ok(Ok(conn)) => Ok(conn),
+        Ok(Err(e)) => Err(format!("connect: {}", e)),
+        Err(_) => Err(format!(
+            "connect: the broker accepted the connection but did not answer within {}ms",
+            budget.as_millis()
+        )),
+    }
+}
+
 /// Coerce a column name into a legal XML element name: the first char must be a
 /// letter or `_`, the rest letters/digits/`-`/`.`/`_`. Illegal chars become `_`
 /// and a non-letter first char is prefixed with `_`. The original name is kept
@@ -19768,6 +19801,53 @@ mod dhis2_summary_tests {
 mod connector_helper_tests {
     use super::{bson_flag_matches, jsonnative_quote_inner, python_temp_paths};
     use mongodb::bson::Bson;
+
+    /// A broker that accepts the socket and says nothing fails, rather than
+    /// hanging the run forever.
+    ///
+    /// `Connection::connect` has no timeout of its own, and a silent peer gives
+    /// it nothing to fail on: the await simply stays pending. The run's
+    /// `timeoutMs` cannot save it either, because that deadline is only
+    /// evaluated once the connect has returned. This is the shape that left a CI
+    /// leg running for six hours at zero CPU until the runner killed it.
+    ///
+    /// The connect runs on its own thread and the result arrives through a
+    /// channel, deliberately: a connect that never returns has to FAIL this test
+    /// rather than hang it.
+    #[test]
+    fn a_broker_that_accepts_and_says_nothing_fails_instead_of_hanging() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let silent = std::thread::spawn(move || {
+            // Hold what is accepted open and silent. Dropping it would send a
+            // FIN, which lapin reports at once - the opposite of the case here.
+            let held: Vec<std::net::TcpStream> = listener.incoming().take(1).flatten().collect();
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            drop(held);
+        });
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("rt");
+            let out = rt.block_on(super::rabbit_connect(
+                &format!("amqp://guest:guest@127.0.0.1:{port}/%2f"),
+                std::time::Duration::from_millis(300),
+            ));
+            let _ = tx.send(out.err().unwrap_or_else(|| "connected to a silent socket".into()));
+        });
+
+        let err = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the connect returned instead of hanging");
+        assert!(
+            err.contains("did not answer within 300ms"),
+            "the failure must say the broker never answered, and for how long we waited: {err}"
+        );
+        drop(silent);
+    }
 
     /// #257: a REST incremental mark that is an RFC 3339 timestamp is compared
     /// as the instant it names. Compared as text, a fractional second sorted
