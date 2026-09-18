@@ -7132,12 +7132,8 @@ impl DuckdbEngine {
                 hostport: format!("{}:{}", host, port),
                 refused: refused.clone(),
             };
-            let mut session = russh::client::connect(config, (host, port), handler)
-                .await
-                .map_err(|e| match refused.lock().unwrap().take() {
-                    Some(why) => why,
-                    None => format!("connect {}:{}: {}", host, port, e),
-                })?;
+            let mut session =
+                ssh_connect(config, host, port, handler, &refused, CONNECT_TIMEOUT).await?;
             let authed = if let Some(pem) = &spec.private_key {
                 let key = russh::keys::decode_secret_key(pem, spec.key_passphrase.as_deref())
                     .map_err(|e| format!("private key: {}", e))?;
@@ -9775,7 +9771,7 @@ impl DuckdbEngine {
         let total: Result<usize, String> = rt.block_on(async {
             use lapin::options::BasicPublishOptions;
             use lapin::BasicProperties;
-            let conn = rabbit_connect(&spec.url, AMQP_CONNECT_TIMEOUT).await?;
+            let conn = rabbit_connect(&spec.url, CONNECT_TIMEOUT).await?;
             let channel = conn
                 .create_channel()
                 .await
@@ -9842,7 +9838,7 @@ impl DuckdbEngine {
             .map_err(|e| EngineError::Query(format!("rabbit: tokio rt: {}", e)))?;
         let result: Result<usize, String> = rt.block_on(async {
             use lapin::options::{BasicAckOptions, BasicGetOptions};
-            let conn = rabbit_connect(&spec.url, AMQP_CONNECT_TIMEOUT).await?;
+            let conn = rabbit_connect(&spec.url, CONNECT_TIMEOUT).await?;
             let channel = conn
                 .create_channel()
                 .await
@@ -10323,7 +10319,6 @@ impl DuckdbEngine {
     pub(crate) fn run_ftp_source(&self, db: &Path, spec: &FtpSourceSpec) -> Result<String, EngineError> {
         use base64::engine::general_purpose::STANDARD as B64;
         use base64::Engine as _;
-        use suppaftp::FtpStream;
         self.check_cancelled()?;
         // SFTP (SSH File Transfer Protocol) is a completely different protocol
         // from FTP / FTPS and is not supported yet (issue #16; on the roadmap,
@@ -10347,7 +10342,7 @@ impl DuckdbEngine {
             .map(|h| h.trim_end_matches('/'))
             .unwrap_or_else(|| spec.host.trim());
         let addr = format!("{}:{}", host, spec.port);
-        let mut ftp = FtpStream::connect(&addr)
+        let mut ftp = ftp_connect_bounded(&addr, CONNECT_TIMEOUT)
             .map_err(|e| EngineError::Query(format!("ftp connect {}: {}", addr, e)))?;
         if spec.secure {
             return Err(EngineError::Config(
@@ -10471,13 +10466,15 @@ impl DuckdbEngine {
                 hostport: format!("{}:{}", spec.host, spec.port),
                 refused: refused.clone(),
             };
-            let mut session =
-                russh::client::connect(config, (spec.host.as_str(), spec.port), handler)
-                    .await
-                    .map_err(|e| match refused.lock().unwrap().take() {
-                        Some(why) => why,
-                        None => format!("connect {}:{}: {}", spec.host, spec.port, e),
-                    })?;
+            let mut session = ssh_connect(
+                config,
+                spec.host.as_str(),
+                spec.port,
+                handler,
+                &refused,
+                CONNECT_TIMEOUT,
+            )
+            .await?;
 
             // Auth: a private key wins over a password if both are present.
             let authed = if let Some(pem) = &spec.private_key {
@@ -10632,7 +10629,6 @@ impl DuckdbEngine {
     /// rejected (a different protocol - use the SFTP option); FTPS is guarded
     /// the same way as the source until the TLS wrapper is wired.
     pub(crate) fn run_ftp_sink(&self, db: &Path, spec: &FtpSinkSpec) -> Result<String, EngineError> {
-        use suppaftp::FtpStream;
         self.check_cancelled()?;
         if is_sftp_target(&spec.host, spec.port) {
             return Err(EngineError::Config(
@@ -10655,7 +10651,7 @@ impl DuckdbEngine {
             let total = std::fs::metadata(&temp)
                 .map_err(|e| EngineError::Query(format!("ftp: stat temp {}: {}", temp.display(), e)))?
                 .len();
-            let mut ftp = FtpStream::connect(&addr)
+            let mut ftp = ftp_connect_bounded(&addr, CONNECT_TIMEOUT)
                 .map_err(|e| EngineError::Query(format!("ftp connect {}: {}", addr, e)))?;
             if spec.secure {
                 return Err(EngineError::Config(
@@ -10746,13 +10742,15 @@ impl DuckdbEngine {
                     hostport: format!("{}:{}", spec.host, spec.port),
                     refused: refused.clone(),
                 };
-                let mut session =
-                    russh::client::connect(config, (spec.host.as_str(), spec.port), handler)
-                        .await
-                        .map_err(|e| match refused.lock().unwrap().take() {
-                            Some(why) => why,
-                            None => format!("connect {}:{}: {}", spec.host, spec.port, e),
-                        })?;
+                let mut session = ssh_connect(
+                    config,
+                    spec.host.as_str(),
+                    spec.port,
+                    handler,
+                    &refused,
+                    CONNECT_TIMEOUT,
+                )
+                .await?;
 
                 let authed = if let Some(pem) = &spec.private_key {
                     let key = russh::keys::decode_secret_key(pem, spec.key_passphrase.as_deref())
@@ -14301,7 +14299,7 @@ impl DuckdbEngine {
             .map_err(|e| EngineError::Query(format!("sqlserver: tokio rt: {}", e)))?;
         let total = rt
             .block_on(async {
-                use tokio_util::compat::TokioAsyncWriteCompatExt;
+
                 let mut config = tiberius::Config::new();
                 config.host(&spec.host);
                 config.port(spec.port);
@@ -14321,13 +14319,7 @@ impl DuckdbEngine {
                     // unencrypted, matching other tools' "encrypt = no".
                     config.encryption(tiberius::EncryptionLevel::NotSupported);
                 }
-                let tcp = tokio::net::TcpStream::connect(config.get_addr())
-                    .await
-                    .map_err(|e| format!("connect: {}", e))?;
-                tcp.set_nodelay(true).ok();
-                let mut client = tiberius::Client::connect(config, tcp.compat_write())
-                    .await
-                    .map_err(|e| format!("tds handshake: {}", e))?;
+                let mut client = tds_connect(config, CONNECT_TIMEOUT).await?;
                 // Create the table if it isn't there yet (no-op otherwise).
                 client
                     .execute(create_sql.as_str(), &[])
@@ -14440,7 +14432,7 @@ impl DuckdbEngine {
             .block_on(async move {
                 use futures_util::TryStreamExt;
                 use tiberius::QueryItem;
-                use tokio_util::compat::TokioAsyncWriteCompatExt;
+
                 let mut writer = writer;
                 let mut config = tiberius::Config::new();
                 config.host(&spec.host);
@@ -14461,13 +14453,7 @@ impl DuckdbEngine {
                     // unencrypted, matching other tools' "encrypt = no".
                     config.encryption(tiberius::EncryptionLevel::NotSupported);
                 }
-                let tcp = tokio::net::TcpStream::connect(config.get_addr())
-                    .await
-                    .map_err(|e| format!("connect: {}", e))?;
-                tcp.set_nodelay(true).ok();
-                let mut client = tiberius::Client::connect(config, tcp.compat_write())
-                    .await
-                    .map_err(|e| format!("tds handshake: {}", e))?;
+                let mut client = tds_connect(config, CONNECT_TIMEOUT).await?;
                 let mut stream = client
                     .query(&spec.query, &[])
                     .await
@@ -19411,14 +19397,162 @@ fn resolve_subpipeline_in(reference: &str, root: &std::path::Path) -> String {
     }
 }
 
-/// How long an AMQP connect waits for the broker before giving up.
+/// How long a driver connect waits for the peer before giving up.
 ///
 /// The same budget the HTTP transports use for their connect (`tls.rs`), for the
 /// same reason: "the peer is not answering" is a fast failure everywhere else in
 /// the engine, and a run that cannot be told apart from a hang cannot be
-/// operated. The node's own `timeoutMs` is not this number - that one is an idle
-/// timeout, how long to keep waiting for a quiet queue.
-const AMQP_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// operated. One number for every driver that needs one, because a per-driver
+/// number is a per-driver surprise.
+///
+/// This is not a node's own `timeoutMs`. Those are idle timeouts - how long to
+/// keep waiting for a quiet queue - and they are only consulted once a
+/// connection exists.
+///
+/// Drivers that bound their own connect are left alone rather than wrapped: NATS
+/// is one, where `async_nats` times out the whole handshake at 5s per address by
+/// default (async-nats-0.50.0 `options.rs:104`, armed at `connector.rs:408`), so
+/// a wrapper here would be dead code.
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Open an SSH connection, giving up after `budget`.
+///
+/// `russh::client::Config` carries no connect or handshake timeout: its only
+/// deadline, `inactivity_timeout`, is armed inside the session task, which is
+/// spawned only after the server's version string has been read. So a peer that
+/// accepts the socket and never sends `SSH-2.0-...` leaves `read_ssh_id` pending
+/// with nothing to fail on (russh-0.63.2 `client/mod.rs:1121`, the read itself in
+/// `ssh_read.rs`). The SERVER half of that same crate does bound the mirror-image
+/// read (`server/mod.rs:1101`); the client half does not.
+///
+/// `refused` is the host-key verifier's own reason, which the callers already
+/// prefer over russh's bare "unknown key", so it is threaded through here rather
+/// than thrown away by the wrapper.
+async fn ssh_connect<H>(
+    config: std::sync::Arc<russh::client::Config>,
+    host: &str,
+    port: u16,
+    handler: H,
+    refused: &std::sync::Mutex<Option<String>>,
+    budget: std::time::Duration,
+) -> Result<russh::client::Handle<H>, String>
+where
+    H: russh::client::Handler<Error = russh::Error> + Send + 'static,
+{
+    match tokio::time::timeout(budget, russh::client::connect(config, (host, port), handler)).await
+    {
+        Ok(Ok(handle)) => Ok(handle),
+        Ok(Err(e)) => Err(match refused.lock().unwrap().take() {
+            Some(why) => why,
+            None => format!("connect {}:{}: {}", host, port, e),
+        }),
+        Err(_) => Err(format!(
+            "connect {}:{}: the server accepted the connection but did not complete the SSH handshake within {}ms",
+            host,
+            port,
+            budget.as_millis()
+        )),
+    }
+}
+
+/// Open an FTP control channel with BOTH the TCP connect and the server's 220
+/// greeting bounded.
+///
+/// suppaftp's own `connect_timeout` bounds only `TcpStream::connect_timeout` and
+/// then reads the greeting with no deadline at all (suppaftp-11.0.0
+/// `sync_ftp.rs:75` and the `read_response(Status::Ready)` at `:101`), so a peer
+/// that accepts and stays silent hangs the run either way. `get_ref` cannot help
+/// either: it only exists on a stream that has already read its greeting. The
+/// socket therefore has to arrive with its read timeout already armed, which
+/// means connecting it here and handing it over with `connect_with_stream`.
+///
+/// The timeout is cleared once the greeting is in: it exists to bound a peer that
+/// says nothing at all, and leaving it armed would cut off a long transfer's
+/// control-channel reply.
+fn ftp_connect_bounded(
+    addr: &str,
+    budget: std::time::Duration,
+) -> Result<suppaftp::FtpStream, String> {
+    use std::net::ToSocketAddrs;
+    let resolved: Vec<std::net::SocketAddr> = addr
+        .to_socket_addrs()
+        .map_err(|e| format!("resolve {}: {}", addr, e))?
+        .collect();
+    if resolved.is_empty() {
+        return Err(format!("resolve {}: no address", addr));
+    }
+    let mut last = String::new();
+    for sa in resolved {
+        let tcp = match std::net::TcpStream::connect_timeout(&sa, budget) {
+            Ok(tcp) => tcp,
+            Err(e) => {
+                last = e.to_string();
+                continue;
+            }
+        };
+        if let Err(e) = tcp.set_read_timeout(Some(budget)) {
+            last = e.to_string();
+            continue;
+        }
+        match suppaftp::FtpStream::connect_with_stream(tcp) {
+            Ok(ftp) => {
+                let _ = ftp.get_ref().set_read_timeout(None);
+                return Ok(ftp);
+            }
+            // A timed-out receive is the case this function exists for, and it
+            // arrives as a bare io error ("os error 10060" / EWOULDBLOCK), so it
+            // is named here rather than passed on as it is.
+            Err(suppaftp::FtpError::ConnectionError(io))
+                if matches!(
+                    io.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                last = format!(
+                    "the server accepted the connection but sent no greeting within {}ms",
+                    budget.as_millis()
+                )
+            }
+            Err(e) => last = e.to_string(),
+        }
+    }
+    Err(last)
+}
+
+/// Open a SQL Server connection, giving up after `budget`.
+///
+/// tiberius 0.12.3 has no timeout of its own - `Config` carries nine fields and
+/// not one of them is a timeout - and `Client::connect` runs the whole TDS
+/// handshake, whose first act is to send PRELOGIN and then read the reply
+/// (`client/connection.rs:91` and the collect at `:277`). A peer that accepts the
+/// socket and never speaks TDS leaves that read pending for the life of the
+/// process.
+///
+/// The TCP connect is inside the same budget on purpose: left on its own it is
+/// bounded only by the OS SYN retries, which is about 21s on Windows and over two
+/// minutes on Linux, so the platform would decide what "connecting" costs.
+async fn tds_connect(
+    config: tiberius::Config,
+    budget: std::time::Duration,
+) -> Result<tiberius::Client<tokio_util::compat::Compat<tokio::net::TcpStream>>, String> {
+    use tokio_util::compat::TokioAsyncWriteCompatExt;
+    let connect = async {
+        let tcp = tokio::net::TcpStream::connect(config.get_addr())
+            .await
+            .map_err(|e| format!("connect: {}", e))?;
+        tcp.set_nodelay(true).ok();
+        tiberius::Client::connect(config, tcp.compat_write())
+            .await
+            .map_err(|e| format!("tds handshake: {}", e))
+    };
+    match tokio::time::timeout(budget, connect).await {
+        Ok(inner) => inner,
+        Err(_) => Err(format!(
+            "connect: the server accepted the connection but sent no TDS response within {}ms",
+            budget.as_millis()
+        )),
+    }
+}
 
 /// Open an AMQP connection, giving up after `budget`.
 ///
@@ -19802,6 +19936,144 @@ mod connector_helper_tests {
     use super::{bson_flag_matches, jsonnative_quote_inner, python_temp_paths};
     use mongodb::bson::Bson;
 
+    /// A listener that accepts and then says nothing, held open for `hold`.
+    ///
+    /// Dropping the accepted socket would send a FIN, which every driver reports
+    /// at once - the opposite of the case these tests are about, which is a peer
+    /// that is connected and silent.
+    fn silent_listener(hold: std::time::Duration) -> (u16, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let held: Vec<std::net::TcpStream> = listener.incoming().take(1).flatten().collect();
+            std::thread::sleep(hold);
+            drop(held);
+        });
+        (port, handle)
+    }
+
+    /// Run `f` on its own thread and return what it produced, or fail after
+    /// `patience`.
+    ///
+    /// Deliberately not a join: a connect that never returns has to FAIL these
+    /// tests rather than hang them, which is the whole point of the fix under
+    /// test. The worker thread is left to the process.
+    fn answers_within<T: Send + 'static>(
+        patience: std::time::Duration,
+        f: impl FnOnce() -> T + Send + 'static,
+    ) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(patience)
+            .expect("the connect returned instead of hanging")
+    }
+
+    /// An SSH server that accepts the socket and never sends its version string
+    /// fails, rather than hanging the run forever.
+    ///
+    /// russh's client reads the peer's `SSH-2.0-...` with no deadline, and its
+    /// only config timeout is armed later, inside the session task. The server
+    /// half of the same crate bounds the mirror-image read; the client half does
+    /// not.
+    #[test]
+    fn an_ssh_server_that_never_sends_its_version_fails_instead_of_hanging() {
+        struct Anything;
+        impl russh::client::Handler for Anything {
+            type Error = russh::Error;
+            async fn check_server_key(
+                &mut self,
+                _key: &russh::keys::PublicKeyOrCertificate,
+            ) -> Result<bool, Self::Error> {
+                Ok(true)
+            }
+        }
+
+        let (port, silent) = silent_listener(std::time::Duration::from_secs(5));
+        let err = answers_within(std::time::Duration::from_secs(10), move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("rt");
+            let refused = std::sync::Mutex::new(None);
+            rt.block_on(super::ssh_connect(
+                std::sync::Arc::new(russh::client::Config::default()),
+                "127.0.0.1",
+                port,
+                Anything,
+                &refused,
+                std::time::Duration::from_millis(300),
+            ))
+            .err()
+            .unwrap_or_else(|| "connected to a silent socket".into())
+        });
+        assert!(
+            err.contains("did not complete the SSH handshake within 300ms"),
+            "the failure must name the handshake and the wait: {err}"
+        );
+        drop(silent);
+    }
+
+    /// An FTP server that accepts the socket and never sends its 220 greeting
+    /// fails, rather than hanging the run forever.
+    ///
+    /// suppaftp's own `connect_timeout` bounds the TCP connect only, and reads
+    /// the greeting with no deadline, so the socket has to arrive with its read
+    /// timeout already armed.
+    #[test]
+    fn an_ftp_server_that_never_greets_fails_instead_of_hanging() {
+        let (port, silent) = silent_listener(std::time::Duration::from_secs(5));
+        // Patience well under the listener's hold: without the read timeout the
+        // greeting read only ends when the peer goes away at 5s, so a hang has to
+        // fail this test rather than pass it late.
+        let err = answers_within(std::time::Duration::from_secs(2), move || {
+            super::ftp_connect_bounded(
+                &format!("127.0.0.1:{port}"),
+                std::time::Duration::from_millis(300),
+            )
+            .err()
+            .unwrap_or_else(|| "connected to a silent socket".into())
+        });
+        assert!(
+            err.contains("sent no greeting within 300ms"),
+            "the failure must name the missing greeting and the wait: {err}"
+        );
+        drop(silent);
+    }
+
+    /// A SQL Server that accepts the socket and never answers PRELOGIN fails,
+    /// rather than hanging the run forever.
+    ///
+    /// tiberius carries no timeout of its own, and `Client::connect` runs the
+    /// whole TDS handshake, whose first act is a write followed by a read.
+    #[test]
+    fn a_sql_server_that_never_answers_prelogin_fails_instead_of_hanging() {
+        let (port, silent) = silent_listener(std::time::Duration::from_secs(5));
+        let err = answers_within(std::time::Duration::from_secs(10), move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("rt");
+            let mut config = tiberius::Config::new();
+            config.host("127.0.0.1");
+            config.port(port);
+            config.authentication(tiberius::AuthMethod::sql_server("sa", "unused"));
+            config.trust_cert();
+            rt.block_on(super::tds_connect(
+                config,
+                std::time::Duration::from_millis(300),
+            ))
+            .err()
+            .unwrap_or_else(|| "connected to a silent socket".into())
+        });
+        assert!(
+            err.contains("no TDS response within 300ms"),
+            "the failure must name the missing response and the wait: {err}"
+        );
+        drop(silent);
+    }
+
     /// A broker that accepts the socket and says nothing fails, rather than
     /// hanging the run forever.
     ///
@@ -19816,32 +20088,19 @@ mod connector_helper_tests {
     /// rather than hang it.
     #[test]
     fn a_broker_that_accepts_and_says_nothing_fails_instead_of_hanging() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let port = listener.local_addr().unwrap().port();
-        let silent = std::thread::spawn(move || {
-            // Hold what is accepted open and silent. Dropping it would send a
-            // FIN, which lapin reports at once - the opposite of the case here.
-            let held: Vec<std::net::TcpStream> = listener.incoming().take(1).flatten().collect();
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            drop(held);
-        });
-
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
+        let (port, silent) = silent_listener(std::time::Duration::from_secs(5));
+        let err = answers_within(std::time::Duration::from_secs(10), move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .expect("rt");
-            let out = rt.block_on(super::rabbit_connect(
+            rt.block_on(super::rabbit_connect(
                 &format!("amqp://guest:guest@127.0.0.1:{port}/%2f"),
                 std::time::Duration::from_millis(300),
-            ));
-            let _ = tx.send(out.err().unwrap_or_else(|| "connected to a silent socket".into()));
+            ))
+            .err()
+            .unwrap_or_else(|| "connected to a silent socket".into())
         });
-
-        let err = rx
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("the connect returned instead of hanging");
         assert!(
             err.contains("did not answer within 300ms"),
             "the failure must say the broker never answered, and for how long we waited: {err}"
