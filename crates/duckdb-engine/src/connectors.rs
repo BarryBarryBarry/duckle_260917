@@ -2072,7 +2072,7 @@ impl DuckdbEngine {
             }
         }
 
-        let conn = oracle::Connection::connect(&spec.user, &spec.password, &spec.connect)
+        let conn = oracle_connect_bounded(&spec.user, &spec.password, &spec.connect, CONNECT_TIMEOUT)
             .map_err(|e| EngineError::Query(format!("oracle connect: {}", e)))?;
         // Pin the decimal separator so string-bound numbers parse with '.'
         // regardless of the server locale (NLS_NUMERIC_CHARACTERS).
@@ -2428,7 +2428,7 @@ impl DuckdbEngine {
         };
         mark(&format!("connecting to {} as {}", spec.connect, spec.user));
 
-        let conn = oracle::Connection::connect(&spec.user, &spec.password, &spec.connect)
+        let conn = oracle_connect_bounded(&spec.user, &spec.password, &spec.connect, CONNECT_TIMEOUT)
             .map_err(|e| EngineError::Query(format!("oracle connect: {}", e)))?;
         mark("connected; normalizing NLS session formats");
 
@@ -2929,7 +2929,7 @@ impl DuckdbEngine {
             let scn = plan_.scn;
             let cancel = self.cancel.clone();
             handles.push(std::thread::spawn(move || -> Result<(usize, PathBuf), String> {
-                let conn = oracle::Connection::connect(&user, &password, &connect)
+                let conn = oracle_connect_bounded(&user, &password, &connect, CONNECT_TIMEOUT)
                     .map_err(|e| format!("connect: {}", e))?;
                 for nls in [
                     "ALTER SESSION SET NLS_DATE_FORMAT = 'YYYY-MM-DD HH24:MI:SS'",
@@ -19415,6 +19415,84 @@ fn resolve_subpipeline_in(reference: &str, root: &std::path::Path) -> String {
 /// a wrapper here would be dead code.
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Run a blocking call on a worker thread and stop waiting for it after
+/// `budget`, reporting `timed_out` instead.
+///
+/// For a driver whose connect cannot be bounded any other way. It bounds the
+/// RUN, not the resource: the worker is abandoned rather than cancelled, and
+/// keeps whatever it is holding until the library underneath it gives up. That
+/// is worth one leaked thread, because the alternative is a pipeline that never
+/// finishes and reports nothing.
+///
+/// A value that arrives after the budget is dropped on the worker thread, which
+/// is what runs the driver's own cleanup - a connection that turns up late is
+/// closed late rather than left open on the server.
+fn with_deadline<T: Send + 'static>(
+    budget: std::time::Duration,
+    timed_out: impl FnOnce() -> String,
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+    match rx.recv_timeout(budget) {
+        Ok(result) => result,
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(timed_out()),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err("the worker thread died before it answered".into())
+        }
+    }
+}
+
+/// Open an Oracle connection, giving up after `budget`.
+///
+/// Oracle is the one driver here with no timeout to set. `oracle` 0.6.3 has no
+/// connect timeout on `Connection` or `Connector`, and ODPI-C has nowhere to put
+/// one either: `dpiConnCreateParams` carries 23 fields and not one is a timeout,
+/// and the connect string is handed to `OCIServerAttach` verbatim. Its
+/// `set_call_timeout` is post-connect, per round trip rather than total, and
+/// needs client 18.1+. Rewriting the connect string is not an option: that field
+/// is free text, so it can be EZConnect, a TNS alias or a full descriptor, and
+/// which timeout parameter each accepts depends on a client we cannot inspect.
+///
+/// So the connect runs on a worker thread and is abandoned if it does not answer.
+/// `std::mpsc` rather than `tokio::time::timeout` because this path has no
+/// reactor to rely on: `duckle run` has no runtime at all, and `serve` reaches
+/// the engine through `spawn_blocking`.
+///
+/// What this does NOT do, since the limits matter more than the fix: it does not
+/// stop the OCI call, which stays parked in `OCIServerAttach` until the Oracle
+/// client itself gives up; it does not bound anything after the connect returns,
+/// so a server that completes the logon and then stalls moves the wait one step
+/// later; and Cancel still does not reach a connect in progress.
+///
+/// Tested through `with_deadline` rather than against a socket, deliberately. A
+/// driver-level test would have to abandon a real OCI attach on every suite run,
+/// and ODPI-C registers an `atexit` finalizer that tears down its globals while
+/// that call is still inside the Oracle client - a risk worth taking for a run
+/// that would otherwise hang forever, and not worth taking to cover the five
+/// lines below on a machine that has no Oracle client to begin with.
+#[cfg(feature = "oracle")]
+fn oracle_connect_bounded(
+    user: &str,
+    password: &str,
+    connect: &str,
+    budget: std::time::Duration,
+) -> Result<oracle::Connection, String> {
+    let (user, password, connect) = (user.to_string(), password.to_string(), connect.to_string());
+    with_deadline(
+        budget,
+        || {
+            format!(
+                "the listener accepted the connection but Oracle did not complete the logon within {}ms",
+                budget.as_millis()
+            )
+        },
+        move || oracle::Connection::connect(&user, &password, &connect).map_err(|e| e.to_string()),
+    )
+}
+
 /// Open an SSH connection, giving up after `budget`.
 ///
 /// `russh::client::Config` carries no connect or handshake timeout: its only
@@ -19968,6 +20046,48 @@ mod connector_helper_tests {
         });
         rx.recv_timeout(patience)
             .expect("the connect returned instead of hanging")
+    }
+
+    /// A blocking call that never answers is abandoned and reported, and one that
+    /// answers is passed through untouched.
+    ///
+    /// This is the mechanism behind the Oracle connect, which cannot be tested
+    /// against a real server here: ODPI-C loads the Oracle client at run time, so
+    /// on a machine without one the connect fails immediately for an unrelated
+    /// reason and proves nothing about the deadline.
+    #[test]
+    fn a_blocking_call_that_never_answers_is_given_up_on() {
+        let waited = answers_within(std::time::Duration::from_secs(5), || {
+            super::with_deadline(
+                std::time::Duration::from_millis(300),
+                || "it never answered".to_string(),
+                || {
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    Ok(())
+                },
+            )
+            .err()
+            .unwrap_or_else(|| "it answered, somehow".into())
+        });
+        assert_eq!(waited, "it never answered");
+
+        let passed: Result<u8, String> = super::with_deadline(
+            std::time::Duration::from_secs(5),
+            || "should not be reached".to_string(),
+            || Ok(7),
+        );
+        assert_eq!(passed, Ok(7), "a call that answers keeps its value");
+
+        let failed: Result<u8, String> = super::with_deadline(
+            std::time::Duration::from_secs(5),
+            || "should not be reached".to_string(),
+            || Err("the driver said no".into()),
+        );
+        assert_eq!(
+            failed,
+            Err("the driver said no".into()),
+            "and a call that fails keeps its own error rather than the deadline's"
+        );
     }
 
     /// An SSH server that accepts the socket and never sends its version string
