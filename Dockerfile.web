@@ -65,9 +65,19 @@ COPY . .
 # (ephemeral) target cache mount so the runtime stage can COPY them. duckle-lance
 # is the sidecar that powers src/snk.lancedb + src/snk.vortex (feature parity
 # with the desktop app).
+#
+# The two binaries are built in SEPARATE cargo invocations, which is not a
+# stylistic choice: the release profile is fat LTO with one codegen unit, and
+# one build of both let the two link steps overlap. duckle-lance links lance +
+# vortex + arrow, the largest graph in the workspace, and the runner's 16 GB was
+# not enough for both at once - the sidecar's rustc was SIGKILLed with "cannot
+# allocate memory" while, in cargo's own words, it was "waiting for other jobs
+# to finish". Sequential invocations share the same profile, so the cached
+# dependency builds are reused and only the peak comes down.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo build --release -p duckle-runner -p duckle-lance \
+    cargo build --release -p duckle-lance \
+    && cargo build --release -p duckle-runner \
     && cp /app/target/release/duckle-runner /usr/local/bin/duckle-runner \
     && cp /app/target/release/duckle-lance /usr/local/bin/duckle-lance
 
