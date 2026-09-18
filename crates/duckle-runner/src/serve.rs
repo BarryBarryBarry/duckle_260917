@@ -4426,31 +4426,74 @@ fn catch_up_schedule(
             return;
         }
     };
+    let zone_name = cfg.get("timezone").and_then(|v| v.as_str());
+    let decided_at = now.to_rfc3339();
+    let mut to_run = Vec::new();
     for (occ, decision) in overdue {
-        let run = decision == Decision::Fired;
-        // Recorded BEFORE running, so a crash mid-catch-up leaves the
-        // occurrence decided rather than due again - the same ordering the
-        // ledger uses everywhere else.
-        let entry = occurrences::entry(
-            schedule_id,
-            &occ,
-            cfg.get("timezone").and_then(|v| v.as_str()),
-            decision,
-            None,
-            &now.to_rfc3339(),
-        );
+        if decision == Decision::Fired {
+            // Recorded by the runner below, immediately before its own run, so
+            // the ledger never claims a firing that did not happen.
+            to_run.push(occ);
+            continue;
+        }
+        // Nothing has to run for these, so record them here and be done: an
+        // occurrence the policy skipped is decided the moment it is decided.
+        let entry =
+            occurrences::entry(schedule_id, &occ, zone_name, decision, None, &decided_at);
         if let Err(e) = occurrences::record(&state.workspace, &entry) {
             eprintln!("duckle-runner: schedule {schedule_id}: occurrence not recorded ({e})");
         }
-        if run {
-            eprintln!("duckle-runner: {schedule_id}: catching up {}", occ.at.to_rfc3339());
-            // #329: on its own thread, like every other firing. A catch-up is
-            // the LONGEST thing this loop does - it is N runs, not one - so
-            // executing it inline is the worst case of the stall, not an
-            // exception to it.
-            dispatch(state, in_flight, schedule_id, cfg, pipes);
+    }
+    if to_run.is_empty() {
+        return;
+    }
+    // #329: ONE thread for the whole catch-up, not one per occurrence.
+    //
+    // Per occurrence looks right and is not: `dispatch` refuses a schedule that
+    // is already in flight, and the first catch-up run puts it there, so every
+    // later occurrence was refused while its record already said "fired". With
+    // `misfire: all` that turned N missed runs into one run and N-1 lies, and
+    // the walk starts after the newest record, so the missed occurrences could
+    // never be derived again. They run in order here, on the one thread, which
+    // is also what `all` means: each of them, not whichever won a race.
+    {
+        let mut held = in_flight.lock().unwrap_or_else(|p| p.into_inner());
+        if !held.insert(schedule_id.to_string()) {
+            // Deliberately unrecorded: they are still overdue, and the next
+            // tick will derive them again once the current run is done. A
+            // record here would decide them without running them.
+            eprintln!(
+                "duckle-runner: scheduled {schedule_id} is still running; catching up {} occurrence(s) on a later tick",
+                to_run.len()
+            );
+            return;
         }
     }
+    let (state, in_flight) = (Arc::clone(state), Arc::clone(in_flight));
+    let (id, cfg, pipes) = (schedule_id.to_string(), cfg.clone(), pipes.clone());
+    let zone_name = zone_name.map(str::to_string);
+    std::thread::spawn(move || {
+        let _clear = InFlight::hold(in_flight, id.clone());
+        for occ in to_run {
+            // Recorded BEFORE its run, so a crash mid-catch-up leaves that
+            // occurrence decided rather than due again - the same ordering the
+            // ledger uses everywhere else. The ones after it are untouched, so
+            // they stay overdue and the next tick picks them up.
+            let entry = occurrences::entry(
+                &id,
+                &occ,
+                zone_name.as_deref(),
+                Decision::Fired,
+                None,
+                &decided_at,
+            );
+            if let Err(e) = occurrences::record(&state.workspace, &entry) {
+                eprintln!("duckle-runner: schedule {id}: occurrence not recorded ({e})");
+            }
+            eprintln!("duckle-runner: {id}: catching up {}", occ.at.to_rfc3339());
+            fire_schedule(&state, &id, &cfg, &pipes);
+        }
+    });
 }
 
 /// #296: write the occurrence this tick is firing into the durable ledger.
@@ -6739,6 +6782,122 @@ mod tests {
         assert_eq!(reply.code(), 200, "{}", String::from_utf8_lossy(&reply.body));
         let vars: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
         assert_eq!(vars, serde_json::json!({ "REGION": "eu-west", "BATCH": "42" }));
+    }
+
+    /// #296 AC1 + #329: a catch-up runs every occurrence it records as fired.
+    ///
+    /// The loop recorded each overdue occurrence as fired and then dispatched it,
+    /// but dispatch refuses a schedule that is already in flight - so with
+    /// `misfire: all` the first occurrence ran and every later one was recorded
+    /// as fired while nothing started. The ledger then asserted runs that never
+    /// existed, and because the catch-up walk begins strictly after the newest
+    /// record, those occurrences could never be derived again: the evidence of
+    /// the missed work was destroyed by the record claiming it had been done.
+    ///
+    /// "It was skipped" and "it ran" are the two states AC1 exists to keep
+    /// apart, so this asserts the ledger against the runs rather than either on
+    /// its own.
+    #[test]
+    fn a_catch_up_runs_every_occurrence_it_records_as_fired() {
+        let Ok(duckdb) = std::env::var("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipped: needs DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        use duckle_duckdb_engine::occurrences;
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
+        let pipeline = ws.join("pipelines").join("med.json");
+        std::fs::write(
+            &pipeline,
+            serde_json::json!({
+                "name": "med",
+                "nodes": [
+                    { "id": "s", "position": {"x":0,"y":0}, "data": { "label": "in", "componentId": "src.csv",
+                      "properties": { "path": ws.join("in.csv").to_string_lossy(), "hasHeader": true } } },
+                    { "id": "k", "position": {"x":0,"y":0}, "data": { "label": "out", "componentId": "snk.csv",
+                      "properties": { "path": ws.join("out.csv").to_string_lossy(), "hasHeader": true } } }
+                ],
+                "edges": [ { "id": "e", "source": "s", "target": "k", "data": { "connectionType": "main" } } ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // Anchor the ledger five minutes back: the walk starts after the newest
+        // record, so a minutely schedule is then five occurrences behind.
+        let now = chrono::Utc::now();
+        let anchor = now - chrono::Duration::minutes(5);
+        let seed = duckle_duckdb_engine::cronzone::Occurrence {
+            at: anchor,
+            local: anchor.to_rfc3339(),
+            offset_seconds: 0,
+            adjustment: None,
+        };
+        occurrences::record(
+            &ws,
+            &occurrences::entry("med", &seed, Some("UTC"), occurrences::Decision::Fired, None, &anchor.to_rfc3339()),
+        )
+        .unwrap();
+
+        let state = std::sync::Arc::new(State {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from(duckdb),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            running: Mutex::new(std::collections::HashSet::new()),
+            runs: Mutex::new(std::collections::HashMap::new()),
+            console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
+            host: "0.0.0.0".into(),
+            tick_interval: std::time::Duration::from_secs(15),
+            oidc: None,
+            oidc_endpoints: Mutex::new(None),
+            oidc_logins: Mutex::new(Default::default()),
+            unrecorded_deliveries: Mutex::new(Default::default()),
+        });
+        let in_flight = std::sync::Arc::new(Mutex::new(std::collections::HashSet::new()));
+        let cfg = serde_json::json!({
+            "id": "med",
+            "cron": "* * * * *",
+            "timezone": "UTC",
+            "misfire": "all",
+        });
+        let zone = duckle_duckdb_engine::cronzone::resolve_zone(Some("UTC")).unwrap();
+        let exclude = duckle_duckdb_engine::cronzone::Exclusions::default();
+        let pipes: std::collections::HashMap<String, std::path::PathBuf> =
+            [("med".to_string(), pipeline)].into_iter().collect();
+
+        super::catch_up_schedule(&state, &in_flight, "med", &cfg, &zone, &exclude, now, &pipes);
+
+        // The work is handed to a thread, so wait for it rather than joining:
+        // a catch-up that never finishes must fail this test, not hang it.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while std::time::Instant::now() < deadline {
+            let busy = !in_flight.lock().unwrap().is_empty();
+            if !busy {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(
+            in_flight.lock().unwrap().is_empty(),
+            "the catch-up was still in flight after two minutes"
+        );
+
+        let fired = occurrences::read(&ws)
+            .into_iter()
+            .filter(|o| o.schedule_id == "med" && o.decision == occurrences::Decision::Fired)
+            .count()
+            - 1; // the anchor this test seeded
+        let runs = duckle_duckdb_engine::history::load_run_history(&ws, "med").len();
+        assert!(
+            fired >= 2,
+            "the test needs several overdue occurrences to mean anything, got {fired}"
+        );
+        assert_eq!(
+            runs, fired,
+            "the ledger says {fired} occurrences fired and {runs} runs actually happened"
+        );
     }
 
     /// The web editor's History tab lists the pipeline's runs, and the runs the
