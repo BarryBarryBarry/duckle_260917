@@ -112,8 +112,7 @@ impl LlamaServer {
         // close(listener) and the child binding, but localhost is
         // single-user so collisions are rare in practice.
         let port = {
-            let l = TcpListener::bind("127.0.0.1:0")
-                .map_err(|e| format!("pick port: {}", e))?;
+            let l = TcpListener::bind("127.0.0.1:0").map_err(|e| format!("pick port: {}", e))?;
             l.local_addr().unwrap().port()
         };
         let mut cmd = Command::new(bin);
@@ -174,7 +173,12 @@ impl LlamaServer {
         let timeout = ready_timeout_secs();
         let deadline = Instant::now() + Duration::from_secs(timeout);
         let url = format!("http://127.0.0.1:{}/health", port);
-        let tail = || stderr_tail.lock().map(|t| t.trim().to_string()).unwrap_or_default();
+        let tail = || {
+            stderr_tail
+                .lock()
+                .map(|t| t.trim().to_string())
+                .unwrap_or_default()
+        };
         loop {
             if let Ok(resp) = ureq::get(&url).timeout(Duration::from_millis(500)).call() {
                 if resp.status() < 400 {
@@ -190,7 +194,11 @@ impl LlamaServer {
                     "llama-server exited before it was ready ({}). model {}. {}",
                     code,
                     model.display(),
-                    if t.is_empty() { "no stderr captured".to_string() } else { format!("stderr: {}", t) }
+                    if t.is_empty() {
+                        "no stderr captured".to_string()
+                    } else {
+                        format!("stderr: {}", t)
+                    }
                 ));
             }
             if Instant::now() > deadline {
@@ -247,8 +255,24 @@ pub static LLAMA_SERVER: Mutex<Option<LlamaServer>> = Mutex::new(None);
 pub enum ChatEvent {
     /// One token (or short text run) from the model.
     Token { text: String },
+    /// The model decided to call a tool (DSH mode).
+    ToolCallStart {
+        id: String,
+        name: String,
+        arguments: serde_json::Value,
+    },
+    /// A tool completed (DSH mode).
+    ToolCallEnd {
+        id: String,
+        ok: bool,
+        content: serde_json::Value,
+    },
+    /// The ACP session is pinned to this provider/model route.
+    ModelSelected { provider: String, model: String },
+    /// A pipeline was written on disk and the UI should reload it (DSH mode).
+    PipelinePersisted { id: String, action: String },
     /// Conversation finished cleanly.
-    Done,
+    Done { reason: Option<String> },
     /// Something broke mid-stream - send to the user as an error toast.
     Error { message: String },
 }
@@ -269,13 +293,20 @@ pub struct ChatMessage {
 /// 127.0.0.1. Parsed as a real address rather than matched as a prefix, so a
 /// remote host like `127.0.0.1.example.com` is correctly treated as remote.
 fn is_loopback_endpoint(endpoint: &str) -> bool {
-    let rest = endpoint.split_once("://").map(|(_, r)| r).unwrap_or(endpoint);
+    let rest = endpoint
+        .split_once("://")
+        .map(|(_, r)| r)
+        .unwrap_or(endpoint);
     let authority = rest.split('/').next().unwrap_or("");
     let host = match authority.strip_prefix('[') {
         Some(v6) => v6.split(']').next().unwrap_or(""), // [::1]:8080
         None => authority.split(':').next().unwrap_or(""),
     };
-    host == "localhost" || host.parse::<IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false)
+    host == "localhost"
+        || host
+            .parse::<IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
 }
 
 /// Send a user message + prior history to the running llama-server,
@@ -342,7 +373,7 @@ pub fn chat_stream<F: FnMut(ChatEvent)>(
             continue;
         };
         if payload.trim() == "[DONE]" {
-            on_event(ChatEvent::Done);
+            on_event(ChatEvent::Done { reason: None });
             return Ok(());
         }
         // Parse the JSON chunk; choices[0].delta.content has the text.
@@ -367,11 +398,11 @@ pub fn chat_stream<F: FnMut(ChatEvent)>(
             .filter(|s| !s.is_empty())
             .is_some()
         {
-            on_event(ChatEvent::Done);
+            on_event(ChatEvent::Done { reason: None });
             return Ok(());
         }
     }
-    on_event(ChatEvent::Done);
+    on_event(ChatEvent::Done { reason: None });
     Ok(())
 }
 
@@ -397,8 +428,8 @@ pub fn extract_pipeline(assistant_text: &str) -> Result<serde_json::Value, Strin
         .find("```")
         .ok_or_else(|| "unterminated code block".to_string())?;
     let body = &body_after[..end];
-    let parsed: serde_json::Value = serde_json::from_str(body.trim())
-        .map_err(|e| format!("JSON parse: {}", e))?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(body.trim()).map_err(|e| format!("JSON parse: {}", e))?;
     // Minimum shape check - nodes must be an array.
     if !parsed.get("nodes").map(|v| v.is_array()).unwrap_or(false) {
         return Err("pipeline JSON missing `nodes` array".into());
@@ -422,9 +453,15 @@ mod tests {
     fn loopback_endpoints_bypass_the_shared_agent() {
         // The bundled llama-server. Must stay on a bare ureq call so a proxy
         // configured for corporate egress cannot capture it.
-        assert!(is_loopback_endpoint("http://127.0.0.1:8080/v1/chat/completions"));
-        assert!(is_loopback_endpoint("http://localhost:1234/v1/chat/completions"));
-        assert!(is_loopback_endpoint("http://[::1]:9000/v1/chat/completions"));
+        assert!(is_loopback_endpoint(
+            "http://127.0.0.1:8080/v1/chat/completions"
+        ));
+        assert!(is_loopback_endpoint(
+            "http://localhost:1234/v1/chat/completions"
+        ));
+        assert!(is_loopback_endpoint(
+            "http://[::1]:9000/v1/chat/completions"
+        ));
         assert!(is_loopback_endpoint("http://127.1.2.3:80/v1"));
     }
 
@@ -432,8 +469,12 @@ mod tests {
     fn remote_endpoints_use_the_shared_agent() {
         // #183: these must go through the shared agent to pick up the OS trust
         // store, or a private corporate CA yields UnknownIssuer.
-        assert!(!is_loopback_endpoint("https://llm.internal.example/v1/chat/completions"));
-        assert!(!is_loopback_endpoint("https://api.openai.com/v1/chat/completions"));
+        assert!(!is_loopback_endpoint(
+            "https://llm.internal.example/v1/chat/completions"
+        ));
+        assert!(!is_loopback_endpoint(
+            "https://api.openai.com/v1/chat/completions"
+        ));
         // Hosts that merely start with a loopback-looking label are remote. A
         // prefix match would have got both of these wrong.
         assert!(!is_loopback_endpoint("https://localhost.example.com/v1"));

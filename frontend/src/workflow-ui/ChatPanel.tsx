@@ -19,6 +19,7 @@ import { getWorkspacePath } from '../workspace';
 type Props = {
     onClose: () => void;
     onInsertPipeline: (pipeline: unknown) => void;
+    onPersistedPipeline: (pipelineId: string) => void;
 };
 
 type Bubble = ChatMessage & {
@@ -32,7 +33,7 @@ type SetupState =
     | { phase: 'checking' }
     | { phase: 'not-installed'; engine: EngineStatus }
     | { phase: 'installing'; progress: InstallProgress | null }
-    | { phase: 'ready'; external: boolean }
+    | { phase: 'ready'; provider: 'deepseek_harness' | 'openai_compatible' | 'local_qwen' }
     | { phase: 'install-failed'; error: string };
 
 const EXAMPLE_PROMPTS = [
@@ -41,13 +42,16 @@ const EXAMPLE_PROMPTS = [
     'Embed the description column with OpenAI and dedupe near-duplicates',
 ];
 
-export default function ChatPanel({ onClose, onInsertPipeline }: Props) {
+export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeline }: Props) {
     const { t } = useTranslation();
     const [setup, setSetup] = useState<SetupState>({ phase: 'checking' });
     const [messages, setMessages] = useState<Bubble[]>([]);
     const [draft, setDraft] = useState('');
     const [busy, setBusy] = useState(false);
+    const [dshRoute, setDshRoute] = useState<string | null>(null);
     const scrollRef = useRef<HTMLDivElement | null>(null);
+    const sessionIdRef = useRef(`duckie:${getWorkspacePath() ?? 'global'}`);
+    const pendingPersistedPipelineId = useRef<string | null>(null);
 
     // Detect the AI engine on mount so we can either show the chat
     // UI or a clear install card. Without this the user clicks Send
@@ -55,14 +59,14 @@ export default function ChatPanel({ onClose, onInsertPipeline }: Props) {
     useEffect(() => {
         let cancelled = false;
         (async () => {
-            // #183: when the workspace points the assistant at an external
-            // OpenAI-compatible endpoint (Settings > AI), chat_send routes
-            // there and the local model is never used - so skip the local
-            // download gate entirely instead of prompting to install it.
             const ai = await settingsGetAi(getWorkspacePath() ?? '');
             if (cancelled) return;
-            if (ai.baseUrl) {
-                setSetup({ phase: 'ready', external: true });
+            if (ai.mode === 'deepseek_harness') {
+                setSetup({ phase: 'ready', provider: 'deepseek_harness' });
+                return;
+            }
+            if (ai.mode === 'openai_compatible') {
+                setSetup({ phase: 'ready', provider: 'openai_compatible' });
                 return;
             }
             const list = await engineStatus();
@@ -73,7 +77,7 @@ export default function ChatPanel({ onClose, onInsertPipeline }: Props) {
                 return;
             }
             setSetup(llama.installed
-                ? { phase: 'ready', external: false }
+                ? { phase: 'ready', provider: 'local_qwen' }
                 : { phase: 'not-installed', engine: llama });
         })();
         return () => {
@@ -115,7 +119,7 @@ export default function ChatPanel({ onClose, onInsertPipeline }: Props) {
             await engineInstall('llamacpp', p => {
                 setSetup({ phase: 'installing', progress: p });
             }, modelId || undefined);
-            setSetup({ phase: 'ready', external: false });
+            setSetup({ phase: 'ready', provider: 'local_qwen' });
         } catch (err) {
             setSetup({ phase: 'install-failed', error: String(err) });
         }
@@ -142,30 +146,40 @@ export default function ChatPanel({ onClose, onInsertPipeline }: Props) {
                     }
                     return out;
                 });
+            } else if (ev.kind === 'model_selected') {
+                setDshRoute(`${ev.provider}/${ev.model}`);
             } else if (ev.kind === 'done') {
+                if (pendingPersistedPipelineId.current) {
+                    onPersistedPipeline(pendingPersistedPipelineId.current);
+                    pendingPersistedPipelineId.current = null;
+                }
                 setMessages(prev => {
                     const out = prev.slice();
                     const last = out[out.length - 1];
                     if (last && last.role === 'assistant' && last.streaming) {
                         out[out.length - 1] = { ...last, streaming: false };
-                        // Try to extract a pipeline once streaming finishes.
-                        void chatExtractPipeline(last.content).then(pipe => {
-                            if (pipe) {
-                                setMessages(c => {
-                                    const o2 = c.slice();
-                                    const t = o2[o2.length - 1];
-                                    if (t && t.role === 'assistant') {
-                                        o2[o2.length - 1] = { ...t, pipeline: pipe };
-                                    }
-                                    return o2;
-                                });
-                            }
-                        });
+                        if (setup.phase === 'ready' && setup.provider !== 'deepseek_harness') {
+                            void chatExtractPipeline(last.content).then(pipe => {
+                                if (pipe) {
+                                    setMessages(c => {
+                                        const o2 = c.slice();
+                                        const t = o2[o2.length - 1];
+                                        if (t && t.role === 'assistant') {
+                                            o2[o2.length - 1] = { ...t, pipeline: pipe };
+                                        }
+                                        return o2;
+                                    });
+                                }
+                            });
+                        }
                     }
                     return out;
                 });
                 setBusy(false);
+            } else if (ev.kind === 'pipeline_persisted') {
+                pendingPersistedPipelineId.current = ev.id;
             } else if (ev.kind === 'error') {
+                pendingPersistedPipelineId.current = null;
                 setMessages(prev => {
                     const out = prev.slice();
                     const last = out[out.length - 1];
@@ -180,8 +194,8 @@ export default function ChatPanel({ onClose, onInsertPipeline }: Props) {
                 });
                 setBusy(false);
             }
-        }, getWorkspacePath());
-    }, [draft, busy, messages, setup.phase]);
+        }, getWorkspacePath(), sessionIdRef.current);
+    }, [draft, busy, messages, onPersistedPipeline, setup]);
 
     // Esc closes the panel.
     useEffect(() => {
@@ -204,10 +218,21 @@ export default function ChatPanel({ onClose, onInsertPipeline }: Props) {
                 <div className="chat-panel-title">
                     <Sparkles size={14} aria-hidden="true" />
                     <span>{t('chat.title')}</span>
-                    {setup.phase === 'ready' && !setup.external ? (
-                        <span className="chat-panel-tag">{t('chat.localTag')}</span>
+                    {setup.phase === 'ready' ? (
+                        <span className="chat-panel-tag">
+                            {setup.provider === 'deepseek_harness'
+                                ? t('chat.modeHarness', { defaultValue: 'DSH' })
+                                : setup.provider === 'openai_compatible'
+                                  ? t('chat.modeOpenAI', { defaultValue: 'OpenAI-compatible' })
+                                  : t('chat.localTag')}
+                        </span>
                     ) : null}
                 </div>
+                {setup.phase === 'ready' && setup.provider === 'deepseek_harness' && dshRoute ? (
+                    <div style={{ fontSize: '0.85rem', opacity: 0.72, marginTop: 4 }}>
+                        DSH route: <code>{dshRoute}</code>
+                    </div>
+                ) : null}
                 <button
                     type="button"
                     className="chat-panel-close"

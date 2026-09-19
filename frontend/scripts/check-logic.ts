@@ -936,7 +936,15 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     g.__checkLogicInvoke = async () => null;
     const setters: [string, () => Promise<unknown>][] = [
         ['proxy', () => settingsSetProxy('/ws', 'http://proxy:8080')],
-        ['AI endpoint', () => settingsSetAi('/ws', { baseUrl: 'http://ai', model: null, apiKey: null })],
+        ['AI endpoint', () => settingsSetAi('/ws', {
+            mode: 'openai_compatible',
+            baseUrl: 'http://ai',
+            model: null,
+            apiKey: null,
+            harnessCommand: null,
+            harnessProvider: null,
+            harnessModel: null,
+        })],
         ['power', () => settingsSetPower('/ws', { maxConcurrentRuns: 2, memoryLimitMb: null, spillDir: null })],
         ['memory limit', () => settingsSetMemoryLimit('/ws', 512)],
         ['unsigned extensions', () => settingsSetAllowUnsigned('/ws', true)],

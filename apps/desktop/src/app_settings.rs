@@ -17,12 +17,16 @@ struct AppSettings {
     /// #92: optional external OpenAI-compatible endpoint for the Duckie AI
     /// assistant (base URL, e.g. https://api.openai.com or an Ollama/LM Studio
     /// URL). When set, chat goes to it instead of the local Qwen model.
+    ai_mode: Option<String>,
     ai_base_url: Option<String>,
     /// Model id for the external endpoint (e.g. "gpt-4o-mini", "llama3.1").
     ai_model: Option<String>,
     /// API key for the external endpoint (sent as `Authorization: Bearer ...`).
     /// Stored alongside the proxy creds in the workspace's local .duckle dir.
     ai_api_key: Option<String>,
+    ai_harness_command: Option<String>,
+    ai_harness_provider: Option<String>,
+    ai_harness_model: Option<String>,
     /// #102: total DuckDB memory cap in MB, applied as DUCKLE_MEMORY_LIMIT for
     /// every run in this workspace (batched and per-stage). None = DuckDB
     /// default (~80% of RAM). Stages run sequentially, so this caps peak RAM.
@@ -68,9 +72,24 @@ pub struct PowerConfig {
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiConfig {
+    pub mode: String,
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub api_key: Option<String>,
+    pub harness_command: Option<String>,
+    pub harness_provider: Option<String>,
+    pub harness_model: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AiProviderConfig {
+    pub mode: String,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+    pub api_key: Option<String>,
+    pub harness_command: Option<String>,
+    pub harness_provider: Option<String>,
+    pub harness_model: Option<String>,
 }
 
 fn settings_path(workspace: &Path) -> PathBuf {
@@ -134,9 +153,16 @@ fn apply_allow_unsigned(allow: bool) {
 /// launched with - so switching to a workspace that has never configured power
 /// mode does not silently inherit the last one's settings.
 fn apply_power(s: &AppSettings) {
-    let runs = s.max_concurrent_runs.filter(|n| *n > 0).map(|n| n.to_string());
+    let runs = s
+        .max_concurrent_runs
+        .filter(|n| *n > 0)
+        .map(|n| n.to_string());
     duckle_duckdb_engine::launch_env::set_or_restore("DUCKLE_MAX_CONCURRENT_RUNS", runs.as_deref());
-    let spill = s.spill_dir.as_deref().map(str::trim).filter(|d| !d.is_empty());
+    let spill = s
+        .spill_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty());
     duckle_duckdb_engine::launch_env::set_or_restore("DUCKLE_TEMP_DIR", spill);
 }
 
@@ -146,7 +172,10 @@ pub fn settings_get_power(workspace: String) -> PowerConfig {
         .map(|n| n.get() as u32)
         .unwrap_or(1);
     if workspace.is_empty() {
-        return PowerConfig { cpu_count, ..Default::default() };
+        return PowerConfig {
+            cpu_count,
+            ..Default::default()
+        };
     }
     let s = load(Path::new(&workspace));
     PowerConfig {
@@ -217,7 +246,9 @@ pub fn settings_get_memory_limit(workspace: String) -> Option<u32> {
     if workspace.is_empty() {
         return None;
     }
-    load(Path::new(&workspace)).memory_limit_mb.filter(|m| *m > 0)
+    load(Path::new(&workspace))
+        .memory_limit_mb
+        .filter(|m| *m > 0)
 }
 
 #[tauri::command]
@@ -290,45 +321,87 @@ pub fn settings_load_context_vars(workspace: String) -> std::collections::HashMa
 
 #[tauri::command]
 pub fn settings_get_ai(workspace: String) -> AiConfig {
-    if workspace.is_empty() {
-        return AiConfig::default();
-    }
-    let s = load(Path::new(&workspace));
-    let clean = |o: Option<String>| o.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+    let cfg = ai_config(&workspace);
     AiConfig {
-        base_url: clean(s.ai_base_url),
-        model: clean(s.ai_model),
-        api_key: clean(s.ai_api_key),
+        mode: cfg.mode,
+        base_url: cfg.base_url,
+        model: cfg.model,
+        api_key: cfg.api_key,
+        harness_command: cfg.harness_command,
+        harness_provider: cfg.harness_provider,
+        harness_model: cfg.harness_model,
     }
 }
 
 #[tauri::command]
 pub fn settings_set_ai(
     workspace: String,
+    mode: Option<String>,
     base_url: Option<String>,
     model: Option<String>,
     api_key: Option<String>,
+    harness_command: Option<String>,
+    harness_provider: Option<String>,
+    harness_model: Option<String>,
 ) -> Result<(), String> {
     if workspace.is_empty() {
         return Err("no workspace is open".into());
     }
     let clean = |o: Option<String>| o.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
     let mut s = load(Path::new(&workspace));
+    s.ai_mode = clean(mode);
     s.ai_base_url = clean(base_url);
     s.ai_model = clean(model);
     s.ai_api_key = clean(api_key);
+    s.ai_harness_command = clean(harness_command);
+    s.ai_harness_provider = clean(harness_provider);
+    s.ai_harness_model = clean(harness_model);
+    let mode = s
+        .ai_mode
+        .clone()
+        .unwrap_or_else(|| "deepseek_harness".to_string());
+    let has_provider = s.ai_harness_provider.is_some();
+    let has_model = s.ai_harness_model.is_some();
+    if mode == "deepseek_harness" && has_provider != has_model {
+        return Err(
+            "DeepSeek Harness override requires both provider and model, or neither".into(),
+        );
+    }
     store(Path::new(&workspace), &s)
 }
 
-/// Internal: the workspace's external-AI config (base_url, model, api_key) for
-/// chat routing. All None when no external endpoint is configured.
-pub fn ai_config(workspace: &str) -> (Option<String>, Option<String>, Option<String>) {
+/// Internal: the workspace AI-provider config for chat routing.
+pub fn ai_config(workspace: &str) -> AiProviderConfig {
     if workspace.is_empty() {
-        return (None, None, None);
+        return AiProviderConfig {
+            mode: "deepseek_harness".into(),
+            base_url: None,
+            model: None,
+            api_key: None,
+            harness_command: None,
+            harness_provider: None,
+            harness_model: None,
+        };
     }
     let s = load(Path::new(workspace));
     let clean = |o: Option<String>| o.map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
-    (clean(s.ai_base_url), clean(s.ai_model), clean(s.ai_api_key))
+    let base_url = clean(s.ai_base_url);
+    let mode = clean(s.ai_mode).unwrap_or_else(|| {
+        if base_url.is_some() {
+            "openai_compatible".to_string()
+        } else {
+            "deepseek_harness".to_string()
+        }
+    });
+    AiProviderConfig {
+        mode,
+        base_url,
+        model: clean(s.ai_model),
+        api_key: clean(s.ai_api_key),
+        harness_command: clean(s.ai_harness_command),
+        harness_provider: clean(s.ai_harness_provider),
+        harness_model: clean(s.ai_harness_model),
+    }
 }
 
 #[cfg(test)]
@@ -358,8 +431,14 @@ mod tests {
         let before = unset();
 
         apply_for_workspace(opted_in.path().to_str().unwrap());
-        assert_eq!(std::env::var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS").as_deref(), Ok("1"));
-        assert_eq!(std::env::var("DUCKLE_MEMORY_LIMIT").as_deref(), Ok("4096MB"));
+        assert_eq!(
+            std::env::var("DUCKLE_ALLOW_UNSIGNED_EXTENSIONS").as_deref(),
+            Ok("1")
+        );
+        assert_eq!(
+            std::env::var("DUCKLE_MEMORY_LIMIT").as_deref(),
+            Ok("4096MB")
+        );
 
         apply_for_workspace(plain.path().to_str().unwrap());
         assert_eq!(

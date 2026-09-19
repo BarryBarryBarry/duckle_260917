@@ -129,7 +129,7 @@ In short: a free, open-source, single-engine alternative to hosted, per-row-pric
 
 Three things set it apart:
 
-1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie writes the JSON and drops it onto the canvas. The model runs wherever Duckle does - no API key, no telemetry, no vendor round-trip. Point it at your own OpenAI-compatible endpoint instead if you would rather it did not run in-process.
+1. **An AI assistant that ships in the box.** Describe the pipeline you want in English; Duckie can now drive **DeepSeek Harness + duckle-mcp** to create or update real pipeline files in your workspace, then open them in the GUI automatically. The legacy local-Qwen and external OpenAI-compatible paths remain available in Settings.
 2. **400+ components ready at install time.** Files, lakehouses, SQL databases, warehouses, NoSQL, vector DBs, streaming brokers, SaaS REST/GraphQL APIs, even FTP and IMAP - working today, not coming-soon.
 3. **A self-contained binary you can audit.** 73 to 110 MB depending on your platform. Engines install on first launch. Workspaces are plain files in a folder you choose. Diff them, branch them, ship them.
 
@@ -144,7 +144,7 @@ Three things set it apart:
 | | |
 |---|---|
 | **Visual, never opaque** | The canvas compiles to SQL you can read, and every node has a live preview tab. No black box. |
-| **An assistant with no API key** | Runs in-process by default, or against your own OpenAI-compatible endpoint. Your prompts and your data stay inside your infrastructure either way. |
+| **An assistant with flexible routing** | Defaults to DeepSeek Harness + duckle-mcp, or can still run against the bundled local Qwen model or your own OpenAI-compatible endpoint. |
 | **Single-file binary, no bundled DB** | 73 to 110 MB depending on platform (it embeds the headless runner + MCP server). DuckDB downloads on first launch with a guided step. AI engine is opt-in. |
 | **Native speed** | Execution runs through DuckDB: vectorized, columnar, local. A clean-and-export job that crawls in a spreadsheet finishes in milliseconds. |
 | **Git-friendly by design** | Pipelines, connections, contexts, and routines persist as plain files in a folder you pick. Diff them, branch them, review them. |
@@ -3315,7 +3315,7 @@ For headless / always-on schedules that run when Duckle is closed, build the pip
 <img src="docs/assets/real-life-screenshot/duckie.png" alt="Duckie AI Assistant panel open beside a real pipeline on the canvas, showing example prompts and a LOCAL badge" width="100%"/>
 </p>
 
-The sidebar on the right is **Duckie AI Assistant** - powered by **Qwen 2.5 Coder 1.5B** running through **llama.cpp**, downloaded once (~1.1 GB) and then run entirely on your CPU. Ask in plain English; Duckie streams back a valid Duckle pipeline definition. One click drops it onto the canvas, ready to inspect, tweak, and run.
+The sidebar on the right is **Duckie AI Assistant**. By default it now talks to **DeepSeek Harness** over ACP and lets Harness use **duckle-mcp** to inspect the workspace, create/update pipeline files, and hand the result straight back to the GUI. If your ACP profile has several routes, Settings can also pin Duckie to an explicit DSH provider/model pair; otherwise it can still route Duckie to the bundled **Qwen 2.5 Coder 1.5B** via **llama.cpp** or to your own OpenAI-compatible endpoint.
 
 | | |
 |---|---|
@@ -4130,7 +4130,7 @@ duckle/
 
 - The **frontend** (React with [@xyflow/react](https://reactflow.dev/)) is the visual designer; it talks to the Rust core over Tauri commands.
 - **duckdb-engine** topologically sorts the graph, lowers each node into SQL, and executes by shelling out to the downloaded DuckDB CLI. Non-sink nodes materialize as tables so later stages can reference them; sinks become `COPY ... TO` statements; cancel kills the process. No statically linked database, so the binary stays small.
-- **Duckie** is a `llama-server` subprocess on `127.0.0.1` exposing an OpenAI-compatible chat-completions API. The chat panel streams from it via SSE. The model is sandboxed: no fs, no net, no tools - it can only emit text.
+- **Duckie** can run in three modes: the default **DeepSeek Harness ACP** path (with `duckle-mcp` tools that can write pipelines into the workspace), the legacy local `llama-server` path on `127.0.0.1`, or any external OpenAI-compatible endpoint you configure.
 - **Everything persists** to the workspace folder you choose, as plain JSON and Markdown files.
 
 ---

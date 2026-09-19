@@ -39,6 +39,7 @@ serde_json = { workspace = true }
 # (secrets.rs). The AES-256-GCM scheme lives in the shared duckle-secrets
 # crate so the headless runner decrypts saved connections the same way (#166).
 duckle-secrets = { workspace = true }
+duckle-deepseek-harness = { workspace = true }
 # Parse the GitHub release asset's RFC3339 upload time + format the embedded
 # build time for the update-available check (update_check.rs).
 chrono = { workspace = true }

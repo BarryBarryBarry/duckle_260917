@@ -353,6 +353,7 @@ export default function App() {
     const [activeJobId, setActiveJobId] = useState<string>(() =>
         loadPersisted('active-job', 'j1'),
     );
+    const [pendingReloadPipelineId, setPendingReloadPipelineId] = useState<string | null>(null);
     const [isRunning, setIsRunning] = useState<boolean>(false);
     // Live mode: when on, editing a node's properties debounces a partial run
     // up to that node so the canvas previews refresh as you work. Refs let the
@@ -600,8 +601,10 @@ export default function App() {
                         const loadedJobs = state.jobs as Job[];
                         setJobs(loadedJobs);
                         const targetActiveId =
-                            state.activeJobId && loadedJobs.some(j => j.id === state.activeJobId)
-                                ? state.activeJobId
+                            pendingReloadPipelineId && loadedJobs.some(j => j.id === pendingReloadPipelineId)
+                                ? pendingReloadPipelineId
+                                : state.activeJobId && loadedJobs.some(j => j.id === state.activeJobId)
+                                  ? state.activeJobId
                                 : loadedJobs[0].id;
                         setActiveJobId(targetActiveId);
                     } else {
@@ -617,6 +620,7 @@ export default function App() {
                     }
                     if (state.corruptFiles?.length) setCorruptFiles(state.corruptFiles);
                 }
+                setPendingReloadPipelineId(null);
                 setWorkspaceReady(true);
                 // #307: the palette learns what this workspace installs. Not
                 // awaited and never fatal - an editor that would not open
@@ -841,7 +845,7 @@ export default function App() {
     useEffect(() => {
         if (!isInTauri()) return;
         void scheduleSetWorkspace(workspacePathState);
-    }, [workspacePathState]);
+    }, [workspacePathState, reloadNonce, pendingReloadPipelineId]);
 
     const [scheduleModalPipelineId, setScheduleModalPipelineId] = useState<string | null>(
         null,
@@ -903,6 +907,12 @@ export default function App() {
         prevRepoRef.current = null;
         setReloadNonce(n => n + 1);
     }, [workspacePathState]);
+
+    const handleOpenPersistedPipeline = useCallback((pipelineId: string) => {
+        if (!pipelineId) return;
+        setPendingReloadPipelineId(pipelineId);
+        handleReloadWorkspace();
+    }, [handleReloadWorkspace]);
 
     // Keep the active account pointed at whatever workspace is open.
     useEffect(() => {
@@ -2895,6 +2905,7 @@ export default function App() {
                 <ChatPanel
                     onClose={() => setShowChatPanel(false)}
                     onInsertPipeline={handleInsertAiPipeline}
+                    onPersistedPipeline={handleOpenPersistedPipeline}
                 />
             ) : null}
 

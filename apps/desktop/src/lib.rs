@@ -19,13 +19,14 @@ use tauri::ipc::Channel;
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
+mod agent_bridge;
 mod app_settings;
 mod ci_status;
 mod dbt_engine;
 mod deploy;
-mod pixeltable_engine;
 mod engine_manager;
 mod llama_chat;
+mod pixeltable_engine;
 mod samples;
 mod secrets;
 mod self_update;
@@ -82,7 +83,9 @@ pub fn run() {
     }
 
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
 
     tracing::info!("duckle starting");
@@ -95,7 +98,10 @@ pub fn run() {
         .setup(|app| {
             // A self-update moves the running exe aside and it can only be
             // removed once that process has exited, which is this launch.
-            if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from)) {
+            if let Some(dir) = std::env::current_exe()
+                .ok()
+                .and_then(|e| e.parent().map(PathBuf::from))
+            {
                 std::thread::spawn(move || self_update::sweep_leftovers(&dir));
             }
             // Resolve where the downloaded DuckDB CLI lives, so the
@@ -308,7 +314,10 @@ fn resolve_duckdb_bin(app_data: &std::path::Path) -> PathBuf {
 /// Pure precedence logic behind [`resolve_duckdb_bin`], split out so it can be
 /// tested without mutating the process environment: a non-empty override wins,
 /// otherwise the bundled engine path.
-fn pick_duckdb_bin(env_override: Option<std::ffi::OsString>, app_data: &std::path::Path) -> PathBuf {
+fn pick_duckdb_bin(
+    env_override: Option<std::ffi::OsString>,
+    app_data: &std::path::Path,
+) -> PathBuf {
     env_override
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
@@ -323,9 +332,7 @@ fn engine() -> Result<DuckdbEngine, String> {
         .get()
         .cloned()
         .ok_or_else(|| "Engine path not resolved yet".to_string())?;
-    Ok(DUCKDB_ENGINE
-        .get_or_init(|| DuckdbEngine::new(bin))
-        .clone())
+    Ok(DUCKDB_ENGINE.get_or_init(|| DuckdbEngine::new(bin)).clone())
 }
 
 /// Inspect a source's schema. The frontend hands us a format string
@@ -439,7 +446,12 @@ async fn run_pipeline(
     duckle_duckdb_engine::context::apply_vault(&mut pipeline);
     ensure_pixeltable_if_used(&app, &pipeline);
     let name = pipeline_name.clone();
-    let receipt = begin_desktop_run(&workspace_path, &pipeline, pipeline_id.as_deref().unwrap_or("pipeline"), "desktop");
+    let receipt = begin_desktop_run(
+        &workspace_path,
+        &pipeline,
+        pipeline_id.as_deref().unwrap_or("pipeline"),
+        "desktop",
+    );
     let joined = tokio::task::spawn_blocking(move || {
         engine.execute_pipeline_with_events(&pipeline, None, name.as_deref(), |evt| {
             let _ = on_event.send(evt);
@@ -449,7 +461,12 @@ async fn run_pipeline(
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = None;
     let result = joined.map_err(|e| e.to_string())?;
     if let Some((ws, r)) = receipt {
-        duckle_duckdb_engine::retry::finish(&ws, r, &result.status, duckle_duckdb_engine::retry::nodes_of(&result));
+        duckle_duckdb_engine::retry::finish(
+            &ws,
+            r,
+            &result.status,
+            duckle_duckdb_engine::retry::nodes_of(&result),
+        );
     }
     record_history(&pipeline_id, &workspace_path, &result, "manual");
     Ok(result)
@@ -506,7 +523,7 @@ fn resolve_saved_connections(
         None if duckle_secrets::has_connection_refs(&pipeline.nodes) => Err(
             "this pipeline uses a saved connection; run it from a workspace \
              so the connection can be resolved"
-            .into(),
+                .into(),
         ),
         None => Ok(()),
     }
@@ -519,8 +536,7 @@ fn record_history(
     trigger: &str,
 ) {
     if let (Some(id), Some(ws)) = (pipeline_id, workspace_path) {
-        let record =
-            RunRecord::from_result_in(std::path::Path::new(ws), id, result, trigger);
+        let record = RunRecord::from_result_in(std::path::Path::new(ws), id, result, trigger);
         if let Err(e) = append_run_record(std::path::Path::new(ws), id, record) {
             tracing::warn!("Failed to record run history: {}", e);
         }
@@ -553,7 +569,12 @@ async fn run_pipeline_partial(
     let name = pipeline_name.clone();
     // Run-to-here is still a run, and the one most likely to be asked about
     // afterwards ("what did that node actually produce?").
-    let receipt = begin_desktop_run(&workspace_path, &pipeline, pipeline_id.as_deref().unwrap_or("pipeline"), "desktop-partial");
+    let receipt = begin_desktop_run(
+        &workspace_path,
+        &pipeline,
+        pipeline_id.as_deref().unwrap_or("pipeline"),
+        "desktop-partial",
+    );
     let joined = tokio::task::spawn_blocking(move || {
         engine.execute_pipeline_with_events(
             &pipeline,
@@ -568,7 +589,12 @@ async fn run_pipeline_partial(
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = None;
     let result = joined.map_err(|e| e.to_string())?;
     if let Some((ws, r)) = receipt {
-        duckle_duckdb_engine::retry::finish(&ws, r, &result.status, duckle_duckdb_engine::retry::nodes_of(&result));
+        duckle_duckdb_engine::retry::finish(
+            &ws,
+            r,
+            &result.status,
+            duckle_duckdb_engine::retry::nodes_of(&result),
+        );
     }
     record_history(&pipeline_id, &workspace_path, &result, "partial");
     Ok(result)
@@ -652,7 +678,11 @@ fn watermark_clear(
 fn cancel_pipeline() -> Result<(), String> {
     // Cancel the active interactive run's own flag (not a shared global), so we
     // don't also stop concurrent scheduler runs.
-    if let Some(e) = CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+    if let Some(e) = CURRENT_RUN
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .as_ref()
+    {
         e.request_cancel();
     }
     Ok(())
@@ -728,7 +758,10 @@ fn complete_node_sql(
 fn pipeline_column_lineage(
     pipeline: PipelineDoc,
 ) -> Result<
-    std::collections::HashMap<String, Vec<(String, Vec<duckle_duckdb_engine::lineage::RootColumn>)>>,
+    std::collections::HashMap<
+        String,
+        Vec<(String, Vec<duckle_duckdb_engine::lineage::RootColumn>)>,
+    >,
     String,
 > {
     engine()?
@@ -752,11 +785,17 @@ fn pipeline_trust_report(
         if let Ok(mut doc) = serde_json::from_value::<PipelineDoc>(pipeline.clone()) {
             let engine = engine()?;
             if let Some(ws) = workspace_path.as_deref() {
-                duckle_duckdb_engine::context::apply_workspace_context(&mut doc, std::path::Path::new(ws));
+                duckle_duckdb_engine::context::apply_workspace_context(
+                    &mut doc,
+                    std::path::Path::new(ws),
+                );
             }
             duckle_duckdb_engine::context::apply_time_builtins(&mut doc);
             let resolved = serde_json::to_value(&doc).map_err(|e| e.to_string())?;
-            return Ok(duckle_duckdb_engine::trust::trust_report(&resolved, Some(&engine)));
+            return Ok(duckle_duckdb_engine::trust::trust_report(
+                &resolved,
+                Some(&engine),
+            ));
         }
     }
     Ok(duckle_duckdb_engine::trust::trust_report(&pipeline, None))
@@ -898,7 +937,15 @@ fn runner_stage(
             let suffix = if cfg!(windows) { ".exe" } else { "" };
             let p = dir.join(format!("duckle-runner{suffix}"));
             write_embedded_if_changed(&p, EMBEDDED_RUNNER)?;
-            (p, if cfg!(windows) { "Windows" } else { "this machine" }, true)
+            (
+                p,
+                if cfg!(windows) {
+                    "Windows"
+                } else {
+                    "this machine"
+                },
+                true,
+            )
         }
         other => return Err(format!("unknown runner target '{other}'")),
     };
@@ -965,12 +1012,13 @@ fn plans_save(workspace_path: String, plan: plans::Plan) -> Result<Vec<plans::Pl
     if !problems.is_empty() {
         return Err(problems.join("; "));
     }
-    plans::update(std::path::Path::new(&workspace_path), move |list| {
-        match list.iter().position(|p| p.id == plan.id) {
+    plans::update(
+        std::path::Path::new(&workspace_path),
+        move |list| match list.iter().position(|p| p.id == plan.id) {
             Some(i) => list[i] = plan,
             None => list.push(plan),
-        }
-    })
+        },
+    )
 }
 
 #[tauri::command]
@@ -987,7 +1035,9 @@ fn plans_delete(workspace_path: String, id: String) -> Result<Vec<plans::Plan>, 
 /// same pipelines are indistinguishable afterwards except for the trigger recorded.
 #[tauri::command]
 async fn plans_run(workspace_path: String, id: String) -> Result<plans::PlanRun, String> {
-    scheduler()?.run_plan_now(std::path::Path::new(&workspace_path), &id).await
+    scheduler()?
+        .run_plan_now(std::path::Path::new(&workspace_path), &id)
+        .await
 }
 
 // ---- Workspace catalog --------------------------------------------------
@@ -1224,14 +1274,25 @@ fn import_job_file(path: String) -> Result<JobImport, String> {
     let xml = std::fs::read_to_string(&path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     // The file stem is the job name, matching how the jobs are stored.
-    let job_name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("imported_job");
+    let job_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("imported_job");
     let import = duckle_duckdb_engine::talend::import_item(&xml, job_name)?;
     Ok(JobImport {
         node_count: import.nodes.len(),
-        translated: import.nodes.iter().filter(|n| n.data.component_id.is_some()).count(),
+        translated: import
+            .nodes
+            .iter()
+            .filter(|n| n.data.component_id.is_some())
+            .count(),
         pipeline: import.to_pipeline_json(),
         warnings: import.warnings.iter().map(|w| w.to_string()).collect(),
-        components: import.components.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+        components: import
+            .components
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect(),
     })
 }
 
@@ -1246,13 +1307,36 @@ async fn chat_send(
     history: Vec<ChatMessage>,
     on_event: Channel<ChatEvent>,
     workspace: Option<String>,
+    session_id: Option<String>,
 ) -> Result<(), String> {
     // #92: route to an external OpenAI-compatible endpoint when one is
     // configured for this workspace, instead of booting the local Qwen model.
-    let (base, model, key) = app_settings::ai_config(workspace.as_deref().unwrap_or(""));
-    if let Some(base) = base {
+    let ai = app_settings::ai_config(workspace.as_deref().unwrap_or(""));
+    if ai.mode == "deepseek_harness" {
+        let session_id = session_id.unwrap_or_else(|| "duckie-default".to_string());
+        let prompt = history
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| m.content.clone())
+            .ok_or_else(|| "chat history did not contain a user message".to_string())?;
+        return agent_bridge::prompt(
+            app,
+            session_id,
+            prompt,
+            workspace.unwrap_or_default(),
+            ai,
+            on_event,
+        )
+        .await;
+    }
+    if ai.mode == "openai_compatible" {
+        let base = ai.base_url.clone().ok_or_else(|| {
+            "AI mode is OpenAI-compatible but no base URL is configured".to_string()
+        })?;
         let endpoint = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
-        let model = model.unwrap_or_else(|| "gpt-4o-mini".to_string());
+        let model = ai.model.unwrap_or_else(|| "gpt-4o-mini".to_string());
+        let key = ai.api_key;
         return tokio::task::spawn_blocking(move || {
             if let Err(e) =
                 llama_chat::chat_stream(&endpoint, key.as_deref(), &model, &history, |evt| {
@@ -1380,7 +1464,13 @@ fn deploy_target_claim(
     admin_label: String,
     setup_code: String,
 ) -> Result<String, String> {
-    deploy::claim(&ws_path(&workspace_path), &name, &url, &admin_label, &setup_code)
+    deploy::claim(
+        &ws_path(&workspace_path),
+        &name,
+        &url,
+        &admin_label,
+        &setup_code,
+    )
 }
 
 #[tauri::command]
@@ -1616,7 +1706,10 @@ fn staging_dir() -> PathBuf {
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
-        let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir);
+        let _ = std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&dir);
     }
     #[cfg(not(unix))]
     {
@@ -1702,7 +1795,10 @@ async fn build_pipeline_bundle(
     target_os: Option<String>,
 ) -> Result<String, String> {
     if secrets_mode != "env" && secrets_mode != "passphrase" {
-        return Err(format!("secrets mode must be env|passphrase, got {}", secrets_mode));
+        return Err(format!(
+            "secrets mode must be env|passphrase, got {}",
+            secrets_mode
+        ));
     }
     if secrets_mode == "passphrase" && passphrase.as_deref().unwrap_or("").is_empty() {
         return Err("Passphrase is required for passphrase mode".to_string());
@@ -1712,7 +1808,12 @@ async fn build_pipeline_bundle(
     let target = target_os.as_deref().unwrap_or(host).to_string();
     match target.as_str() {
         "windows" | "linux" | "macos" => {}
-        other => return Err(format!("target OS must be windows|linux|macos, got {}", other)),
+        other => {
+            return Err(format!(
+                "target OS must be windows|linux|macos, got {}",
+                other
+            ))
+        }
     }
 
     // A Linux artifact can be cross-built on a non-Linux host using the bundled
@@ -1790,7 +1891,10 @@ async fn build_pipeline_bundle(
             let duckdb = engine_manager::ensure_cross_duckdb(&app_data, "linux", "x86_64")?;
             (stub, duckdb)
         } else {
-            (builder.clone(), host_duckdb.expect("host duckdb resolved for same-os build"))
+            (
+                builder.clone(),
+                host_duckdb.expect("host duckdb resolved for same-os build"),
+            )
         };
         let spawn_once = || {
             let mut cmd = std::process::Command::new(&builder);
@@ -1800,14 +1904,23 @@ async fn build_pipeline_bundle(
                 cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
             }
             cmd.arg("build")
-                .arg("--workspace").arg(&workspace_path)
-                .arg("--pipeline-id").arg(&pipeline_id)
-                .arg("--out").arg(&out_file)
-                .arg("--secrets").arg(&secrets_mode)
-                .arg("--stub").arg(&artifact_stub)
-                .arg("--duckdb").arg(&duckdb);
+                .arg("--workspace")
+                .arg(&workspace_path)
+                .arg("--pipeline-id")
+                .arg(&pipeline_id)
+                .arg("--out")
+                .arg(&out_file)
+                .arg("--secrets")
+                .arg(&secrets_mode)
+                .arg("--stub")
+                .arg(&artifact_stub)
+                .arg("--duckdb")
+                .arg(&duckdb);
             if cross_linux {
-                cmd.arg("--target-os").arg("linux").arg("--target-arch").arg("x86_64");
+                cmd.arg("--target-os")
+                    .arg("linux")
+                    .arg("--target-arch")
+                    .arg("x86_64");
             }
             if let Some(ctx) = context.as_deref() {
                 if !ctx.is_empty() {
@@ -1815,7 +1928,10 @@ async fn build_pipeline_bundle(
                 }
             }
             if secrets_mode == "passphrase" {
-                cmd.env("DUCKLE_BUNDLE_PASSPHRASE", passphrase.clone().unwrap_or_default());
+                cmd.env(
+                    "DUCKLE_BUNDLE_PASSPHRASE",
+                    passphrase.clone().unwrap_or_default(),
+                );
             }
             cmd.output()
         };
@@ -1839,7 +1955,11 @@ async fn build_pipeline_bundle(
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if err.is_empty() { "duckle-runner build failed".to_string() } else { err });
+        return Err(if err.is_empty() {
+            "duckle-runner build failed".to_string()
+        } else {
+            err
+        });
     }
 
     // The build subcommand prints `duckle-runner build: wrote <path>` to STDERR.
@@ -1939,13 +2059,16 @@ fn write_if_changed(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
     {
         return Ok(());
     }
-    Err(format!("stage {}: locked (close other Duckle instances)", path.display()))
+    Err(format!(
+        "stage {}: locked (close other Duckle instances)",
+        path.display()
+    ))
 }
 
 /// Stage the embedded MCP server into a stable app-data dir, with the embedded
 /// runner written alongside it (so duckle-mcp's sibling lookup finds the runner
 /// for build_pipeline). Returns (mcp_path, runner_path).
-fn stage_mcp(app_data: &std::path::Path) -> Result<(PathBuf, PathBuf), String> {
+pub(crate) fn stage_mcp(app_data: &std::path::Path) -> Result<(PathBuf, PathBuf), String> {
     if EMBEDDED_MCP.is_empty() {
         return Err("This build does not bundle the duckle-mcp server".to_string());
     }
@@ -2081,7 +2204,9 @@ fn open_web_panel(app: tauri::AppHandle, workspace: String) -> Result<String, St
     if workspace.trim().is_empty() {
         return Err("Open or create a workspace first".to_string());
     }
-    let mut guard = WEB_PANEL.lock().map_err(|_| "panel lock poisoned".to_string())?;
+    let mut guard = WEB_PANEL
+        .lock()
+        .map_err(|_| "panel lock poisoned".to_string())?;
     // Reuse a still-running panel - but only if it is actually accepting
     // connections. A child that is alive yet not listening (still starting,
     // wedged, or its port taken) would otherwise hand the browser a dead URL
@@ -2124,7 +2249,9 @@ fn open_web_panel(app: tauri::AppHandle, workspace: String) -> Result<String, St
     // runner fall back (env / sibling / PATH) instead of erroring on a missing
     // explicit path.
     if duckdb.exists() {
-        cmd.arg("--duckdb").arg(&duckdb).env("DUCKLE_DUCKDB_BIN", &duckdb);
+        cmd.arg("--duckdb")
+            .arg(&duckdb)
+            .env("DUCKLE_DUCKDB_BIN", &duckdb);
     }
     #[cfg(windows)]
     {
@@ -2333,11 +2460,8 @@ fn mcp_client_config_path(app: &tauri::AppHandle, client: &str) -> Result<PathBu
                     if let Ok(entries) = std::fs::read_dir(local.join("Packages")) {
                         for e in entries.flatten() {
                             if e.file_name().to_string_lossy().starts_with("Claude_") {
-                                let dir = e
-                                    .path()
-                                    .join("LocalCache")
-                                    .join("Roaming")
-                                    .join("Claude");
+                                let dir =
+                                    e.path().join("LocalCache").join("Roaming").join("Claude");
                                 if dir.is_dir() {
                                     return Ok(dir.join("claude_desktop_config.json"));
                                 }
@@ -2346,12 +2470,18 @@ fn mcp_client_config_path(app: &tauri::AppHandle, client: &str) -> Result<PathBu
                     }
                 }
             }
-            let cfg = app.path().config_dir().map_err(|e| format!("config dir: {}", e))?;
+            let cfg = app
+                .path()
+                .config_dir()
+                .map_err(|e| format!("config dir: {}", e))?;
             Ok(cfg.join("Claude").join("claude_desktop_config.json"))
         }
         // Cursor reads a global ~/.cursor/mcp.json.
         "cursor" => {
-            let home = app.path().home_dir().map_err(|e| format!("home dir: {}", e))?;
+            let home = app
+                .path()
+                .home_dir()
+                .map_err(|e| format!("home dir: {}", e))?;
             Ok(home.join(".cursor").join("mcp.json"))
         }
         other => Err(format!("unknown MCP client: {}", other)),
@@ -2415,7 +2545,8 @@ fn mcp_inject_config(app: tauri::AppHandle, client: String) -> Result<String, St
     }
 
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {}", parent.display(), e))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create {}: {}", parent.display(), e))?;
     }
     let pretty = serde_json::to_string_pretty(&root).map_err(|e| e.to_string())?;
     // Write to a sibling temp file then rename over the original so a mid-write
@@ -2465,7 +2596,11 @@ mod tests {
         if dir.exists() {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(&dir).unwrap().permissions().mode();
-            assert_eq!(mode & 0o077, 0, "staging dir is group/other accessible: {mode:o}");
+            assert_eq!(
+                mode & 0o077,
+                0,
+                "staging dir is group/other accessible: {mode:o}"
+            );
         }
     }
     use std::ffi::OsString;
@@ -2499,7 +2634,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().to_string_lossy().to_string();
 
-        assert!(plans_list(ws.clone()).unwrap().is_empty(), "a fresh workspace has no plans");
+        assert!(
+            plans_list(ws.clone()).unwrap().is_empty(),
+            "a fresh workspace has no plans"
+        );
 
         let plan = plans::Plan {
             id: "nightly".into(),
@@ -2512,7 +2650,11 @@ mod tests {
                     pipelines: vec!["pipelines/orders.json".into()],
                     continue_on_failure: None,
                 },
-                plans::Step { name: "Publish".into(), pipelines: vec!["pipelines/export.json".into()], continue_on_failure: None },
+                plans::Step {
+                    name: "Publish".into(),
+                    pipelines: vec!["pipelines/export.json".into()],
+                    continue_on_failure: None,
+                },
             ],
         };
         let saved = plans_save(ws.clone(), plan.clone()).unwrap();
@@ -2531,17 +2673,27 @@ mod tests {
             id: "broken".into(),
             name: String::new(),
             stop_on_failure: true,
-            steps: vec![plans::Step { name: "Empty".into(), pipelines: vec![], continue_on_failure: None }],
+            steps: vec![plans::Step {
+                name: "Empty".into(),
+                pipelines: vec![],
+                continue_on_failure: None,
+            }],
         };
         let err = plans_save(ws.clone(), broken).expect_err("an empty step is not a plan");
         assert!(err.contains("no pipelines"), "unhelpful refusal: {err}");
-        assert_eq!(plans_list(ws.clone()).unwrap().len(), 1, "the refused plan was written anyway");
+        assert_eq!(
+            plans_list(ws.clone()).unwrap().len(),
+            1,
+            "the refused plan was written anyway"
+        );
 
         // The store the scheduler and the console read is the one that changed.
         let shared = plans::load(std::path::Path::new(&ws)).unwrap();
         assert_eq!(shared[0].id, "nightly");
 
-        assert!(plans_delete(ws.clone(), "nightly".into()).unwrap().is_empty());
+        assert!(plans_delete(ws.clone(), "nightly".into())
+            .unwrap()
+            .is_empty());
         assert!(plans_list(ws).unwrap().is_empty());
     }
 }

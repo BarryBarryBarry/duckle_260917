@@ -562,7 +562,11 @@ export type ChatMessage = { role: 'user' | 'assistant' | 'system'; content: stri
 
 export type ChatEvent =
     | { kind: 'token'; text: string }
-    | { kind: 'done' }
+    | { kind: 'tool_call_start'; id: string; name: string; arguments: unknown }
+    | { kind: 'tool_call_end'; id: string; ok: boolean; content: unknown }
+    | { kind: 'model_selected'; provider: string; model: string }
+    | { kind: 'pipeline_persisted'; id: string; action: string }
+    | { kind: 'done'; reason?: string | null }
     | { kind: 'error'; message: string };
 
 /**
@@ -573,6 +577,7 @@ export async function chatSend(
     history: ChatMessage[],
     onEvent: (e: ChatEvent) => void,
     workspace?: string | null,
+    sessionId?: string | null,
 ): Promise<void> {
     if (!isTauri()) {
         onEvent({ kind: 'error', message: 'Chat is only available in the desktop app.' });
@@ -582,7 +587,12 @@ export async function chatSend(
     channel.onmessage = onEvent;
     try {
         // workspace lets the backend route to an external AI endpoint if configured (#92).
-        await invoke('chat_send', { history, onEvent: channel, workspace: workspace ?? null });
+        await invoke('chat_send', {
+            history,
+            onEvent: channel,
+            workspace: workspace ?? null,
+            sessionId: sessionId ?? null,
+        });
     } catch (err) {
         onEvent({ kind: 'error', message: String(err) });
     }
@@ -1501,29 +1511,67 @@ export async function settingsLoadContextVars(workspace: string): Promise<Record
 
 // ---- External AI endpoint for the Duckie assistant (#92) ----------------
 
-export type AiConfig = { baseUrl: string | null; model: string | null; apiKey: string | null };
+export type AiConfig = {
+    mode: 'deepseek_harness' | 'openai_compatible' | 'local_qwen';
+    baseUrl: string | null;
+    model: string | null;
+    apiKey: string | null;
+    harnessCommand: string | null;
+    harnessProvider: string | null;
+    harnessModel: string | null;
+};
 
-/** Read the workspace's external OpenAI-compatible AI config (empty = local Qwen). */
+/** Read the workspace Duckie provider config. */
 export async function settingsGetAi(workspace: string): Promise<AiConfig> {
-    if (!isTauri() || !workspace) return { baseUrl: null, model: null, apiKey: null };
+    if (!isTauri() || !workspace) {
+        return {
+            mode: 'deepseek_harness',
+            baseUrl: null,
+            model: null,
+            apiKey: null,
+            harnessCommand: null,
+            harnessProvider: null,
+            harnessModel: null,
+        };
+    }
     try {
         return await invoke<AiConfig>('settings_get_ai', { workspace });
     } catch {
-        return { baseUrl: null, model: null, apiKey: null };
+        return {
+            mode: 'deepseek_harness',
+            baseUrl: null,
+            model: null,
+            apiKey: null,
+            harnessCommand: null,
+            harnessProvider: null,
+            harnessModel: null,
+        };
     }
 }
 
-/** Persist the external AI endpoint. Empty baseUrl reverts to the local model. */
+/** Persist the Duckie provider configuration. */
 export async function settingsSetAi(
     workspace: string,
-    cfg: { baseUrl: string | null; model: string | null; apiKey: string | null },
+    cfg: {
+        mode: AiConfig['mode'];
+        baseUrl: string | null;
+        model: string | null;
+        apiKey: string | null;
+        harnessCommand: string | null;
+        harnessProvider: string | null;
+        harnessModel: string | null;
+    },
 ): Promise<void> {
-    refuseMachineSettingOnWeb('AI endpoint');
+    refuseMachineSettingOnWeb('AI assistant settings');
     await invoke('settings_set_ai', {
         workspace,
+        mode: cfg.mode,
         baseUrl: cfg.baseUrl,
         model: cfg.model,
         apiKey: cfg.apiKey,
+        harnessCommand: cfg.harnessCommand,
+        harnessProvider: cfg.harnessProvider,
+        harnessModel: cfg.harnessModel,
     });
 }
 

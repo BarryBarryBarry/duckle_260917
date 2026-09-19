@@ -39,10 +39,14 @@ export function SettingsModal({
     onClose: () => void;
 }) {
     const [proxy, setProxy] = useState('');
-    // #92: external OpenAI-compatible AI endpoint for the Duckie assistant.
+    const [aiMode, setAiMode] = useState<'deepseek_harness' | 'openai_compatible' | 'local_qwen'>('deepseek_harness');
+    // Duckie AI provider configuration.
     const [aiBaseUrl, setAiBaseUrl] = useState('');
     const [aiModel, setAiModel] = useState('');
     const [aiKey, setAiKey] = useState('');
+    const [aiHarnessCommand, setAiHarnessCommand] = useState('');
+    const [aiHarnessProvider, setAiHarnessProvider] = useState('');
+    const [aiHarnessModel, setAiHarnessModel] = useState('');
     // #102: per-workspace total memory cap in MB (empty = engine default).
     const [memLimit, setMemLimit] = useState('');
     // #143: allow loading unsigned / community DuckDB extensions (off by default).
@@ -88,9 +92,13 @@ export function SettingsModal({
             .then(([p, ai, mem, ic, unsigned, power]) => {
                 if (!alive) return;
                 setProxy(p ?? '');
+                setAiMode(ai.mode ?? 'deepseek_harness');
                 setAiBaseUrl(ai.baseUrl ?? '');
                 setAiModel(ai.model ?? '');
                 setAiKey(ai.apiKey ?? '');
+                setAiHarnessCommand(ai.harnessCommand ?? '');
+                setAiHarnessProvider(ai.harnessProvider ?? '');
+                setAiHarnessModel(ai.harnessModel ?? '');
                 setMemLimit(mem != null ? String(mem) : '');
                 setContextFile(ic ?? '');
                 setAllowUnsigned(unsigned ?? false);
@@ -118,9 +126,13 @@ export function SettingsModal({
         try {
             await settingsSetProxy(workspace, proxy.trim() || null);
             await settingsSetAi(workspace, {
+                mode: aiMode,
                 baseUrl: aiBaseUrl.trim() || null,
                 model: aiModel.trim() || null,
                 apiKey: aiKey.trim() || null,
+                harnessCommand: aiHarnessCommand.trim() || null,
+                harnessProvider: aiHarnessProvider.trim() || null,
+                harnessModel: aiHarnessModel.trim() || null,
             });
             const mb = parseInt(memLimit.trim(), 10);
             const memMb = Number.isFinite(mb) && mb > 0 ? mb : null;
@@ -423,12 +435,74 @@ export function SettingsModal({
                         />
                     </Section>
 
-                    <Section id="ai" title="AI assistant endpoint">
+                    <Section id="ai" title="AI assistant">
                         <p style={help}>
-                            Point Duckie at an external OpenAI-compatible API (OpenAI, Ollama, LM Studio,
-                            vLLM, ...) instead of the bundled local model. Leave the base URL empty to use
-                            the local Qwen model.
+                            Choose how Duckie runs: DeepSeek Harness via ACP + duckle-mcp (default),
+                            an external OpenAI-compatible endpoint, or the bundled local Qwen model.
                         </p>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
+                            <input
+                                type="radio"
+                                name="duckie-ai-mode"
+                                checked={aiMode === 'deepseek_harness'}
+                                onChange={() => setAiMode('deepseek_harness')}
+                                disabled={!loaded || !workspace}
+                            />
+                            DeepSeek Harness (DSH) + duckle-mcp
+                        </label>
+                        {aiMode === 'deepseek_harness' ? (
+                            <>
+                                <input
+                                    type="text"
+                                    value={aiHarnessCommand}
+                                    onChange={e => setAiHarnessCommand(e.target.value)}
+                                    placeholder="Optional DSH command override, e.g. /opt/homebrew/bin/dsh or /Users/me/.dsh/.../bin.js"
+                                    disabled={!loaded || !workspace}
+                                    spellCheck={false}
+                                    autoComplete="off"
+                                    style={aiInput}
+                                />
+                                <p style={help}>
+                                    Leave blank to auto-detect DSH. Duckle launches it as <code>--profile acp</code>.
+                                </p>
+                                <input
+                                    type="text"
+                                    value={aiHarnessProvider}
+                                    onChange={e => setAiHarnessProvider(e.target.value)}
+                                    placeholder="Optional DSH provider override, e.g. deepseek-official or dashscope"
+                                    disabled={!loaded || !workspace}
+                                    spellCheck={false}
+                                    autoComplete="off"
+                                    style={aiInput}
+                                />
+                                <input
+                                    type="text"
+                                    value={aiHarnessModel}
+                                    onChange={e => setAiHarnessModel(e.target.value)}
+                                    placeholder="Optional DSH model override, e.g. deepseek-v4-pro"
+                                    disabled={!loaded || !workspace}
+                                    spellCheck={false}
+                                    autoComplete="off"
+                                    style={{ ...aiInput, marginTop: 8 }}
+                                />
+                                <p style={help}>
+                                    Set both provider and model to make Duckle call ACP <code>session/set_config_option</code>
+                                    after <code>session/new</code>. Leave both blank to use the ACP profile default.
+                                </p>
+                            </>
+                        ) : null}
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
+                            <input
+                                type="radio"
+                                name="duckie-ai-mode"
+                                checked={aiMode === 'openai_compatible'}
+                                onChange={() => setAiMode('openai_compatible')}
+                                disabled={!loaded || !workspace}
+                            />
+                            External OpenAI-compatible endpoint
+                        </label>
+                        {aiMode === 'openai_compatible' ? (
+                            <>
                         <input
                             type="text"
                             value={aiBaseUrl}
@@ -459,6 +533,18 @@ export function SettingsModal({
                             autoComplete="off"
                             style={{ ...aiInput, marginTop: 8 }}
                         />
+                            </>
+                        ) : null}
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginTop: 8 }}>
+                            <input
+                                type="radio"
+                                name="duckie-ai-mode"
+                                checked={aiMode === 'local_qwen'}
+                                onChange={() => setAiMode('local_qwen')}
+                                disabled={!loaded || !workspace}
+                            />
+                            Bundled local Qwen via llama.cpp
+                        </label>
                     </Section>
 
                     <Section id="toolbar" title="Toolbar">

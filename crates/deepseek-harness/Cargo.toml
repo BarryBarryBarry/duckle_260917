@@ -1,0 +1,25 @@
+[package]
+name = "duckle-deepseek-harness"
+description = "DeepSeek agent harness for Duckle: streaming LLM adapter, MCP stdio tool client, and multi-round agent loop."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "deepseek_harness"
+path = "src/lib.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+# HTTP + SSE. ureq blocking is the same client `apps/desktop/src/llama_chat.rs`
+# already uses; the harness's stream loop mirrors that style so the two
+# subsystems share failure modes and TLS behaviour.
+ureq = { version = "2.10", default-features = false, features = ["tls", "json", "gzip"] }
