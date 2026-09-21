@@ -198,6 +198,9 @@ impl AcpSession {
 
         match &request_result {
             Ok(resp) => {
+                if let Some(usage) = parse_usage(resp) {
+                    on_send_prompt_event(&self.state, usage);
+                }
                 let reason = resp
                     .get("stopReason")
                     .and_then(Value::as_str)
@@ -441,18 +444,25 @@ fn handle_server_notification(state: &Arc<ClientState>, msg: &Value) {
     if msg.get("method").and_then(Value::as_str) != Some("session/update") {
         return;
     }
-    let update = msg
-        .pointer("/params/update")
-        .cloned()
-        .unwrap_or(Value::Null);
+    let Some(update) = msg
+        .pointer("/params/event")
+        .or_else(|| msg.pointer("/params/update"))
+    else {
+        return;
+    };
     let kind = update
-        .get("sessionUpdate")
+        .get("type")
+        .or_else(|| update.get("sessionUpdate"))
         .and_then(Value::as_str)
         .unwrap_or_default();
 
     match kind {
         "agent_message_chunk" => {
-            if let Some(text) = update.pointer("/content/text").and_then(Value::as_str) {
+            if let Some(text) = update
+                .pointer("/delta/text")
+                .or_else(|| update.pointer("/content/text"))
+                .and_then(Value::as_str)
+            {
                 on_send_prompt_event(
                     state,
                     HarnessEvent::Token {
@@ -516,7 +526,13 @@ fn handle_server_notification(state: &Arc<ClientState>, msg: &Value) {
                 on_send_prompt_event(state, evt);
             }
         }
-        _ => {}
+        _ => {
+            if kind.contains("usage") {
+                if let Some(usage) = parse_usage(update) {
+                    on_send_prompt_event(state, usage);
+                }
+            }
+        }
     }
 }
 
@@ -610,6 +626,41 @@ fn fail_all_pending(state: &Arc<ClientState>, error: Error) {
     );
 }
 
+fn parse_usage(value: &Value) -> Option<HarnessEvent> {
+    // ACP has shipped usage under a few shapes, so accept the common nestings
+    // rather than pinning one and silently reporting no tokens.
+    let usage = value
+        .get("usage")
+        .or_else(|| value.get("tokenUsage"))
+        .or_else(|| value.pointer("/meta/usage"))
+        .unwrap_or(value);
+    let input = read_token_count(usage, &["inputTokens", "input_tokens", "promptTokens"]);
+    let output = read_token_count(
+        usage,
+        &["outputTokens", "output_tokens", "completionTokens"],
+    );
+    let total = read_token_count(usage, &["totalTokens", "total_tokens"]).or_else(|| {
+        match (input, output) {
+            (Some(i), Some(o)) => Some(i + o),
+            _ => None,
+        }
+    });
+    if input.is_none() && output.is_none() && total.is_none() {
+        return None;
+    }
+    Some(HarnessEvent::Usage {
+        input_tokens: input,
+        output_tokens: output,
+        total_tokens: total,
+    })
+}
+
+fn read_token_count(value: &Value, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| value.get(*key))
+        .and_then(Value::as_u64)
+}
+
 fn parse_selected_model(result: &Value) -> Option<AcpSelectedModel> {
     let options = result.get("configOptions")?.as_array()?;
     let model_option = options
@@ -619,4 +670,91 @@ fn parse_selected_model(result: &Value) -> Option<AcpSelectedModel> {
     let parsed: Vec<String> = serde_json::from_str(current).ok()?;
     let [provider, model]: [String; 2] = parsed.try_into().ok()?;
     Some(AcpSelectedModel { provider, model })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_stream_text_from_modern_event_shape() {
+        let msg = json!({
+            "method": "session/update",
+            "params": {
+                "event": {
+                    "type": "agent_message_chunk",
+                    "content": { "text": "Hello world" },
+                    "delta": { "text": "world" }
+                }
+            }
+        });
+
+        let update = msg.pointer("/params/event").unwrap();
+        let kind = update
+            .get("type")
+            .or_else(|| update.get("sessionUpdate"))
+            .and_then(Value::as_str);
+        let text = update
+            .pointer("/delta/text")
+            .or_else(|| update.pointer("/content/text"))
+            .and_then(Value::as_str);
+
+        assert_eq!(kind, Some("agent_message_chunk"));
+        assert_eq!(text, Some("world"));
+    }
+
+    #[test]
+    fn parses_stream_text_from_legacy_update_shape() {
+        let msg = json!({
+            "method": "session/update",
+            "params": {
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": { "text": "Hello" }
+                }
+            }
+        });
+
+        let update = msg
+            .pointer("/params/event")
+            .or_else(|| msg.pointer("/params/update"));
+        let kind = update
+            .and_then(|u| u.get("type").or_else(|| u.get("sessionUpdate")))
+            .and_then(Value::as_str);
+        let text = update
+            .and_then(|u| {
+                u.pointer("/delta/text")
+                    .or_else(|| u.pointer("/content/text"))
+            })
+            .and_then(Value::as_str);
+
+        assert_eq!(kind, Some("agent_message_chunk"));
+        assert_eq!(text, Some("Hello"));
+    }
+
+    #[test]
+    fn parses_usage_from_nested_shape() {
+        let resp = json!({
+            "stopReason": "end_turn",
+            "usage": { "inputTokens": 1200, "outputTokens": 340 }
+        });
+
+        match parse_usage(&resp) {
+            Some(HarnessEvent::Usage {
+                input_tokens,
+                output_tokens,
+                total_tokens,
+            }) => {
+                assert_eq!(input_tokens, Some(1200));
+                assert_eq!(output_tokens, Some(340));
+                assert_eq!(total_tokens, Some(1540));
+            }
+            other => panic!("expected usage event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ignores_payloads_without_usage() {
+        assert!(parse_usage(&json!({ "stopReason": "end_turn" })).is_none());
+    }
 }

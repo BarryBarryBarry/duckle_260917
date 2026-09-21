@@ -565,6 +565,12 @@ export type ChatEvent =
     | { kind: 'tool_call_start'; id: string; name: string; arguments: unknown }
     | { kind: 'tool_call_end'; id: string; ok: boolean; content: unknown }
     | { kind: 'model_selected'; provider: string; model: string }
+    | {
+          kind: 'usage';
+          input_tokens?: number | null;
+          output_tokens?: number | null;
+          total_tokens?: number | null;
+      }
     | { kind: 'pipeline_persisted'; id: string; action: string }
     | { kind: 'done'; reason?: string | null }
     | { kind: 'error'; message: string };

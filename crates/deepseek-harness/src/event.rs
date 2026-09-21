@@ -34,6 +34,13 @@ pub enum HarnessEvent {
     /// The ACP session's currently selected provider/model route.
     ModelSelected { provider: String, model: String },
 
+    /// Token accounting the agent reported for the current turn.
+    Usage {
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+        total_tokens: Option<u64>,
+    },
+
     /// A tool wrote a pipeline file the GUI should reload and focus.
     PipelinePersisted { id: String, action: String },
 

@@ -199,6 +199,15 @@ fn map_event(evt: HarnessEvent) -> Option<ChatEvent> {
         HarnessEvent::ModelSelected { provider, model } => {
             ChatEvent::ModelSelected { provider, model }
         }
+        HarnessEvent::Usage {
+            input_tokens,
+            output_tokens,
+            total_tokens,
+        } => ChatEvent::Usage {
+            input_tokens,
+            output_tokens,
+            total_tokens,
+        },
         HarnessEvent::PipelinePersisted { id, action } => {
             ChatEvent::PipelinePersisted { id, action }
         }

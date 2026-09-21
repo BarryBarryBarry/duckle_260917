@@ -269,6 +269,12 @@ pub enum ChatEvent {
     },
     /// The ACP session is pinned to this provider/model route.
     ModelSelected { provider: String, model: String },
+    /// Token accounting for the current turn (DSH mode).
+    Usage {
+        input_tokens: Option<u64>,
+        output_tokens: Option<u64>,
+        total_tokens: Option<u64>,
+    },
     /// A pipeline was written on disk and the UI should reload it (DSH mode).
     PipelinePersisted { id: String, action: String },
     /// Conversation finished cleanly.
