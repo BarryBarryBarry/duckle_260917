@@ -23,7 +23,7 @@
         "fullscreen": false,
         "maximized": true,
         "visible": false,
-        "backgroundColor": "#07090F",
+        "backgroundColor": "#F5F5F9",
         "dragDropEnabled": false
       }
     ],

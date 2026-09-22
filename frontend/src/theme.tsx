@@ -27,6 +27,15 @@ function readInitialTheme(): Theme {
     return 'light';
 }
 
+// The stylesheet's base :root is the dark theme and light is a [data-theme]
+// override, so the attribute has to be on <html> before the first paint.
+// ThemeProvider's effect runs after it, which would flash a dark window on
+// every start now that light is the default - so seed it here, at import
+// time, which is still well before React renders.
+if (typeof document !== 'undefined') {
+    document.documentElement.dataset.theme = readInitialTheme();
+}
+
 export function ThemeProvider({ children }: { children: ReactNode }) {
     const [theme, setTheme] = useState<Theme>(readInitialTheme);
 
