@@ -16,7 +16,11 @@ TILE = (0x0A, 0x0B, 0x0F, 255)        # full black ground
 OUT = "apps/desktop/icons/icon-source.png"
 
 # Mark geometry in a 64-unit box (matches DuckleLogo.tsx + the SVG mark).
-NODES = [(5, 7, (0xF6, 0xBA, 0x78)), (23, 23, (0xEA, 0x7E, 0x42)), (41, 39, (0xD9, 0x74, 0x2F))]
+# Colours are the brand purple ramp, and match the --logo-mark-* tokens the
+# in-app logo uses on a dark ground, so the Dock icon and the top-left logo
+# in the window read as the same mark.
+EDGE = (0xA1, 0x00, 0xFF)             # --logo-mark-2
+NODES = [(5, 7, (0xC8, 0x8D, 0xF0)), (23, 23, (0xA1, 0x00, 0xFF)), (41, 39, (0x75, 0x00, 0xC0))]
 EDGES = [(14, 16, 32, 32), (32, 32, 50, 48)]
 
 
@@ -26,7 +30,7 @@ def render_mark(px):
     m = Image.new("RGBA", (px, px), (0, 0, 0, 0))
     d = ImageDraw.Draw(m)
     for x1, y1, x2, y2 in EDGES:
-        d.line([x1 * k, y1 * k, x2 * k, y2 * k], fill=(0xEA, 0x7E, 0x42, 255), width=int(3.4 * k))
+        d.line([x1 * k, y1 * k, x2 * k, y2 * k], fill=EDGE + (255,), width=int(3.4 * k))
     for x, y, c in NODES:
         d.rounded_rectangle([x * k, y * k, (x + 18) * k, (y + 18) * k], radius=5.5 * k, fill=c + (255,))
     return m.crop(m.getbbox())
