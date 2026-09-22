@@ -7081,10 +7081,11 @@ select.modal-select:focus {
 /* ---- AI Chat Assistant panel -------------------------------------- */
 .chat-panel {
     position: fixed;
+    /* Fallbacks only - once mounted, ChatPanel owns the geometry via inline
+       styles and clamps it to the work area itself. No min-height / max-width
+       here, or a dragged edge could not shrink or grow past them. */
     width: min(420px, calc(100vw - 32px));
     height: min(760px, calc(100vh - var(--topbar-h) - 24px));
-    min-height: min(520px, calc(100vh - var(--topbar-h) - 24px));
-    max-width: 90vw;
     background: var(--bg-1);
     border: 1px solid var(--border-strong);
     border-radius: 14px;
@@ -7879,49 +7880,91 @@ select.modal-select:focus {
     border: 0;
     padding: 0;
     background: transparent;
+    opacity: 0;
+    /* Above the panel body so the edges stay grabbable over scrolled content,
+       but below the header controls. */
+    z-index: 2;
 }
+/* The panel clips to its rounded corners, so every handle sits just INSIDE
+   the border rather than straddling it - an outside offset would be cut off
+   by `overflow: hidden` and become ungrabbable. */
 .chat-panel-resize-handle-left,
 .chat-panel-resize-handle-right {
-    top: 56px;
-    bottom: 0;
-    width: 10px;
-    opacity: 0;
+    top: 16px;
+    bottom: 16px;
+    width: 8px;
+    cursor: ew-resize;
 }
 .chat-panel-resize-handle-left {
-    left: -4px;
-    cursor: ew-resize;
+    left: 0;
 }
 .chat-panel-resize-handle-right {
-    right: -4px;
-    cursor: ew-resize;
+    right: 0;
 }
-.chat-panel-resize-handle-left:hover,
-.chat-panel-resize-handle-right:hover,
-.chat-panel-resize-handle-left:focus-visible,
-.chat-panel-resize-handle-right:focus-visible {
+.chat-panel-resize-handle-top,
+.chat-panel-resize-handle-bottom {
+    left: 16px;
+    right: 16px;
+    height: 8px;
+    cursor: ns-resize;
+}
+.chat-panel-resize-handle-top {
+    top: 0;
+}
+.chat-panel-resize-handle-bottom {
+    bottom: 0;
+}
+/* Corners sit on top of the edges so the diagonal cursor wins. */
+.chat-panel-resize-handle-top-left,
+.chat-panel-resize-handle-top-right,
+.chat-panel-resize-handle-bottom-left,
+.chat-panel-resize-handle-bottom-right {
+    width: 16px;
+    height: 16px;
+    z-index: 3;
+}
+.chat-panel-resize-handle-top-left {
+    top: 0;
+    left: 0;
+    cursor: nwse-resize;
+}
+.chat-panel-resize-handle-top-right {
+    top: 0;
+    right: 0;
+    cursor: nesw-resize;
+}
+.chat-panel-resize-handle-bottom-left {
+    bottom: 0;
+    left: 0;
+    cursor: nesw-resize;
+}
+.chat-panel-resize-handle-bottom-right {
+    bottom: 0;
+    right: 0;
+    cursor: nwse-resize;
+}
+.chat-panel-resize-handle:hover,
+.chat-panel-resize-handle:focus-visible,
+.chat-panel-resize-handle-visible {
     opacity: 1;
     background: color-mix(in srgb, var(--accent-soft) 40%, transparent);
 }
-.chat-panel-resize-handle-visible {
-    opacity: 1;
-}
-.chat-panel-resize-handle-corner {
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    width: 20px;
-    height: 20px;
-    border: 0;
-    padding: 0;
+/* The bottom-right corner keeps its grip marks as a permanent affordance:
+   it is the one handle a user is expected to find without hovering. */
+.chat-panel-resize-handle-bottom-right {
+    opacity: 0.85;
     background:
         linear-gradient(135deg, transparent 0 48%, color-mix(in srgb, var(--border-strong) 70%, transparent) 48% 56%, transparent 56%),
         linear-gradient(135deg, transparent 0 70%, color-mix(in srgb, var(--border-strong) 70%, transparent) 70% 78%, transparent 78%);
-    cursor: nwse-resize;
-    opacity: 0.85;
 }
-.chat-panel-resize-handle-corner:hover,
-.chat-panel-resize-handle-corner:focus-visible {
+.chat-panel-resize-handle-bottom-right:hover,
+.chat-panel-resize-handle-bottom-right:focus-visible,
+.chat-panel-resize-handle-bottom-right.chat-panel-resize-handle-visible {
     opacity: 1;
+}
+/* A maximized panel has no room to grow, so the handles stand down. */
+.chat-panel-maximized .chat-panel-resize-handle {
+    display: none;
 }
 @keyframes chat-status-shimmer {
     0% { transform: translateX(-140%); }

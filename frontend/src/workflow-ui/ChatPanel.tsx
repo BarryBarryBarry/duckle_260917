@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, Check, CheckCircle2, ChevronDown, ChevronUp, Clock, Copy, Download, Gauge, Loader2, Send, Sparkles, Wrench, X, Workflow } from 'lucide-react';
+import { AlertCircle, Check, CheckCircle2, ChevronDown, Clock, Copy, Download, Gauge, Loader2, Maximize2, Minimize2, Minus, Send, Sparkles, Wrench, X, Workflow } from 'lucide-react';
 import {
     chatExtractPipeline,
     chatSend,
@@ -62,24 +62,71 @@ const EXAMPLE_PROMPTS = [
     'Embed the description column with OpenAI and dedupe near-duplicates',
 ];
 
+/** Size of a freshly opened panel. Dragging an edge may exceed these - the
+ *  only hard limits on a resize are the minimums and the work area. */
 const CHAT_PANEL_WIDTH = 420;
-const CHAT_PANEL_MIN_WIDTH = 360;
 const CHAT_PANEL_MAX_WIDTH = 620;
-const CHAT_PANEL_MIN_HEIGHT = 520;
 const CHAT_PANEL_MAX_HEIGHT = 760;
+/** Smallest the panel may be dragged to before the edge stops following. */
+const CHAT_PANEL_MIN_WIDTH = 360;
+const CHAT_PANEL_MIN_HEIGHT = 360;
 const CHAT_PANEL_MARGIN = 16;
 const CHAT_PANEL_STORAGE_KEY = 'duckie-chat-panel-position';
 const CHAT_PANEL_SNAP_DISTANCE = 28;
+/** Height of the header strip, which is all that is left when minimized. */
+const CHAT_PANEL_COLLAPSED_HEIGHT = 82;
+/** How far the pointer must travel before a press on the header counts as a
+ *  drag. Below this a press is just a click and leaves the panel untouched. */
+const DRAG_THRESHOLD = 4;
 
-type PanelLayout = {
+type PanelRect = {
     x: number;
     y: number;
     width: number;
     height: number;
-    collapsed: boolean;
 };
 
-type ResizeMode = 'left' | 'right' | 'corner';
+type PanelLayout = PanelRect & {
+    /** Minimized: only the header strip is drawn. */
+    collapsed: boolean;
+    /** Maximized: fills the work area, ignoring the default size caps. */
+    maximized: boolean;
+    /** The rect to go back to when un-maximizing. */
+    restore: PanelRect | null;
+};
+
+/** Every edge and corner, so the panel resizes in all four directions. */
+type ResizeMode =
+    | 'top'
+    | 'bottom'
+    | 'left'
+    | 'right'
+    | 'top-left'
+    | 'top-right'
+    | 'bottom-left'
+    | 'bottom-right';
+
+const RESIZE_MODES: ResizeMode[] = [
+    'top',
+    'bottom',
+    'left',
+    'right',
+    'top-left',
+    'top-right',
+    'bottom-left',
+    'bottom-right',
+];
+
+const RESIZE_LABEL: Record<ResizeMode, string> = {
+    top: '拖动以调整 Duckie 面板高度（上边缘）',
+    bottom: '拖动以调整 Duckie 面板高度（下边缘）',
+    left: '拖动以调整 Duckie 面板宽度（左边缘）',
+    right: '拖动以调整 Duckie 面板宽度（右边缘）',
+    'top-left': '拖动以调整 Duckie 面板大小（左上角）',
+    'top-right': '拖动以调整 Duckie 面板大小（右上角）',
+    'bottom-left': '拖动以调整 Duckie 面板大小（左下角）',
+    'bottom-right': '拖动以调整 Duckie 面板大小（右下角）',
+};
 
 export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeline }: Props) {
     const { t } = useTranslation();
@@ -98,15 +145,13 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
     const sessionIdRef = useRef(`duckie:${getWorkspacePath() ?? 'global'}`);
     const pendingPersistedPipelineId = useRef<string | null>(null);
     const toolNamesRef = useRef<Record<string, string>>({});
-    const dragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
+    const dragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; started: boolean } | null>(null);
     const resizeRef = useRef<{
         pointerId: number;
         mode: ResizeMode;
         startX: number;
         startY: number;
-        originX: number;
-        originWidth: number;
-        originHeight: number;
+        origin: PanelRect;
     } | null>(null);
     const activeStatus = useMemo(() => findActiveStatus(messages), [messages]);
 
@@ -401,26 +446,55 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
         const target = event.target as HTMLElement | null;
         if (target?.closest('button, input, textarea, select, a')) return;
         const start = panelLayout ?? defaultPanelLayout();
+        // Nothing is committed here, not even for a maximized panel: a press
+        // is not yet a drag, and restoring on press alone would shrink the
+        // panel on a plain click of the header.
         dragRef.current = {
             pointerId: event.pointerId,
             startX: event.clientX,
             startY: event.clientY,
             originX: start.x,
             originY: start.y,
+            started: false,
         };
-        setDragging(true);
         event.currentTarget.setPointerCapture(event.pointerId);
     }, [panelLayout]);
 
     const handleHeaderPointerMove = useCallback((event: React.PointerEvent<HTMLElement>) => {
         const drag = dragRef.current;
         if (!drag || drag.pointerId !== event.pointerId) return;
+        const totalX = event.clientX - drag.startX;
+        const totalY = event.clientY - drag.startY;
+        if (!drag.started) {
+            // Wait for real movement before treating the gesture as a drag, so
+            // a click (or a click that wobbles by a pixel) leaves the panel be.
+            if (Math.abs(totalX) < DRAG_THRESHOLD && Math.abs(totalY) < DRAG_THRESHOLD) return;
+            drag.started = true;
+            setDragging(true);
+        }
         setPanelLayout(prev => {
-            const base = prev ?? defaultPanelLayout();
+            let base = prev ?? defaultPanelLayout();
+            if (base.maximized) {
+                // First real movement on a maximized panel restores it, the way
+                // a desktop window does. The anchor uses the point the user
+                // pressed, so the cursor keeps the same relative spot on the
+                // header and the panel does not jump out from under it.
+                const restore = base.restore ?? defaultPanelLayout();
+                const ratio = (drag.startX - base.x) / Math.max(1, base.width);
+                drag.originX = drag.startX - restore.width * ratio;
+                drag.originY = base.y;
+                base = {
+                    ...base,
+                    width: restore.width,
+                    height: restore.height,
+                    maximized: false,
+                    restore: null,
+                };
+            }
             return clampPanelLayout({
                 ...base,
-                x: drag.originX + (event.clientX - drag.startX),
-                y: drag.originY + (event.clientY - drag.startY),
+                x: drag.originX + totalX,
+                y: drag.originY + totalY,
             });
         });
     }, []);
@@ -428,9 +502,11 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
     const finishDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
         const drag = dragRef.current;
         if (!drag || drag.pointerId !== event.pointerId) return;
+        const started = drag.started;
         dragRef.current = null;
         setDragging(false);
-        setPanelLayout(prev => (prev ? snapPanelLayout(prev) : prev));
+        // A click that never became a drag must not snap the panel around.
+        if (started) setPanelLayout(prev => (prev ? snapPanelLayout(prev) : prev));
         if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
         }
@@ -447,9 +523,7 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
             mode,
             startX: event.clientX,
             startY: event.clientY,
-            originX: base.x,
-            originWidth: base.width,
-            originHeight: base.height,
+            origin: { x: base.x, y: base.y, width: base.width, height: base.height },
         };
         setResizing(true);
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -461,26 +535,15 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
         if (!resize || resize.pointerId !== event.pointerId) return;
         setPanelLayout(prev => {
             const base = prev ?? defaultPanelLayout();
-            const deltaX = event.clientX - resize.startX;
-            const deltaY = event.clientY - resize.startY;
-            if (resize.mode === 'left') {
-                return clampPanelLayout({
-                    ...base,
-                    x: resize.originX + deltaX,
-                    width: resize.originWidth - deltaX,
-                });
-            }
-            if (resize.mode === 'right') {
-                return clampPanelLayout({
-                    ...base,
-                    width: resize.originWidth + deltaX,
-                });
-            }
-            return clampPanelLayout({
-                ...base,
-                width: resize.originWidth + deltaX,
-                height: resize.originHeight + deltaY,
-            });
+            const next = resizeRect(
+                resize.origin,
+                resize.mode,
+                event.clientX - resize.startX,
+                event.clientY - resize.startY,
+            );
+            // A resized panel is no longer "maximized", so the restore button
+            // does not snap away the size the user just dragged.
+            return clampPanelLayout({ ...base, ...next, maximized: false });
         });
     }, []);
 
@@ -494,10 +557,36 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
         }
     }, []);
 
+    /** Minimize: collapse to the header strip. Restores the previous height. */
     const toggleCollapsed = useCallback(() => {
         setPanelLayout(prev => {
             const base = prev ?? defaultPanelLayout();
-            return { ...base, collapsed: !base.collapsed };
+            return clampPanelLayout({ ...base, collapsed: !base.collapsed });
+        });
+    }, []);
+
+    /** Maximize / restore. The pre-maximize rect is kept so restoring puts the
+     *  panel back exactly where it was rather than at the default position. */
+    const toggleMaximized = useCallback(() => {
+        setPanelLayout(prev => {
+            const base = prev ?? defaultPanelLayout();
+            if (base.maximized) {
+                const restore = base.restore ?? defaultPanelLayout();
+                return clampPanelLayout({
+                    ...base,
+                    ...restore,
+                    collapsed: false,
+                    maximized: false,
+                    restore: null,
+                });
+            }
+            return clampPanelLayout({
+                ...base,
+                ...maximizedRect(),
+                collapsed: false,
+                maximized: true,
+                restore: { x: base.x, y: base.y, width: base.width, height: base.height },
+            });
         });
     }, []);
 
@@ -518,7 +607,9 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
             ref={panelRef}
             className={`chat-panel ${dragging ? 'chat-panel-dragging' : ''} ${
                 resizing ? 'chat-panel-resizing' : ''
-            } ${currentLayout.collapsed ? 'chat-panel-collapsed' : ''}`}
+            } ${currentLayout.collapsed ? 'chat-panel-collapsed' : ''} ${
+                currentLayout.maximized ? 'chat-panel-maximized' : ''
+            }`}
             role="complementary"
             aria-label={t('chat.title')}
             style={panelStyle}
@@ -567,10 +658,20 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
                         type="button"
                         className="chat-panel-head-btn"
                         onClick={toggleCollapsed}
-                        title={currentLayout.collapsed ? '展开 Duckie' : '折叠 Duckie'}
-                        aria-label={currentLayout.collapsed ? '展开 Duckie' : '折叠 Duckie'}
+                        title={currentLayout.collapsed ? '还原 Duckie' : '最小化 Duckie'}
+                        aria-label={currentLayout.collapsed ? '还原 Duckie' : '最小化 Duckie'}
                     >
-                        {currentLayout.collapsed ? <ChevronDown size={14} /> : <ChevronUp size={14} />}
+                        {currentLayout.collapsed ? <ChevronDown size={14} /> : <Minus size={14} />}
+                    </button>
+                    <button
+                        type="button"
+                        className="chat-panel-head-btn"
+                        onClick={toggleMaximized}
+                        title={currentLayout.maximized ? '还原 Duckie 窗口大小' : '最大化 Duckie'}
+                        aria-label={currentLayout.maximized ? '还原 Duckie 窗口大小' : '最大化 Duckie'}
+                        aria-pressed={currentLayout.maximized}
+                    >
+                        {currentLayout.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
                     </button>
                     <button
                         type="button"
@@ -586,7 +687,7 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
 
             {currentLayout.collapsed ? (
                 <div className="chat-panel-collapsed-bar">
-                    <span>Duckie 已折叠</span>
+                    <span>Duckie 已最小化</span>
                     {activeStatus ? (
                         <span className="chat-panel-collapsed-pill">
                             当前阶段：{activeStatus.label}
@@ -813,48 +914,23 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
             )}
             {!currentLayout.collapsed ? (
                 <>
-                    <button
-                        type="button"
-                        className={`chat-panel-resize-handle chat-panel-resize-handle-left ${
-                            resizeHover === 'left' ? 'chat-panel-resize-handle-visible' : ''
-                        }`}
-                        aria-label="向左或向右调整 Duckie 面板宽度"
-                        title="拖动以左右调整 Duckie 面板宽度"
-                        onPointerDown={event => handleResizePointerDown(event, 'left')}
-                        onPointerMove={handleResizePointerMove}
-                        onPointerUp={finishResize}
-                        onPointerCancel={finishResize}
-                        onMouseEnter={() => setResizeHover('left')}
-                        onMouseLeave={() => setResizeHover(prev => (prev === 'left' ? null : prev))}
-                    />
-                    <button
-                        type="button"
-                        className={`chat-panel-resize-handle chat-panel-resize-handle-right ${
-                            resizeHover === 'right' ? 'chat-panel-resize-handle-visible' : ''
-                        }`}
-                        aria-label="向左或向右调整 Duckie 面板宽度"
-                        title="拖动以左右调整 Duckie 面板宽度"
-                        onPointerDown={event => handleResizePointerDown(event, 'right')}
-                        onPointerMove={handleResizePointerMove}
-                        onPointerUp={finishResize}
-                        onPointerCancel={finishResize}
-                        onMouseEnter={() => setResizeHover('right')}
-                        onMouseLeave={() => setResizeHover(prev => (prev === 'right' ? null : prev))}
-                    />
-                    <button
-                        type="button"
-                        className={`chat-panel-resize-handle chat-panel-resize-handle-corner ${
-                            resizeHover === 'corner' ? 'chat-panel-resize-handle-visible' : ''
-                        }`}
-                        aria-label="调整 Duckie 面板大小"
-                        title="拖动以调整 Duckie 面板大小"
-                        onPointerDown={event => handleResizePointerDown(event, 'corner')}
-                        onPointerMove={handleResizePointerMove}
-                        onPointerUp={finishResize}
-                        onPointerCancel={finishResize}
-                        onMouseEnter={() => setResizeHover('corner')}
-                        onMouseLeave={() => setResizeHover(prev => (prev === 'corner' ? null : prev))}
-                    />
+                    {RESIZE_MODES.map(mode => (
+                        <button
+                            key={mode}
+                            type="button"
+                            className={`chat-panel-resize-handle chat-panel-resize-handle-${mode} ${
+                                resizeHover === mode ? 'chat-panel-resize-handle-visible' : ''
+                            }`}
+                            aria-label={RESIZE_LABEL[mode]}
+                            title={RESIZE_LABEL[mode]}
+                            onPointerDown={event => handleResizePointerDown(event, mode)}
+                            onPointerMove={handleResizePointerMove}
+                            onPointerUp={finishResize}
+                            onPointerCancel={finishResize}
+                            onMouseEnter={() => setResizeHover(mode)}
+                            onMouseLeave={() => setResizeHover(prev => (prev === mode ? null : prev))}
+                        />
+                    ))}
                 </>
             ) : null}
         </aside>
@@ -1010,6 +1086,8 @@ function readSavedPanelLayout(): PanelLayout | null {
             width?: unknown;
             height?: unknown;
             collapsed?: unknown;
+            maximized?: unknown;
+            restore?: unknown;
         };
         if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
             return {
@@ -1018,10 +1096,26 @@ function readSavedPanelLayout(): PanelLayout | null {
                 width: typeof parsed.width === 'number' ? parsed.width : CHAT_PANEL_WIDTH,
                 height: typeof parsed.height === 'number' ? parsed.height : CHAT_PANEL_MAX_HEIGHT,
                 collapsed: parsed.collapsed === true,
+                maximized: parsed.maximized === true,
+                restore: readRect(parsed.restore),
             };
         }
     } catch {
         // Ignore malformed saved positions and fall back to the default.
+    }
+    return null;
+}
+
+function readRect(value: unknown): PanelRect | null {
+    if (!value || typeof value !== 'object') return null;
+    const r = value as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
+    if (
+        typeof r.x === 'number' &&
+        typeof r.y === 'number' &&
+        typeof r.width === 'number' &&
+        typeof r.height === 'number'
+    ) {
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
     }
     return null;
 }
@@ -1034,43 +1128,113 @@ function defaultPanelLayout(): PanelLayout {
             width: CHAT_PANEL_WIDTH,
             height: CHAT_PANEL_MAX_HEIGHT,
             collapsed: false,
+            maximized: false,
+            restore: null,
         };
     }
-    const width = Math.min(CHAT_PANEL_WIDTH, window.innerWidth - CHAT_PANEL_MARGIN * 2);
+    const topbarHeight = readTopbarHeight();
+    const width = Math.min(
+        CHAT_PANEL_MAX_WIDTH,
+        Math.min(CHAT_PANEL_WIDTH, window.innerWidth - CHAT_PANEL_MARGIN * 2),
+    );
     const height = Math.min(
         CHAT_PANEL_MAX_HEIGHT,
-        Math.max(CHAT_PANEL_MIN_HEIGHT, window.innerHeight - readTopbarHeight() - 24),
+        Math.max(CHAT_PANEL_MIN_HEIGHT, window.innerHeight - topbarHeight - 24),
     );
-    const topbarHeight = readTopbarHeight();
     return {
         x: Math.max(CHAT_PANEL_MARGIN, window.innerWidth - width - CHAT_PANEL_MARGIN),
         y: topbarHeight + 10,
         width,
         height,
         collapsed: false,
+        maximized: false,
+        restore: null,
+    };
+}
+
+/** The rectangle the panel is allowed to live in: below the topbar, inset by
+ *  the margin on the other three sides. */
+function panelWorkArea() {
+    const top = readTopbarHeight() + 8;
+    return {
+        top,
+        left: CHAT_PANEL_MARGIN,
+        right: Math.max(CHAT_PANEL_MARGIN, window.innerWidth - CHAT_PANEL_MARGIN),
+        bottom: Math.max(top, window.innerHeight - CHAT_PANEL_MARGIN),
+    };
+}
+
+/** Maximizing fills the work area, so it deliberately ignores the default
+ *  size caps that keep a freshly opened panel a comfortable reading width.
+ *  It does not force the minimum size either: in a window too short for it,
+ *  overflowing the work area would push the composer off-screen. */
+function maximizedRect(): PanelRect {
+    const area = panelWorkArea();
+    return {
+        x: area.left,
+        y: area.top,
+        width: area.right - area.left,
+        height: area.bottom - area.top,
     };
 }
 
 function clampPanelLayout(layout: PanelLayout): PanelLayout {
     if (typeof window === 'undefined') return layout;
-    const width = Math.min(
-        Math.max(layout.width, CHAT_PANEL_MIN_WIDTH),
-        Math.min(CHAT_PANEL_MAX_WIDTH, window.innerWidth - CHAT_PANEL_MARGIN * 2),
-    );
-    const maxHeight = Math.min(CHAT_PANEL_MAX_HEIGHT, window.innerHeight - readTopbarHeight() - 24);
-    const height = Math.min(Math.max(layout.height, Math.min(CHAT_PANEL_MIN_HEIGHT, maxHeight)), maxHeight);
-    const minX = CHAT_PANEL_MARGIN;
-    const maxX = Math.max(CHAT_PANEL_MARGIN, window.innerWidth - width - CHAT_PANEL_MARGIN);
-    const minY = readTopbarHeight() + 8;
-    const effectiveHeight = layout.collapsed ? 82 : height;
-    const maxY = Math.max(minY, window.innerHeight - effectiveHeight - CHAT_PANEL_MARGIN);
+    if (layout.maximized) {
+        return { ...layout, ...maximizedRect() };
+    }
+    const area = panelWorkArea();
+    const availableWidth = area.right - area.left;
+    const availableHeight = area.bottom - area.top;
+    // A dragged edge may legitimately grow the panel past the default caps,
+    // so the only hard limit is the work area itself.
+    const width = clampSize(layout.width, CHAT_PANEL_MIN_WIDTH, availableWidth);
+    const height = clampSize(layout.height, CHAT_PANEL_MIN_HEIGHT, availableHeight);
+    // While minimized only the header is on screen, so that is what has to
+    // stay inside the work area - not the height it will restore to.
+    const occupiedHeight = layout.collapsed ? CHAT_PANEL_COLLAPSED_HEIGHT : height;
+    const maxX = Math.max(area.left, area.right - width);
+    const maxY = Math.max(area.top, area.bottom - occupiedHeight);
     return {
         ...layout,
         width,
         height,
-        x: Math.min(Math.max(layout.x, minX), maxX),
-        y: Math.min(Math.max(layout.y, minY), maxY),
+        x: Math.min(Math.max(layout.x, area.left), maxX),
+        y: Math.min(Math.max(layout.y, area.top), maxY),
     };
+}
+
+/** Keeps a dimension inside [min, max] even when the available space is
+ *  smaller than the minimum (a very short window), where max wins. */
+function clampSize(value: number, min: number, max: number): number {
+    if (max <= min) return max;
+    return Math.min(Math.max(value, min), max);
+}
+
+/** Resizes by moving only the dragged edges, so the opposite edge stays put
+ *  even when the drag runs into the minimum size. Anchoring it this way is
+ *  what stops the panel from sliding away under the cursor. */
+function resizeRect(origin: PanelRect, mode: ResizeMode, deltaX: number, deltaY: number): PanelRect {
+    const area = panelWorkArea();
+    let left = origin.x;
+    let top = origin.y;
+    let right = origin.x + origin.width;
+    let bottom = origin.y + origin.height;
+
+    if (mode.includes('left')) {
+        left = Math.min(Math.max(origin.x + deltaX, area.left), right - CHAT_PANEL_MIN_WIDTH);
+    }
+    if (mode.includes('right')) {
+        right = Math.max(Math.min(right + deltaX, area.right), left + CHAT_PANEL_MIN_WIDTH);
+    }
+    if (mode.includes('top')) {
+        top = Math.min(Math.max(origin.y + deltaY, area.top), bottom - CHAT_PANEL_MIN_HEIGHT);
+    }
+    if (mode.includes('bottom')) {
+        bottom = Math.max(Math.min(bottom + deltaY, area.bottom), top + CHAT_PANEL_MIN_HEIGHT);
+    }
+
+    return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 function snapPanelLayout(layout: PanelLayout): PanelLayout {
