@@ -122,9 +122,9 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 const KIND_COLOR: Record<string, string> = {
-    source: '#2eafff',
-    transform: '#3d8bff',
-    sink: '#ff6900',
+    source: 'var(--kind-source)',
+    transform: 'var(--kind-control)',
+    sink: 'var(--kind-sink)',
 };
 
 type Props = {
@@ -457,7 +457,7 @@ export default function PropertiesPanel({
                 <div className="properties-kind-row">
                     <span
                         className="properties-kind-dot"
-                        style={{ background: KIND_COLOR[kind] ?? '#666' }}
+                        style={{ background: KIND_COLOR[kind] ?? 'var(--text-3)' }}
                         aria-hidden="true"
                     />
                     <span className="properties-kind">{KIND_LABEL[kind] ?? kind}</span>

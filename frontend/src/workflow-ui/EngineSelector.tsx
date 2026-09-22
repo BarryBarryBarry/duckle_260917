@@ -31,13 +31,13 @@ const ENGINES: EngineMeta[] = [
         id: 'duckdb',
         label: 'DuckDB',
         description: 'Default. Local analytics, files, SQL pushdown.',
-        dot: '#ff7a45',
+        dot: 'var(--accent)',
     },
     {
         id: 'native',
         label: 'Native',
         description: 'Rust streaming and incremental pipelines.',
-        dot: '#2eafff',
+        dot: 'var(--kind-source)',
         comingSoon: true,
     },
 ];

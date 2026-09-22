@@ -9,7 +9,7 @@ type ThemeContextValue = {
 };
 
 const ThemeContext = createContext<ThemeContextValue>({
-    theme: 'dark',
+    theme: 'light',
     toggle: () => {},
     set: () => {},
 });
@@ -17,14 +17,14 @@ const ThemeContext = createContext<ThemeContextValue>({
 const STORAGE_KEY = 'duckle:theme';
 
 function readInitialTheme(): Theme {
-    if (typeof window === 'undefined') return 'dark';
+    if (typeof window === 'undefined') return 'light';
     try {
         const stored = localStorage.getItem(STORAGE_KEY);
         if (stored === 'light' || stored === 'dark') return stored;
     } catch {
         /* ignore */
     }
-    return 'dark';
+    return 'light';
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {

@@ -186,8 +186,8 @@ export function SettingsModal({
     };
     const btn: React.CSSProperties = {
         padding: '7px 14px',
-        borderRadius: 8,
-        border: '1px solid var(--border-2, #2a2a2a)',
+        borderRadius: 'var(--radius-btn)',
+        border: '1px solid var(--border)',
         background: 'transparent',
         color: 'inherit',
         cursor: 'pointer',
@@ -198,16 +198,16 @@ export function SettingsModal({
     };
     const primary: React.CSSProperties = {
         ...btn,
-        background: 'var(--accent, #ff7a45)',
-        borderColor: 'var(--accent, #ff7a45)',
-        color: '#0a0a0a',
+        background: 'var(--btn-primary-bg)',
+        borderColor: 'var(--btn-primary-bg)',
+        color: 'var(--btn-primary-fg)',
     };
     const aiInput: React.CSSProperties = {
         width: '100%',
         padding: '8px 10px',
-        borderRadius: 8,
-        border: '1px solid var(--border-2, #2a2a2a)',
-        background: 'var(--bg-1, #14161c)',
+        borderRadius: 'var(--radius-input)',
+        border: '1px solid var(--field-border)',
+        background: 'var(--field-bg)',
         color: 'inherit',
         boxSizing: 'border-box',
     };
@@ -217,7 +217,7 @@ export function SettingsModal({
     // should be able to scan for the ones that are not green.
     const secTable: React.CSSProperties = {
         display: 'flex', flexDirection: 'column', gap: 6,
-        borderTop: '1px solid var(--border-2, #2a2a2a)', paddingTop: 10,
+        borderTop: '1px solid var(--border)', paddingTop: 10,
     };
     const secRow: React.CSSProperties = {
         display: 'flex', justifyContent: 'space-between', gap: 16,

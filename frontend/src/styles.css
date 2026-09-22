@@ -3,9 +3,9 @@
        inheriting text scales from this; the default matches the historical
        13px. Set on document.documentElement at startup (see font-size.ts). */
     --app-font-size: 13px;
-    /* DuckDB-inspired dark - lemon-yellow brand accent on deep charcoal,
-       with a slate-blue selection accent and the DuckDB secondary palette
-       (maya blue / hot orange) across the component kinds. */
+    /* Enterprise workbench dark - Accenture purple brand accent on deep
+       charcoal, with the secondary palette (maya blue / hot orange) kept
+       across the component kinds. */
     --bg-0: #07090f;
     --bg-1: #0d111a;
     --bg-2: #131825;
@@ -21,33 +21,41 @@
     --text-3: #6d7585;
     --text-4: #4a5163;
 
-    /* Primary accent - DuckDB lemon yellow, used for primary actions, the
-       brand mark and headlines. (Buttons pair it with dark text.) */
-    --accent-cyan: #ff7a45;
-    --accent-cyan-strong: #ed5f22;
+    /* Primary accent - the brand purple, used for primary actions, the
+       brand mark and headlines. On dark surfaces the brand highlight
+       (#a100ff) carries the emphasis. */
+    --accent-cyan: #b567e6;
+    --accent-cyan-strong: #a100ff;
 
-    /* Primary CTA buttons (Run / Open visual mapper / btn-primary): DuckDB
-       lemon-yellow fill with dark text in dark mode. */
-    --btn-primary-bg: #ff7a45;
-    --btn-primary-bg-strong: #ed5f22;
-    --btn-primary-fg: #07090f;
+    /* Primary CTA buttons (Run / Open visual mapper / btn-primary): purple
+       fill with white text; hover brightens to the brand highlight. */
+    --btn-primary-bg: #7500c0;
+    --btn-primary-bg-strong: #a100ff;
+    --btn-primary-fg: #ffffff;
 
-    /* Interactive accent - the DuckDB lemon brand, used for selection /
-       focus / links so highlights read yellow in dark mode. */
-    --accent: #ff7a45;
-    --accent-strong: #ed5f22;
-    --accent-soft: rgba(255, 122, 69, 0.16);
-    --accent-glow: rgba(255, 122, 69, 0.35);
+    /* Interactive accent - used for selection / focus / links. `--accent-text`
+       is the readable variant for accent-coloured labels on dark surfaces;
+       `--accent-strong` is the deeper fill used by hover states. */
+    --accent: #a100ff;
+    --accent-strong: #7500c0;
+    --accent-text: #c88df0;
+    --accent-fg: #ffffff;
+    --accent-soft: rgba(161, 0, 255, 0.16);
+    --accent-glow: rgba(161, 0, 255, 0.35);
 
     /* The brand gradient - used on the wordmark, primary CTAs, and the
-       visual mapper button. DuckDB lemon -> hot orange ("duck"). */
-    --gradient-brand: linear-gradient(135deg, #ff7a45, #ff6900);
+       visual mapper button. Brand highlight -> brand purple. */
+    --gradient-brand: linear-gradient(135deg, #a100ff, #7500c0);
 
-    /* The "D." brand mark (DuckleLogo). Dark theme: yellow glyph on a slate
-       disc. Light theme overrides these to an orange glyph on a pale disc. */
+    /* The "D." brand mark (DuckleLogo). Dark theme: brand-highlight glyph on
+       a slate disc. Light theme overrides these to a purple glyph on white. */
     --logo-disc: #1b1f2a;
-    --logo-glyph: #ff7a45;
+    --logo-glyph: #a100ff;
     --logo-ring: rgba(255, 255, 255, 0.08);
+    /* The three-node pipeline mark (DuckleLogo), light -> deep purple. */
+    --logo-mark-1: #c88df0;
+    --logo-mark-2: #a100ff;
+    --logo-mark-3: #7500c0;
 
     /* Component-kind hues - drawn from the DuckDB secondary palette
        (maya blue inflow / hot orange outflow / slate-blue control). */
@@ -66,13 +74,26 @@
         0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 18px rgba(0, 0, 0, 0.45);
     --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.04) inset,
         0 4px 12px rgba(0, 0, 0, 0.4), 0 20px 50px rgba(0, 0, 0, 0.6);
-    --shadow-glow: 0 0 24px rgba(255, 122, 69, 0.2);
-    --focus-ring: 0 0 0 3px rgba(255, 122, 69, 0.25);
+    --shadow-glow: 0 0 24px rgba(161, 0, 255, 0.2);
+    /* Focus ring - the strong focus colour from the style guide (#b567e6). */
+    --focus-ring: 0 0 0 3px rgba(181, 103, 230, 0.4);
 
     --radius-sm: 6px;
     --radius: 8px;
     --radius-lg: 12px;
     --radius-xl: 16px;
+    /* Control radii from the style guide: buttons 8px, inputs 7px. */
+    --radius-btn: 8px;
+    --radius-input: 7px;
+
+    /* Surface and border of every text input / select / textarea. Kept as
+       its own token so the light theme can use the white-field-on-grey-page
+       treatment the style guide asks for. */
+    --field-bg: var(--bg-2);
+    --field-border: var(--border);
+    /* Default (secondary) button surface. */
+    --btn-bg: var(--bg-3);
+    --btn-bg-hover: var(--bg-2);
 
     --topbar-h: 48px;
     --sidebar-w: 272px;
@@ -108,12 +129,12 @@ body,
     background:
         radial-gradient(
             ellipse 800px 400px at 0% 0%,
-            rgba(255, 122, 69, 0.04),
+            rgba(161, 0, 255, 0.04),
             transparent 70%
         ),
         radial-gradient(
             ellipse 1000px 500px at 100% 100%,
-            rgba(255, 122, 69, 0.04),
+            rgba(161, 0, 255, 0.04),
             transparent 70%
         ),
         var(--bg-0);
@@ -226,7 +247,7 @@ textarea:focus-visible {
     padding-inline-start: 20px;
     padding-inline-end: 138px;
     background:
-        linear-gradient(180deg, rgba(255, 122, 69, 0.025), transparent 60%),
+        linear-gradient(180deg, rgba(161, 0, 255, 0.025), transparent 60%),
         var(--bg-1);
     border-bottom: 1px solid var(--border);
     position: relative;
@@ -387,8 +408,8 @@ textarea:focus-visible {
     background: linear-gradient(
         90deg,
         transparent,
-        rgba(255, 122, 69, 0.25),
-        rgba(255, 122, 69, 0.18),
+        rgba(161, 0, 255, 0.25),
+        rgba(161, 0, 255, 0.18),
         transparent
     );
     pointer-events: none;
@@ -513,15 +534,15 @@ textarea:focus-visible {
 
 .palette-search {
     flex: 1;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    background: var(--field-bg);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius-input);
     color: var(--text-1);
     padding: 6px 28px 6px 30px;
     font-size: 0.9231rem;
     font-family: inherit;
     outline: none;
-    transition: border-color 80ms ease;
+    transition: border-color 160ms ease;
 }
 
 .palette-search::placeholder {
@@ -754,8 +775,8 @@ textarea:focus-visible {
 
 .palette-badge-planned {
     color: var(--text-3);
-    background: var(--surface-2, rgba(128, 128, 128, 0.12));
-    border: 1px solid var(--border, rgba(128, 128, 128, 0.2));
+    background: var(--bg-3);
+    border: 1px solid var(--border);
 }
 
 .palette-component-label {
@@ -1731,7 +1752,7 @@ textarea:focus-visible {
     position: fixed;
     inset: 0;
     z-index: 950;
-    background: rgba(8, 10, 14, 0.45);
+    background: rgba(33, 22, 50, 0.45);
     backdrop-filter: blur(3px);
     -webkit-backdrop-filter: blur(3px);
     animation: modal-backdrop-in 100ms ease-out;
@@ -2323,15 +2344,15 @@ textarea:focus-visible {
 
 .field-input {
     width: 100%;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    background: var(--field-bg);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius-input);
     color: var(--text-1);
     padding: 6px 8px;
     font-size: 0.9231rem;
     font-family: inherit;
     outline: none;
-    transition: border-color 80ms ease;
+    transition: border-color 160ms ease;
 }
 
 .field-input:focus {
@@ -2869,14 +2890,14 @@ html[dir='rtl'] .topbar-lang {
     gap: 8px;
     padding: 7px 9px;
     border-radius: 7px;
-    background: rgba(255, 122, 69, 0.1);
-    border: 1px solid rgba(255, 122, 69, 0.35);
+    background: rgba(161, 0, 255, 0.1);
+    border: 1px solid rgba(161, 0, 255, 0.35);
 }
 
 .ctx-bound-token {
     font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
     font-size: 0.9231rem;
-    color: var(--accent-strong);
+    color: var(--accent-text);
     font-weight: 600;
 }
 
@@ -3288,7 +3309,7 @@ html[dir='rtl'] .topbar-lang {
 .field-path-browse:hover {
     background: var(--accent);
     border-color: var(--accent);
-    color: var(--bg-0);
+    color: var(--accent-fg);
 }
 
 .field-path-browse:disabled {
@@ -3336,7 +3357,7 @@ html[dir='rtl'] .topbar-lang {
 .field-expression-area {
     border: none;
     border-radius: 0;
-    background: var(--bg-2);
+    background: var(--field-bg);
     width: 100%;
     margin: 0;
 }
@@ -3583,7 +3604,7 @@ html[dir='rtl'] .topbar-lang {
     background: var(--accent);
     border: none;
     border-radius: var(--radius-sm);
-    color: var(--bg-0);
+    color: var(--accent-fg);
     padding: 6px 12px;
     font-size: 0.8462rem;
     font-weight: 700;
@@ -3703,7 +3724,7 @@ html[dir='rtl'] .topbar-lang {
 .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(8, 10, 14, 0.65);
+    background: rgba(33, 22, 50, 0.6);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     display: flex;
@@ -4172,9 +4193,9 @@ html[dir='rtl'] .topbar-lang {
     font-size: 0.9231rem;
     line-height: 1.5;
     padding: 7px 10px;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 5px;
+    background: var(--field-bg);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius-input);
     color: var(--text-1);
 }
 
@@ -4498,7 +4519,7 @@ select.modal-select:focus {
 /* Collapsible Settings categories (#102 - keep the panel simple). Mirrors the
    palette category header pattern. */
 .settings-section {
-    border-top: 1px solid var(--border-2, #2a2a2a);
+    border-top: 1px solid var(--border);
 }
 .settings-section:first-child {
     border-top: none;
@@ -4556,15 +4577,15 @@ select.modal-select:focus {
 
 .modal-input {
     width: 100%;
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    background: var(--field-bg);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius-input);
     padding: 9px 12px;
     color: var(--text-1);
     font-size: 1rem;
     font-family: inherit;
     outline: none;
-    transition: border-color 80ms ease, background 80ms ease;
+    transition: border-color 160ms ease, background 160ms ease;
 }
 
 .modal-input:focus {
@@ -4595,7 +4616,7 @@ select.modal-select:focus {
 .modal-input-browse:hover {
     background: var(--accent);
     border-color: var(--accent);
-    color: var(--bg-0);
+    color: var(--accent-fg);
 }
 
 .modal-recent {
@@ -4790,25 +4811,30 @@ select.modal-select:focus {
 }
 
 .btn {
-    background: var(--bg-3);
+    background: var(--btn-bg);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-btn);
     padding: 8px 16px;
     color: var(--text-1);
     font-size: 0.9231rem;
     font-weight: 600;
     font-family: inherit;
     cursor: pointer;
-    transition: background 80ms ease, border-color 80ms ease, transform 80ms ease;
+    transition: background 160ms ease, border-color 160ms ease, color 160ms ease,
+        transform 160ms ease;
 }
 
-.btn:hover {
-    background: var(--bg-2);
-    border-color: var(--border-strong);
+/* Style guide: a secondary button turns its border and label purple on
+   hover and lifts by 1px. */
+.btn:hover:not(:disabled) {
+    background: var(--btn-bg-hover);
+    border-color: var(--accent);
+    color: var(--accent-text);
+    transform: translateY(-1px);
 }
 
-.btn:active {
-    transform: translateY(1px);
+.btn:active:not(:disabled) {
+    transform: translateY(0);
 }
 
 .btn:disabled {
@@ -4823,10 +4849,10 @@ select.modal-select:focus {
     box-shadow: var(--shadow-glow);
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
     background: var(--btn-primary-bg-strong);
     border-color: var(--btn-primary-bg-strong);
-    filter: brightness(1.05);
+    color: var(--btn-primary-fg);
 }
 
 /* Destructive confirm button (#208 delete confirmation). */
@@ -4837,9 +4863,10 @@ select.modal-select:focus {
     box-shadow: none;
 }
 
-.btn.is-danger:hover {
+.btn.is-danger:hover:not(:disabled) {
     background: var(--danger);
     border-color: var(--danger);
+    color: #fff;
     filter: brightness(1.06);
 }
 
@@ -4977,9 +5004,10 @@ select.modal-select:focus {
     color: var(--text-2);
 }
 
-.btn-secondary:hover {
-    background: var(--bg-3);
-    color: var(--text-1);
+.btn-secondary:hover:not(:disabled) {
+    background: var(--btn-bg-hover);
+    border-color: var(--accent);
+    color: var(--accent-text);
 }
 
 /* Field-ref empty state (no saved connections / routines) ----------------- */
@@ -5331,55 +5359,62 @@ select.modal-select:focus {
 
 /* Light mode overrides --------------------------------------------------- */
 :root[data-theme='light'] {
-    --bg-0: #fafbfd;
-    --bg-1: #f1f3f8;
-    --bg-2: #e9ecf2;
-    --bg-3: #dee1ea;
-    --bg-4: #d0d5de;
+    /* Cool-grey page, white cards - never a full-white canvas. */
+    --bg-0: #f5f5f9;
+    --bg-1: #eeedf4;
+    --bg-2: #e9e8f1;
+    --bg-3: #e0dfea;
+    --bg-4: #d2d0e0;
     --bg-elevated: #ffffff;
-    --border: rgba(11, 15, 26, 0.08);
-    --border-strong: rgba(11, 15, 26, 0.14);
-    --border-bright: rgba(11, 15, 26, 0.2);
+    --border: #e5e4ed;
+    --border-strong: #d9d7e4;
+    --border-bright: #c9c6d8;
 
-    --text-1: #11151f;
-    --text-2: #3f4756;
-    --text-3: #6d7585;
-    --text-4: #a3acbd;
+    --text-1: #181726;
+    --text-2: #4b495e;
+    --text-3: #68677a;
+    --text-4: #9795a8;
 
-    /* Light theme: deep orange interactive accent so selection / focus read
-       orange in light mode (matches the primary buttons). */
-    --accent: #e8590c;
-    --accent-strong: #d24f09;
-    /* DuckDB lemon is unreadable as text on light surfaces, so the light
-       theme uses a deep gold for the primary accent (brand identity stays
-       yellow; the in-app logo/gradient still use pure lemon). */
-    --accent-cyan: #c2410c;
-    --accent-cyan-strong: #9a3412;
-    /* Primary CTA buttons: hot orange fill with white text in light mode
-       (deepened from the brand #ff6900 so white label text stays readable). */
-    --btn-primary-bg: #e8590c;
-    --btn-primary-bg-strong: #d24f09;
+    /* Light theme: the brand purple is the interactive accent; hover deepens
+       to #5b0098 as the style guide specifies. */
+    --accent: #7500c0;
+    --accent-strong: #5b0098;
+    /* Accent-coloured labels sit on the soft purple surface below, so they
+       use the guide's purple foreground/background pair. */
+    --accent-text: #7425ad;
+    --accent-fg: #ffffff;
+    --accent-cyan: #7500c0;
+    --accent-cyan-strong: #5b0098;
+    /* Primary CTA buttons: purple fill with white text. */
+    --btn-primary-bg: #7500c0;
+    --btn-primary-bg-strong: #5b0098;
     --btn-primary-fg: #ffffff;
-    --accent-soft: rgba(232, 89, 12, 0.1);
-    --accent-glow: rgba(232, 89, 12, 0.22);
+    --accent-soft: #f0e5fa;
+    --accent-glow: rgba(117, 0, 192, 0.18);
 
     --kind-source: #1f8fd0;
     --kind-transform: #4a5160;
     --kind-sink: #d96400;
     --kind-control: #3a63c4;
-    --kind-quality: #c2410c;
+    --kind-quality: #7425ad;
     --kind-custom: #c2553f;
 
-    --danger: #dc2626;
-    --success: #1488c8;
-    --warn: #d97706;
+    --danger: #bb3546;
+    --success: #137960;
+    --warn: #9a6019;
 
     --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.6) inset,
-        0 1px 2px rgba(11, 15, 26, 0.05), 0 6px 16px rgba(11, 15, 26, 0.06);
+        0 2px 4px rgba(32, 27, 64, 0.03), 0 6px 16px rgba(32, 27, 64, 0.05);
     --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.7) inset,
-        0 4px 12px rgba(11, 15, 26, 0.08), 0 16px 40px rgba(11, 15, 26, 0.1);
-    --shadow-glow: 0 0 16px rgba(232, 89, 12, 0.18);
-    --focus-ring: 0 0 0 3px rgba(232, 89, 12, 0.22);
+        0 12px 35px rgba(32, 27, 64, 0.08), 0 16px 40px rgba(32, 27, 64, 0.06);
+    --shadow-glow: 0 0 16px rgba(117, 0, 192, 0.18);
+    --focus-ring: 0 0 0 3px rgba(181, 103, 230, 0.45);
+
+    /* White fields and white default buttons on the cool-grey page. */
+    --field-bg: #ffffff;
+    --field-border: #dcdbe6;
+    --btn-bg: #ffffff;
+    --btn-bg-hover: #ffffff;
 
     color-scheme: light;
 }
@@ -5390,12 +5425,12 @@ select.modal-select:focus {
     background:
         radial-gradient(
             ellipse 800px 400px at 0% 0%,
-            rgba(255, 193, 7, 0.06),
+            rgba(161, 0, 255, 0.05),
             transparent 70%
         ),
         radial-gradient(
             ellipse 1000px 500px at 100% 100%,
-            rgba(232, 89, 12, 0.05),
+            rgba(117, 0, 192, 0.05),
             transparent 70%
         ),
         var(--bg-0);
@@ -5411,7 +5446,7 @@ select.modal-select:focus {
 :root[data-theme='light'] .node.is-selected {
     box-shadow:
         0 0 0 1px var(--accent),
-        0 0 20px rgba(232, 89, 12, 0.18),
+        0 0 20px rgba(117, 0, 192, 0.18),
         var(--shadow-1);
 }
 
@@ -5419,20 +5454,23 @@ select.modal-select:focus {
     background: linear-gradient(
         90deg,
         transparent,
-        rgba(232, 89, 12, 0.35),
-        rgba(184, 134, 11, 0.28),
+        rgba(117, 0, 192, 0.35),
+        rgba(117, 0, 192, 0.28),
         transparent
     );
 }
 
 :root[data-theme='light'] {
     --logo-disc: #ffffff;
-    --logo-glyph: #ff6900;
+    --logo-glyph: #7500c0;
     --logo-ring: rgba(20, 24, 40, 0.1);
+    --logo-mark-1: #b567e6;
+    --logo-mark-2: #7500c0;
+    --logo-mark-3: #5b0098;
 }
 
 :root[data-theme='light'] .properties-mapper-button {
-    box-shadow: 0 4px 12px rgba(232, 89, 12, 0.25);
+    box-shadow: 0 4px 12px rgba(117, 0, 192, 0.25);
 }
 
 :root[data-theme='light'] .btn-primary {
@@ -5440,7 +5478,7 @@ select.modal-select:focus {
 }
 
 :root[data-theme='light'] .react-flow__background {
-    color: rgba(11, 15, 26, 0.08);
+    color: rgba(24, 23, 38, 0.1);
 }
 
 :root[data-theme='light'] .edge-label {
@@ -5466,9 +5504,9 @@ select.modal-select:focus {
 }
 
 :root[data-theme='light'] .schema-source-banner {
-    background: rgba(232, 89, 12, 0.08);
+    background: rgba(117, 0, 192, 0.08);
     color: var(--accent);
-    border-color: rgba(232, 89, 12, 0.25);
+    border-color: rgba(117, 0, 192, 0.25);
 }
 
 :root[data-theme='light'] .schema-source-banner-declared {
@@ -5491,7 +5529,7 @@ select.modal-select:focus {
 }
 
 :root[data-theme='light'] .mapper-input-port-name {
-    background: rgba(232, 89, 12, 0.1);
+    background: rgba(117, 0, 192, 0.1);
 }
 
 :root[data-theme='light'] .edge-label-reject .edge-label-badge {
@@ -5523,12 +5561,12 @@ select.modal-select:focus {
 }
 
 :root[data-theme='light'] .mapper-input-col.is-used {
-    background: rgba(232, 89, 12, 0.08);
+    background: rgba(117, 0, 192, 0.08);
 }
 
 :root[data-theme='light'] .modal-tip {
-    background: rgba(232, 89, 12, 0.06);
-    border-color: rgba(232, 89, 12, 0.2);
+    background: rgba(117, 0, 192, 0.06);
+    border-color: rgba(117, 0, 192, 0.2);
 }
 
 :root[data-theme='light'] .markdown-body code {
@@ -5537,7 +5575,7 @@ select.modal-select:focus {
 }
 
 :root[data-theme='light'] .markdown-body blockquote {
-    background: rgba(232, 89, 12, 0.06);
+    background: rgba(117, 0, 192, 0.06);
 }
 
 :root[data-theme='light'] .markdown-body img {
@@ -5545,7 +5583,7 @@ select.modal-select:focus {
 }
 
 :root[data-theme='light'] .repo-node.is-active {
-    background: rgba(232, 89, 12, 0.1);
+    background: rgba(117, 0, 192, 0.1);
     color: var(--accent);
 }
 
@@ -5563,13 +5601,13 @@ select.modal-select:focus {
 
 :root[data-theme='light'] .topbar {
     background:
-        linear-gradient(180deg, rgba(184, 134, 11, 0.04), transparent 60%),
+        linear-gradient(180deg, rgba(117, 0, 192, 0.04), transparent 60%),
         var(--bg-1);
 }
 
 /* Workspace picker (first-launch) modal ----------------------------------- */
 .modal-backdrop-blocking {
-    background: rgba(7, 9, 15, 0.85);
+    background: rgba(33, 22, 50, 0.8);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
 }
@@ -5595,11 +5633,11 @@ select.modal-select:focus {
     height: 52px;
     border-radius: 14px;
     background: var(--gradient-brand);
-    color: var(--bg-0);
+    color: var(--accent-fg);
     box-shadow:
-        0 0 0 1px rgba(255, 122, 69, 0.32) inset,
-        0 8px 32px rgba(255, 122, 69, 0.32),
-        0 0 32px rgba(255, 122, 69, 0.3);
+        0 0 0 1px rgba(161, 0, 255, 0.32) inset,
+        0 8px 32px rgba(161, 0, 255, 0.32),
+        0 0 32px rgba(161, 0, 255, 0.3);
     flex-shrink: 0;
 }
 
@@ -5993,9 +6031,9 @@ select.modal-select:focus {
 }
 
 .node-run-badge-running {
-    background: rgba(255, 122, 69, 0.15);
+    background: rgba(161, 0, 255, 0.15);
     color: var(--accent);
-    border: 1px solid rgba(255, 122, 69, 0.4);
+    border: 1px solid rgba(161, 0, 255, 0.4);
 }
 
 .node-run-badge-running svg {
@@ -6023,7 +6061,7 @@ select.modal-select:focus {
 .node.is-run-running {
     box-shadow:
         0 0 0 1px var(--accent),
-        0 0 0 4px rgba(255, 122, 69, 0.18),
+        0 0 0 4px rgba(161, 0, 255, 0.18),
         var(--shadow-1);
 }
 
@@ -6641,16 +6679,16 @@ select.modal-select:focus {
     padding: 0;
     background: transparent;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-btn);
     color: var(--text-2);
     cursor: pointer;
-    transition: background 80ms ease, color 80ms ease, border-color 80ms ease;
+    transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
 }
 
 .btn-icon:hover:not(:disabled) {
-    background: var(--bg-3);
-    color: var(--text-1);
-    border-color: var(--border-strong);
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    border-color: var(--accent);
 }
 
 .btn-icon:disabled {
@@ -7169,7 +7207,7 @@ select.modal-select:focus {
     padding: 2px 6px;
     border-radius: 4px;
     background: var(--accent-soft);
-    color: var(--accent-strong);
+    color: var(--accent-text);
     border: 1px solid var(--accent-soft);
 }
 .chat-panel-head-btn:hover,
@@ -7243,7 +7281,7 @@ select.modal-select:focus {
     align-items: center;
     justify-content: center;
     background: var(--accent-soft);
-    color: var(--accent-strong);
+    color: var(--accent-text);
     margin-bottom: 6px;
 }
 .chat-panel-setup-title {
@@ -7302,7 +7340,7 @@ select.modal-select:focus {
     margin-top: 8px;
     padding: 8px 16px;
     background: var(--accent);
-    color: var(--bg-0);
+    color: var(--accent-fg);
     border: 0;
     border-radius: 8px;
     font-size: 0.9615rem;
@@ -7743,7 +7781,7 @@ select.modal-select:focus {
     margin-top: 8px;
     padding: 6px 10px;
     background: var(--accent);
-    color: var(--bg-0);
+    color: var(--accent-fg);
     border: 0;
     border-radius: 6px;
     font-size: 0.8846rem;
@@ -7793,9 +7831,9 @@ select.modal-select:focus {
 }
 .chat-panel-input {
     flex: 1;
-    background: var(--bg-2);
-    border: 1px solid var(--border-strong);
-    border-radius: 8px;
+    background: var(--field-bg);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius-input);
     color: var(--text-1);
     padding: 8px 10px;
     font: inherit;
@@ -7805,7 +7843,7 @@ select.modal-select:focus {
     min-height: 72px;
     max-height: 240px;
     overflow-y: hidden;
-    transition: border-color 100ms, background 100ms;
+    transition: border-color 160ms, background 160ms;
 }
 .chat-panel-input:focus {
     outline: 0;
@@ -7822,7 +7860,7 @@ select.modal-select:focus {
     justify-content: center;
     padding: 0 12px;
     background: var(--accent);
-    color: var(--bg-0);
+    color: var(--accent-fg);
     border: 0;
     border-radius: 8px;
     cursor: pointer;
@@ -7966,7 +8004,7 @@ select.modal-select:focus {
     padding: 2px 6px;
     border-radius: 4px;
     background: var(--accent-soft);
-    color: var(--accent-strong);
+    color: var(--accent-text);
 }
 .git-panel-head-actions {
     display: flex;
@@ -8051,7 +8089,7 @@ select.modal-select:focus {
     color: var(--warn);
 }
 .git-counter-accent .git-counter-value {
-    color: var(--accent-strong);
+    color: var(--accent-text);
 }
 .git-counter-mute .git-counter-value {
     color: var(--text-3);
@@ -8224,7 +8262,7 @@ select.modal-select:focus {
     padding: 8px 12px;
     background: var(--accent);
     border: 0;
-    color: var(--bg-0);
+    color: var(--accent-fg);
     border-radius: 6px;
     font-size: 0.9231rem;
     font-weight: 600;
@@ -8270,14 +8308,14 @@ select.modal-select:focus {
 }
 .git-panel-branch-btn.is-current {
     background: var(--accent-soft);
-    color: var(--accent-strong);
+    color: var(--accent-text);
     cursor: default;
 }
 .git-panel-branch-current {
     margin-left: auto;
     font-size: 0.6923rem;
     text-transform: uppercase;
-    color: var(--accent-strong);
+    color: var(--accent-text);
     letter-spacing: 0.05em;
 }
 
@@ -8288,7 +8326,7 @@ select.modal-select:focus {
 }
 .git-panel-link {
     font-size: 0.8462rem;
-    color: var(--accent-strong);
+    color: var(--accent-text);
     text-decoration: none;
     display: inline-flex;
     align-items: center;
@@ -8352,8 +8390,8 @@ select.modal-select:focus {
     border-color: rgba(255, 77, 109, 0.4);
 }
 .ci-badge-busy {
-    color: var(--accent-strong);
-    border-color: rgba(255, 122, 69, 0.4);
+    color: var(--accent-text);
+    border-color: rgba(161, 0, 255, 0.4);
 }
 .ci-badge-mute {
     color: var(--text-3);
@@ -8420,7 +8458,7 @@ select.modal-select:focus {
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     background: var(--accent-soft);
-    color: var(--accent-strong);
+    color: var(--accent-text);
 }
 .plan-stage-kind-sink {
     background: rgba(52, 211, 153, 0.14);
@@ -8549,12 +8587,12 @@ select.modal-select:focus {
     color: var(--text-2);
 }
 .run-message-info .run-message-level {
-    background: rgba(46, 175, 255, 0.16);
-    color: #2eafff;
+    background: color-mix(in srgb, var(--success) 16%, transparent);
+    color: var(--success);
 }
 .run-message-warn .run-message-level {
-    background: rgba(255, 105, 0, 0.16);
-    color: #ff6900;
+    background: color-mix(in srgb, var(--warn) 16%, transparent);
+    color: var(--warn);
 }
 .run-message-error .run-message-level {
     background: rgba(255, 77, 109, 0.16);
@@ -8868,7 +8906,7 @@ select.modal-select:focus {
 }
 /* Web-dashboard button: green glow (live-console affordance), pulsing like the
    Claude button. Green is intentional here per request - reads as "a live
-   console is available", distinct from the lemon brand chrome. */
+   console is available", distinct from the purple brand chrome. */
 .dashboard-glow-btn {
     border-color: rgba(62, 207, 142, 0.5) !important;
 }
@@ -8887,46 +8925,46 @@ select.modal-select:focus {
 
 /* ---- Guided tour (first-run walkthrough) ---- */
 .tour-root { position: fixed; inset: 0; z-index: 99999; pointer-events: none; }
-.tour-dim { position: absolute; inset: 0; background: rgba(7, 9, 15, 0.72); pointer-events: auto; }
+.tour-dim { position: absolute; inset: 0; background: rgba(33, 22, 50, 0.7); pointer-events: auto; }
 .tour-spotlight {
     position: absolute; border-radius: 10px; pointer-events: none;
-    box-shadow: 0 0 0 9999px rgba(7, 9, 15, 0.72), 0 0 0 2px var(--lemon, #ffd84d), 0 0 22px 4px rgba(255, 216, 77, 0.45);
+    box-shadow: 0 0 0 9999px rgba(33, 22, 50, 0.7), 0 0 0 2px var(--accent), 0 0 22px 4px rgba(161, 0, 255, 0.45);
     transition: top .25s ease, left .25s ease, width .25s ease, height .25s ease;
 }
 .tour-tip {
     position: absolute; pointer-events: auto; box-sizing: border-box;
-    background: var(--panel, #161b2b); color: var(--text, #eef1f8);
-    border: 1px solid var(--border, #2c3349); border-radius: 14px; padding: 18px 18px 14px;
+    background: var(--bg-elevated); color: var(--text-1);
+    border: 1px solid var(--border); border-radius: 14px; padding: 18px 18px 14px;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); max-width: calc(100vw - 24px);
     animation: tour-pop .2s ease;
 }
 @keyframes tour-pop { from { opacity: 0; transform: translateY(6px) scale(.98); } }
-.tour-progress { font-size: 0.8462rem; letter-spacing: .06em; text-transform: uppercase; color: var(--text-dim, #9aa4bd); font-weight: 600; }
+.tour-progress { font-size: 0.8462rem; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); font-weight: 600; }
 /* Which part of the product a step belongs to. Carries the accent so the reader can
    see the tour move from Build to Operate to Govern rather than counting steps. */
-.tour-chapter { color: var(--lemon, #ffd84d); }
-.tour-chapter::after { content: ' \00B7 '; color: var(--text-dim, #9aa4bd); }
+.tour-chapter { color: var(--accent); }
+.tour-chapter::after { content: ' \00B7 '; color: var(--text-3); }
 .tour-title { margin: 6px 0 8px; font-size: 1.2308rem; font-weight: 700; }
-.tour-body { margin: 0 0 14px; font-size: 1rem; line-height: 1.6; color: var(--text-dim, #c2cae0); }
+.tour-body { margin: 0 0 14px; font-size: 1rem; line-height: 1.6; color: var(--text-2); }
 .tour-dots { display: flex; gap: 5px; margin-bottom: 14px; }
-.tour-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border, #3a4360); transition: .15s; }
-.tour-dot.on { background: var(--lemon, #ffd84d); width: 18px; border-radius: 4px; }
+.tour-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border); transition: .15s; }
+.tour-dot.on { background: var(--accent); width: 18px; border-radius: 4px; }
 .tour-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .tour-nav { display: flex; gap: 8px; }
-.tour-skip { background: none; border: none; color: var(--text-dim, #9aa4bd); cursor: pointer; font-size: 1rem; padding: 6px 4px; }
-.tour-skip:hover { color: var(--text, #eef1f8); text-decoration: underline; }
+.tour-skip { background: none; border: none; color: var(--text-3); cursor: pointer; font-size: 1rem; padding: 6px 4px; }
+.tour-skip:hover { color: var(--text-1); text-decoration: underline; }
 /* How much of a mandatory tour is left. Sits where Skip sits, so the row keeps its
    shape, but is plain text: it is not a control and must not invite a click. */
-.tour-remaining { color: var(--text-dim, #9aa4bd); font-size: 1rem; padding: 6px 4px; }
+.tour-remaining { color: var(--text-3); font-size: 1rem; padding: 6px 4px; }
 .tour-btn {
-    background: var(--surface-2, #1d2335); color: var(--text, #eef1f8);
-    border: 1px solid var(--border, #2c3349); border-radius: 9px; padding: 7px 16px; font-size: 1rem; cursor: pointer;
+    background: var(--bg-3); color: var(--text-1);
+    border: 1px solid var(--border); border-radius: 9px; padding: 7px 16px; font-size: 1rem; cursor: pointer;
 }
-.tour-btn:hover { border-color: var(--border-strong, #3a4360); }
-.tour-btn.primary { background: var(--lemon, #ffd84d); border-color: var(--lemon, #ffd84d); color: #20242e; font-weight: 600; }
-.tour-btn.primary:hover { background: var(--orange, #ff8a3d); border-color: var(--orange, #ff8a3d); }
+.tour-btn:hover { border-color: var(--border-strong); }
+.tour-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.tour-btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
 /* Primary action buttons in the MCP popup use Claude's orange (not the Duckle
-   lemon) so the "connect to Claude" flow reads in Claude's color scheme. */
+   purple) so the "connect to Claude" flow reads in Claude's color scheme. */
 .btn-claude {
     background: #d97757;
     border-color: #d97757;
@@ -8935,9 +8973,10 @@ select.modal-select:focus {
         0 4px 14px rgba(217, 119, 87, 0.32),
         0 0 0 1px rgba(217, 119, 87, 0.28) inset;
 }
-.btn-claude:hover {
+.btn-claude:hover:not(:disabled) {
     background: #c96746;
     border-color: #c96746;
+    color: #ffffff;
     filter: brightness(1.04);
 }
 .btn-claude:disabled {
@@ -9074,7 +9113,7 @@ select.modal-select:focus {
 .acct-chip-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 110px; }
 .acct-chip-caret { color: var(--text-3); flex-shrink: 0; }
 .acct-avatar { border-radius: 50%; object-fit: cover; display: block; flex-shrink: 0; }
-.acct-avatar-initials { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--accent); color: var(--btn-primary-fg, #0a0a0a); font-weight: 700; line-height: 1; flex-shrink: 0; }
+.acct-avatar-initials { display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--accent); color: var(--btn-primary-fg); font-weight: 700; line-height: 1; flex-shrink: 0; }
 .acct-backdrop { position: fixed; inset: 0; z-index: 2000; }
 .acct-menu { position: fixed; z-index: 2001; min-width: 250px; background: var(--bg-elevated, var(--bg-1)); border: 1px solid var(--border-strong); border-radius: var(--radius, 10px); box-shadow: var(--shadow-2); padding: 6px; }
 .acct-menu-head { font-size: 0.8077rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text-3); padding: 8px 10px 6px; }
@@ -9108,7 +9147,7 @@ select.modal-select:focus {
 .acct-form-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .acct-btn { padding: 9px 16px; border-radius: var(--radius-sm, 8px); border: 1px solid var(--border-strong); background: var(--bg-2); color: var(--text-1); cursor: pointer; font-size: 1rem; font-weight: 600; }
 .acct-btn:hover { background: var(--bg-3); }
-.acct-btn-primary { background: var(--btn-primary-bg, var(--accent)); color: var(--btn-primary-fg, #0a0a0a); border-color: transparent; }
+.acct-btn-primary { background: var(--btn-primary-bg, var(--accent)); color: var(--btn-primary-fg); border-color: transparent; }
 .acct-btn-primary:hover { background: var(--btn-primary-bg-strong, var(--accent)); }
 .acct-btn-primary:disabled { opacity: .5; cursor: not-allowed; }
 
@@ -9142,7 +9181,7 @@ select.modal-select:focus {
 .review-prompt-body { font-size: 0.9615rem; line-height: 1.5; color: var(--text-2); margin-bottom: 12px; }
 .review-prompt-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .review-prompt-cta {
-    background: var(--accent); color: #20242e; border: none; border-radius: 8px;
+    background: var(--accent); color: var(--accent-fg); border: none; border-radius: 8px;
     padding: 7px 16px; font-size: 1rem; font-weight: 600; cursor: pointer;
 }
 .review-prompt-cta:hover { background: var(--accent-strong); }
@@ -9176,14 +9215,14 @@ select.modal-select:focus {
 .dive-modal-actions { display: flex; align-items: center; gap: 8px; }
 .dive-editor { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
 .dive-field { display: flex; flex-direction: column; gap: 5px; font-size: 0.9231rem; color: var(--text-2); }
-.dive-field code { background: var(--bg-2); padding: 1px 5px; border-radius: 4px; color: var(--lemon); }
-.dive-field input, .dive-field textarea { background: var(--surface-2, var(--bg-2)); color: var(--text-1); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 1rem; outline: none; }
+.dive-field code { background: var(--bg-2); padding: 1px 5px; border-radius: 4px; color: var(--accent-text); }
+.dive-field input, .dive-field textarea { background: var(--field-bg); color: var(--text-1); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 1rem; outline: none; }
 .dive-field textarea { font-family: Consolas, monospace; resize: vertical; }
 .dive-field input:focus, .dive-field textarea:focus { border-color: var(--border-bright); }
 .dive-editor-actions { display: flex; gap: 8px; }
 .dive-btn { background: var(--bg-3); color: var(--text-1); border: 1px solid var(--border); border-radius: 8px; padding: 6px 14px; font-size: 1rem; cursor: pointer; }
 .dive-btn:hover { border-color: var(--border-bright); }
-.dive-btn.primary { background: var(--accent); color: #20242e; border-color: var(--accent); font-weight: 600; }
+.dive-btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; }
 .dive-btn.primary:hover { background: var(--accent-strong); }
 .dive-btn:disabled { opacity: .5; cursor: default; }
 
@@ -9740,7 +9779,7 @@ select.modal-select:focus {
 }
 
 .catalog-row.is-selected {
-    background: rgba(255, 122, 69, 0.1);
+    background: rgba(161, 0, 255, 0.1);
     box-shadow: inset 3px 0 0 var(--accent);
 }
 
@@ -9830,9 +9869,9 @@ select.modal-select:focus {
 
 .catalog-form input,
 .catalog-form textarea {
-    background: var(--bg-1);
-    border: 1px solid var(--border);
-    border-radius: 7px;
+    background: var(--field-bg);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius-input);
     padding: 7px 9px;
     color: var(--text-1);
     font-size: 0.88rem;
@@ -9974,10 +10013,10 @@ select.modal-select:focus {
     align-items: flex-start;
     gap: 7px;
     padding: 8px 10px;
-    border: 1px solid var(--duckle-orange, #e08a3c);
+    border: 1px solid var(--warn);
     border-left-width: 3px;
     border-radius: 6px;
-    background: color-mix(in srgb, var(--duckle-orange, #e08a3c) 8%, transparent);
+    background: color-mix(in srgb, var(--warn) 8%, transparent);
     font-size: 12px;
     line-height: 1.45;
 }
@@ -10009,10 +10048,10 @@ select.modal-select:focus {
     list-style: none;
     max-height: 220px;
     overflow-y: auto;
-    border: 1px solid var(--duckle-slate-300, #cbd5e1);
+    border: 1px solid var(--border-strong);
     border-radius: 6px;
-    background: var(--duckle-surface, #fff);
-    box-shadow: 0 6px 18px rgb(0 0 0 / 12%);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-2);
     font-size: 12px;
 }
 
@@ -10026,7 +10065,7 @@ select.modal-select:focus {
 }
 
 .sql-completions li.is-active {
-    background: color-mix(in srgb, var(--duckle-maya, #4aa8e0) 18%, transparent);
+    background: var(--accent-soft);
 }
 
 /* One letter, so the kind is readable without reading. */
@@ -10039,9 +10078,9 @@ select.modal-select:focus {
     opacity: 0.75;
 }
 
-.sql-completion-kind.kind-column { color: var(--duckle-maya, #4aa8e0); }
-.sql-completion-kind.kind-relation { color: var(--duckle-orange, #e08a3c); }
-.sql-completion-kind.kind-parameter { color: var(--duckle-lemon-ink, #8a7a20); }
+.sql-completion-kind.kind-column { color: var(--kind-source); }
+.sql-completion-kind.kind-relation { color: var(--kind-sink); }
+.sql-completion-kind.kind-parameter { color: var(--accent-text); }
 
 .sql-completion-text {
     font-family: var(--duckle-mono, ui-monospace, monospace);

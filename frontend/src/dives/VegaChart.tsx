@@ -14,13 +14,17 @@ interface VegaChartProps {
 
 const DATASET = 'dive';
 
-/** Brand-token Vega config (lemon/orange/maya/slate; success = maya, no green). */
+/** Brand-token Vega config (purple/maya/slate; success = maya, no green). */
 function vegaConfig(theme: 'light' | 'dark') {
-    const ink = theme === 'dark' ? '#ecf0f7' : '#1b2030';
-    const grid = theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)';
+    const ink = theme === 'dark' ? '#ecf0f7' : '#181726';
+    const grid = theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(24,23,38,0.08)';
+    const category =
+        theme === 'dark'
+            ? ['#a100ff', '#c88df0', '#2eafff', '#7500c0', '#aab3c5']
+            : ['#7500c0', '#b567e6', '#1f8fd0', '#5b0098', '#68677a'];
     return {
         background: 'transparent',
-        range: { category: ['#ffd84d', '#ff7a45', '#2eafff', '#ed5f22', '#aab3c5'] },
+        range: { category },
         axis: { labelColor: ink, titleColor: ink, gridColor: grid, domainColor: grid, tickColor: grid },
         legend: { labelColor: ink, titleColor: ink },
         title: { color: ink },
