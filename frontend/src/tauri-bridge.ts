@@ -564,6 +564,7 @@ export type ChatEvent =
     | { kind: 'token'; text: string }
     | { kind: 'tool_call_start'; id: string; name: string; arguments: unknown }
     | { kind: 'tool_call_end'; id: string; ok: boolean; content: unknown }
+    | { kind: 'session'; remote_session_id: string; resumed: boolean }
     | { kind: 'model_selected'; provider: string; model: string }
     | {
           kind: 'usage';
@@ -584,6 +585,8 @@ export async function chatSend(
     onEvent: (e: ChatEvent) => void,
     workspace?: string | null,
     sessionId?: string | null,
+    /** DSH ACP session id saved with a conversation, resumed when the agent restarts. */
+    resumeSessionId?: string | null,
 ): Promise<void> {
     if (!isTauri()) {
         onEvent({ kind: 'error', message: 'Chat is only available in the desktop app.' });
@@ -598,6 +601,7 @@ export async function chatSend(
             onEvent: channel,
             workspace: workspace ?? null,
             sessionId: sessionId ?? null,
+            resumeSessionId: resumeSessionId ?? null,
         });
     } catch (err) {
         onEvent({ kind: 'error', message: String(err) });
@@ -616,6 +620,68 @@ export async function chatExtractPipeline(text: string): Promise<unknown | null>
     } catch {
         return null;
     }
+}
+
+/** Stop the DSH agent process behind a conversation (no-op if none is live). */
+export async function chatCloseSession(sessionId: string): Promise<void> {
+    if (!isTauri()) return;
+    await invoke('chat_close_session', { sessionId });
+}
+
+// ---- Duckie chat history (<workspace>/.duckle/duckie/conversations) -----
+
+export type DuckieConversationSummary = {
+    id: string;
+    title: string;
+    pinned: boolean;
+    createdAt: number;
+    updatedAt: number;
+    messageCount: number;
+};
+
+export type DuckieConversation = {
+    id: string;
+    title: string;
+    pinned: boolean;
+    createdAt: number;
+    updatedAt: number;
+    remoteSessionId?: string | null;
+    messages: unknown[];
+};
+
+export async function duckieConversationsList(workspace: string): Promise<DuckieConversationSummary[]> {
+    if (!isTauri()) return [];
+    return await invoke<DuckieConversationSummary[]>('duckie_conversations_list', { workspace });
+}
+
+export async function duckieConversationGet(workspace: string, id: string): Promise<DuckieConversation> {
+    return await invoke<DuckieConversation>('duckie_conversation_get', { workspace, id });
+}
+
+/** Creates the conversation on first save; `title` is ignored once it exists. */
+export async function duckieConversationSave(
+    workspace: string,
+    conversation: { id: string; title: string; remoteSessionId?: string | null; messages: unknown[] },
+): Promise<DuckieConversationSummary[]> {
+    if (!isTauri()) return [];
+    return await invoke<DuckieConversationSummary[]>('duckie_conversation_save', { workspace, conversation });
+}
+
+export async function duckieConversationUpdateMeta(
+    workspace: string,
+    id: string,
+    meta: { title?: string; pinned?: boolean },
+): Promise<DuckieConversationSummary[]> {
+    return await invoke<DuckieConversationSummary[]>('duckie_conversation_update_meta', {
+        workspace,
+        id,
+        title: meta.title ?? null,
+        pinned: meta.pinned ?? null,
+    });
+}
+
+export async function duckieConversationDelete(workspace: string, id: string): Promise<DuckieConversationSummary[]> {
+    return await invoke<DuckieConversationSummary[]>('duckie_conversation_delete', { workspace, id });
 }
 
 // ---- In-app Git integration --------------------------------------------

@@ -1,17 +1,25 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use deepseek_harness::{AcpModelOverride, AcpSession, DshLaunchSpec, HarnessEvent};
 use tauri::ipc::Channel;
 use tauri::Manager;
 
 use crate::app_settings::AiProviderConfig;
-use crate::llama_chat::ChatEvent;
+use crate::llama_chat::{ChatEvent, ChatMessage};
+
+/// Each live session is a DSH child process, so idle ones beyond this are
+/// closed; their conversations resume from the saved ACP id when reopened.
+const MAX_LIVE_SESSIONS: usize = 4;
+/// Upper bound on the transcript replayed when a session cannot be resumed.
+const REPLAY_MAX_CHARS: usize = 24_000;
 
 struct SessionEntry {
     fingerprint: String,
     session: Arc<AcpSession>,
+    last_used: Instant,
 }
 
 static SESSIONS: OnceLock<Mutex<HashMap<String, SessionEntry>>> = OnceLock::new();
@@ -20,10 +28,13 @@ fn sessions() -> &'static Mutex<HashMap<String, SessionEntry>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn prompt(
     app: tauri::AppHandle,
     session_id: String,
     prompt: String,
+    prior_history: Vec<ChatMessage>,
+    resume_remote_id: Option<String>,
     workspace: String,
     cfg: AiProviderConfig,
     on_event: Channel<ChatEvent>,
@@ -44,21 +55,35 @@ pub async fn prompt(
             cfg.harness_model.as_deref().unwrap_or("")
         );
 
-        let session = get_or_create_session(
+        let (session, fresh) = get_or_create_session(
             &session_id,
             &fingerprint,
             &launch,
             &workspace_path,
             &mcp_bin,
             model_override,
+            resume_remote_id.as_deref(),
         )?;
+        if fresh {
+            let _ = on_event.send(ChatEvent::Session {
+                remote_session_id: session.remote_session_id().to_string(),
+                resumed: session.resumed(),
+            });
+        }
         if let Some(route) = session.selected_model() {
             let _ = on_event.send(ChatEvent::ModelSelected {
                 provider: route.provider,
                 model: route.model,
             });
         }
-        let message = duckie_prompt(&workspace_path, &prompt);
+        // A brand-new agent session knows nothing of a conversation restored
+        // from history, so hand it the transcript once.
+        let replay = if fresh && !session.resumed() {
+            replay_transcript(&prior_history)
+        } else {
+            None
+        };
+        let message = duckie_prompt(&workspace_path, replay.as_deref(), &prompt);
         session
             .prompt(&message, move |evt| {
                 if let Some(mapped) = map_event(evt) {
@@ -71,6 +96,22 @@ pub async fn prompt(
     .map_err(|e| e.to_string())?
 }
 
+/// Drop the live session for a conversation (e.g. it was deleted), which
+/// closes the ACP session and stops its DSH process.
+pub async fn close_session(session_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        let removed = sessions()
+            .lock()
+            .map_err(|_| "session registry poisoned".to_string())?
+            .remove(&session_id);
+        drop(removed);
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Returns the session and whether it was started by this call.
 fn get_or_create_session(
     session_id: &str,
     fingerprint: &str,
@@ -78,27 +119,103 @@ fn get_or_create_session(
     workspace: &Path,
     mcp_bin: &Path,
     model_override: Option<AcpModelOverride>,
-) -> Result<Arc<AcpSession>, String> {
-    let mut guard = sessions()
-        .lock()
-        .map_err(|_| "session registry poisoned".to_string())?;
-    if let Some(existing) = guard.get(session_id) {
-        if existing.fingerprint == fingerprint {
-            return Ok(Arc::clone(&existing.session));
+    resume_remote_id: Option<&str>,
+) -> Result<(Arc<AcpSession>, bool), String> {
+    {
+        let mut guard = sessions()
+            .lock()
+            .map_err(|_| "session registry poisoned".to_string())?;
+        if let Some(existing) = guard.get_mut(session_id) {
+            if existing.fingerprint == fingerprint {
+                existing.last_used = Instant::now();
+                return Ok((Arc::clone(&existing.session), false));
+            }
         }
     }
+    // Starting DSH can take seconds; do it without holding the registry so
+    // other conversations are not blocked behind it.
     let session = Arc::new(
-        AcpSession::start(launch.clone(), workspace, mcp_bin, model_override)
-            .map_err(|e| e.to_string())?,
+        AcpSession::start_or_resume(
+            launch.clone(),
+            workspace,
+            mcp_bin,
+            model_override,
+            resume_remote_id,
+        )
+        .map_err(|e| e.to_string())?,
     );
-    guard.insert(
-        session_id.to_string(),
-        SessionEntry {
-            fingerprint: fingerprint.to_string(),
-            session: Arc::clone(&session),
-        },
-    );
-    Ok(session)
+    let evicted = {
+        let mut guard = sessions()
+            .lock()
+            .map_err(|_| "session registry poisoned".to_string())?;
+        let replaced = guard.insert(
+            session_id.to_string(),
+            SessionEntry {
+                fingerprint: fingerprint.to_string(),
+                session: Arc::clone(&session),
+                last_used: Instant::now(),
+            },
+        );
+        let mut evicted: Vec<SessionEntry> = replaced.into_iter().collect();
+        evicted.extend(evict_idle(&mut guard, session_id));
+        evicted
+    };
+    // Dropping closes the ACP session, which waits on the child; keep that
+    // outside the lock.
+    drop(evicted);
+    Ok((session, true))
+}
+
+fn evict_idle(
+    registry: &mut HashMap<String, SessionEntry>,
+    keep: &str,
+) -> Vec<SessionEntry> {
+    let mut out = Vec::new();
+    while registry.len() > MAX_LIVE_SESSIONS {
+        let oldest = registry
+            .iter()
+            .filter(|(id, entry)| id.as_str() != keep && !entry.session.is_busy())
+            .min_by_key(|(_, entry)| entry.last_used)
+            .map(|(id, _)| id.clone());
+        match oldest.and_then(|id| registry.remove(&id)) {
+            Some(entry) => out.push(entry),
+            None => break,
+        }
+    }
+    out
+}
+
+/// The earlier turns of a restored conversation, newest kept when it has to
+/// be cut to [`REPLAY_MAX_CHARS`].
+fn replay_transcript(history: &[ChatMessage]) -> Option<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    for msg in history.iter().rev() {
+        let content = msg.content.trim();
+        if content.is_empty() {
+            continue;
+        }
+        let speaker = if msg.role == "user" { "User" } else { "Duckie" };
+        let line = format!("{speaker}: {content}");
+        let len = line.chars().count();
+        if used + len > REPLAY_MAX_CHARS {
+            if lines.is_empty() {
+                let tail: String = line
+                    .chars()
+                    .skip(len - REPLAY_MAX_CHARS)
+                    .collect();
+                lines.push(format!("...{tail}"));
+            }
+            break;
+        }
+        used += len;
+        lines.push(line);
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    lines.reverse();
+    Some(lines.join("\n\n"))
 }
 
 fn resolve_mcp_bin(app_data: &Path) -> Result<PathBuf, String> {
@@ -168,7 +285,14 @@ fn harness_model_override(cfg: &AiProviderConfig) -> Result<Option<AcpModelOverr
     }
 }
 
-fn duckie_prompt(workspace: &Path, user_prompt: &str) -> String {
+fn duckie_prompt(workspace: &Path, replay: Option<&str>, user_prompt: &str) -> String {
+    let earlier = replay
+        .map(|t| {
+            format!(
+                "Earlier conversation, restored from Duckle's saved history (the previous agent session could not be resumed):\n{t}\n\n"
+            )
+        })
+        .unwrap_or_default();
     format!(
         "You are Duckie, the AI assistant inside Duckle.\n\
 Use the attached Duckle MCP tools instead of inventing pipeline JSON.\n\
@@ -177,8 +301,9 @@ When the user wants to change an existing pipeline, call update_pipeline so the 
 Prefer list_components and get_component_schema before writing a pipeline when you are not certain about component ids or required properties.\n\
 Reply with a short summary after tool work completes.\n\
 Workspace: {}\n\n\
-User request:\n{}",
+{}User request:\n{}",
         workspace.display(),
+        earlier,
         user_prompt
     )
 }

@@ -131,7 +131,25 @@
     "thinking": "Thinking...",
     "placeholder": "Describe what you need...",
     "sendAria": "Send",
-    "sendTooltip": "Send (Enter)"
+    "sendTooltip": "Send (Enter)",
+    "history": {
+      "newChat": "New chat",
+      "recent": "Recent chats",
+      "empty": "No chats yet",
+      "noWorkspace": "Open a workspace to keep chat history",
+      "untitled": "Untitled chat",
+      "more": "More actions",
+      "rename": "Rename",
+      "pin": "Pin chat",
+      "unpin": "Unpin chat",
+      "delete": "Delete chat",
+      "deleteConfirm": "Delete this chat? This cannot be undone.",
+      "deleteConfirmCta": "Delete",
+      "cancel": "Cancel",
+      "busyHint": "Duckie is replying; switch when it finishes",
+      "showSidebar": "Show chat history",
+      "hideSidebar": "Hide chat history"
+    }
   },
   "properties": {
     "nothingSelected": "Nothing selected",

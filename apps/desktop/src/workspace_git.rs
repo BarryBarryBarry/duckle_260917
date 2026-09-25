@@ -485,6 +485,8 @@ const GITIGNORE_SAFETY: &[&str] = &[
     "console.db",
     "console.db-wal",
     "console.db-shm",
+    // Duckie chat transcripts: private, and can quote data the user pasted in.
+    "duckie/",
 ];
 
 /// Ensure `<workspace>/.duckle/.gitignore` excludes everything in [`GITIGNORE_SAFETY`].

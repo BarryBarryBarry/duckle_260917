@@ -48,6 +48,7 @@ pub struct AcpSession {
     stdin: Arc<Mutex<ChildStdin>>,
     state: Arc<ClientState>,
     remote_session_id: String,
+    resumed: bool,
     selected_model: Mutex<Option<AcpSelectedModel>>,
 }
 
@@ -76,6 +77,21 @@ impl AcpSession {
         workspace: &Path,
         mcp_bin: &Path,
         model_override: Option<AcpModelOverride>,
+    ) -> Result<Self> {
+        Self::start_or_resume(launch, workspace, mcp_bin, model_override, None)
+    }
+
+    /// Like [`AcpSession::start`], but first tries ACP `session/resume` with
+    /// `resume_session_id` so an earlier conversation keeps its agent-side
+    /// context. When the agent refuses (unknown id, pruned session, no resume
+    /// capability) it falls back to `session/new`; [`AcpSession::resumed`]
+    /// reports which one happened.
+    pub fn start_or_resume(
+        launch: DshLaunchSpec,
+        workspace: &Path,
+        mcp_bin: &Path,
+        model_override: Option<AcpModelOverride>,
+        resume_session_id: Option<&str>,
     ) -> Result<Self> {
         let mut cmd = Command::new(&launch.command);
         cmd.args(&launch.args)
@@ -116,10 +132,11 @@ impl AcpSession {
             stdin,
             state,
             remote_session_id: String::new(),
+            resumed: false,
             selected_model: Mutex::new(None),
         };
 
-        session.request(
+        let init = session.request(
             "initialize",
             json!({
                 "protocolVersion": ACP_PROTOCOL_VERSION,
@@ -127,25 +144,56 @@ impl AcpSession {
             }),
         )?;
 
-        let remote = session.request(
-            "session/new",
-            json!({
-                "cwd": workspace.to_string_lossy(),
-                "mcpServers": [
-                    {
-                        "name": "duckle",
-                        "command": mcp_bin.to_string_lossy(),
-                        "args": ["--workspace", workspace.to_string_lossy()],
-                        "env": [],
-                    }
-                ],
-            }),
-        )?;
-        let remote_session_id = remote
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .ok_or_else(|| Error::Transport("ACP session/new returned no sessionId".into()))?
-            .to_string();
+        let mcp_servers = json!([
+            {
+                "name": "duckle",
+                "command": mcp_bin.to_string_lossy(),
+                "args": ["--workspace", workspace.to_string_lossy()],
+                "env": [],
+            }
+        ]);
+
+        let resume_id = resume_session_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .filter(|_| supports_resume(&init));
+        let resumed = resume_id.and_then(|id| {
+            session
+                .request(
+                    "session/resume",
+                    json!({
+                        "sessionId": id,
+                        "cwd": workspace.to_string_lossy(),
+                        "mcpServers": mcp_servers.clone(),
+                    }),
+                )
+                .ok()
+                .map(|remote| (id.to_string(), remote))
+        });
+
+        let (remote_session_id, remote) = match resumed {
+            Some(pair) => {
+                session.resumed = true;
+                pair
+            }
+            None => {
+                let remote = session.request(
+                    "session/new",
+                    json!({
+                        "cwd": workspace.to_string_lossy(),
+                        "mcpServers": mcp_servers,
+                    }),
+                )?;
+                let id = remote
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        Error::Transport("ACP session/new returned no sessionId".into())
+                    })?
+                    .to_string();
+                (id, remote)
+            }
+        };
         session.remote_session_id = remote_session_id;
         session.capture_selected_model(&remote);
         if let Some(model_override) = model_override {
@@ -267,6 +315,25 @@ impl AcpSession {
 
     pub fn selected_model(&self) -> Option<AcpSelectedModel> {
         self.selected_model.lock().ok().and_then(|m| m.clone())
+    }
+
+    /// The agent-side session id; persist it to resume the conversation later.
+    pub fn remote_session_id(&self) -> &str {
+        &self.remote_session_id
+    }
+
+    /// True when this session continued an earlier one via `session/resume`.
+    pub fn resumed(&self) -> bool {
+        self.resumed
+    }
+
+    /// True while a `session/prompt` turn is in flight.
+    pub fn is_busy(&self) -> bool {
+        self.state
+            .prompt_sink
+            .lock()
+            .map(|sink| sink.is_some())
+            .unwrap_or(true)
     }
 
     fn request(&self, method: &str, params: Value) -> Result<Value> {
@@ -661,6 +728,12 @@ fn read_token_count(value: &Value, keys: &[&str]) -> Option<u64> {
         .and_then(Value::as_u64)
 }
 
+/// Whether the agent's `initialize` result advertises ACP `session/resume`.
+fn supports_resume(init: &Value) -> bool {
+    init.pointer("/agentCapabilities/sessionCapabilities/resume")
+        .is_some_and(|v| !v.is_null())
+}
+
 fn parse_selected_model(result: &Value) -> Option<AcpSelectedModel> {
     let options = result.get("configOptions")?.as_array()?;
     let model_option = options
@@ -756,5 +829,20 @@ mod tests {
     #[test]
     fn ignores_payloads_without_usage() {
         assert!(parse_usage(&json!({ "stopReason": "end_turn" })).is_none());
+    }
+
+    #[test]
+    fn detects_resume_capability() {
+        let dsh = json!({
+            "protocolVersion": 1,
+            "agentCapabilities": {
+                "sessionCapabilities": { "close": {}, "list": {}, "resume": {} }
+            }
+        });
+        assert!(supports_resume(&dsh));
+        assert!(!supports_resume(&json!({ "agentCapabilities": {} })));
+        assert!(!supports_resume(&json!({
+            "agentCapabilities": { "sessionCapabilities": { "resume": null } }
+        })));
     }
 }

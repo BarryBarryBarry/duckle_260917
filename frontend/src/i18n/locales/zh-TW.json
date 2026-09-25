@@ -123,7 +123,25 @@
     "thinking": "思考中......",
     "placeholder": "描述您的需求……",
     "sendAria": "發送 ",
-    "sendTooltip": "發送（輸入）"
+    "sendTooltip": "發送（輸入）",
+    "history": {
+      "newChat": "新對話",
+      "recent": "最近對話",
+      "empty": "暫無歷史對話",
+      "noWorkspace": "開啟工作區後即可保存對話歷史",
+      "untitled": "未命名對話",
+      "more": "更多操作",
+      "rename": "重新命名",
+      "pin": "置頂此對話",
+      "unpin": "取消置頂",
+      "delete": "刪除此對話",
+      "deleteConfirm": "確定刪除此對話？刪除後無法復原。",
+      "deleteConfirmCta": "刪除",
+      "cancel": "取消",
+      "busyHint": "Duckie 正在回覆，完成後可切換對話",
+      "showSidebar": "顯示歷史對話",
+      "hideSidebar": "隱藏歷史對話"
+    }
   },
   "properties": {
     "nothingSelected": "未選擇任何內容",

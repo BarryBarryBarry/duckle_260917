@@ -1,15 +1,49 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, Check, CheckCircle2, ChevronDown, Clock, Copy, Download, Gauge, Loader2, Maximize2, Minimize2, Minus, Send, Sparkles, Wrench, X, Workflow } from 'lucide-react';
 import {
+    AlertCircle,
+    Check,
+    CheckCircle2,
+    ChevronDown,
+    Clock,
+    Copy,
+    Download,
+    Ellipsis,
+    Gauge,
+    Loader2,
+    Maximize2,
+    Minimize2,
+    Minus,
+    PanelLeftClose,
+    PanelLeftOpen,
+    Pencil,
+    Pin,
+    PinOff,
+    Send,
+    Sparkles,
+    SquarePen,
+    Trash2,
+    Wrench,
+    X,
+    Workflow,
+} from 'lucide-react';
+import {
+    chatCloseSession,
     chatExtractPipeline,
     chatSend,
+    duckieConversationDelete,
+    duckieConversationGet,
+    duckieConversationSave,
+    duckieConversationsList,
+    duckieConversationUpdateMeta,
     engineInstall,
     engineStatus,
     llamaDefaultModel,
     llamaModels,
     settingsGetAi,
     type ChatMessage,
+    type DuckieConversationSummary,
     type EngineStatus,
     type InstallProgress,
     type LlamaModel,
@@ -17,6 +51,10 @@ import {
 import { getWorkspacePath } from '../workspace';
 
 type Props = {
+    workspace: string | null;
+    /** The panel stays mounted while closed so an in-flight reply keeps
+     *  streaming and gets saved; `open` only controls visibility. */
+    open: boolean;
     onClose: () => void;
     onInsertPipeline: (pipeline: unknown) => void;
     onPersistedPipeline: (pipelineId: string) => void;
@@ -72,6 +110,12 @@ const CHAT_PANEL_MIN_WIDTH = 360;
 const CHAT_PANEL_MIN_HEIGHT = 360;
 const CHAT_PANEL_MARGIN = 16;
 const CHAT_PANEL_STORAGE_KEY = 'duckie-chat-panel-position';
+/** Width of the chat-history sidebar; the panel grows by this much when it is shown. */
+const CHAT_SIDEBAR_WIDTH = 216;
+/** Per-workspace localStorage key prefix for the conversation to reopen. */
+const ACTIVE_CONVERSATION_KEY = 'duckie-active-conversation';
+/** Auto titles are the first user message, cut to this many characters. */
+const TITLE_MAX_CHARS = 30;
 const CHAT_PANEL_SNAP_DISTANCE = 28;
 /** Height of the header strip, which is all that is left when minimized. */
 const CHAT_PANEL_COLLAPSED_HEIGHT = 82;
@@ -87,6 +131,8 @@ type PanelRect = {
 };
 
 type PanelLayout = PanelRect & {
+    /** Whether the chat-history sidebar is shown. */
+    sidebar: boolean;
     /** Minimized: only the header strip is drawn. */
     collapsed: boolean;
     /** Maximized: fills the work area, ignoring the default size caps. */
@@ -128,7 +174,7 @@ const RESIZE_LABEL: Record<ResizeMode, string> = {
     'bottom-right': '拖动以调整 Duckie 面板大小（右下角）',
 };
 
-export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeline }: Props) {
+export default function ChatPanel({ workspace: workspaceProp, open, onClose, onInsertPipeline, onPersistedPipeline }: Props) {
     const { t } = useTranslation();
     const [setup, setSetup] = useState<SetupState>({ phase: 'checking' });
     const [messages, setMessages] = useState<Bubble[]>([]);
@@ -142,7 +188,30 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
     const panelRef = useRef<HTMLElement | null>(null);
     const scrollRef = useRef<HTMLDivElement | null>(null);
     const inputRef = useRef<HTMLTextAreaElement | null>(null);
-    const sessionIdRef = useRef(`duckie:${getWorkspacePath() ?? 'global'}`);
+    // App remounts the panel per workspace, so this is fixed for its lifetime.
+    const [workspace] = useState(() => workspaceProp ?? getWorkspacePath());
+    // Read before the effect that mirrors activeId into storage clears it.
+    const [restoreId] = useState(() => readActiveConversation(workspace));
+    const [conversations, setConversations] = useState<DuckieConversationSummary[]>([]);
+    /** null = a new chat that has not been saved yet. */
+    const [activeId, setActiveId] = useState<string | null>(null);
+    const [historyError, setHistoryError] = useState<string | null>(null);
+    const [menu, setMenu] = useState<{ id: string; top: number; left: number; confirmDelete: boolean } | null>(null);
+    const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
+    const renamingRef = useRef<{ id: string; draft: string } | null>(null);
+    const menuRef = useRef<HTMLDivElement | null>(null);
+    /** ACP session id of the active conversation, saved so DSH can resume it. */
+    const remoteSessionRef = useRef<string | null>(null);
+    /** Signature of the messages last written to disk; skips redundant saves. */
+    const savedSignatureRef = useRef(computeSaveSignature([]));
+    /** Serializes history writes so a slow save cannot land after a newer one. */
+    const historyQueueRef = useRef<Promise<void>>(Promise.resolve());
+    const messagesRef = useRef<Bubble[]>([]);
+    messagesRef.current = messages;
+    /** Shell-style input recall: how many inputs back the composer shows
+     *  (null = not recalling), and the unsent draft to return to. */
+    const recallIndexRef = useRef<number | null>(null);
+    const recallStashRef = useRef('');
     const pendingPersistedPipelineId = useRef<string | null>(null);
     const toolNamesRef = useRef<Record<string, string>>({});
     const dragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; started: boolean } | null>(null);
@@ -155,13 +224,17 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
     } | null>(null);
     const activeStatus = useMemo(() => findActiveStatus(messages), [messages]);
 
-    // Detect the AI engine on mount so we can either show the chat
-    // UI or a clear install card. Without this the user clicks Send
-    // and gets a cryptic spawn error.
+    // Detect the AI engine each time the panel opens so we can either show the
+    // chat UI or a clear install card (without this the user clicks Send and
+    // gets a cryptic spawn error), and so a mode changed in Settings applies on
+    // the next open. An install in progress is left alone.
+    const setupPhaseRef = useRef(setup.phase);
+    setupPhaseRef.current = setup.phase;
     useEffect(() => {
+        if (!open || setupPhaseRef.current === 'installing') return;
         let cancelled = false;
         (async () => {
-            const ai = await settingsGetAi(getWorkspacePath() ?? '');
+            const ai = await settingsGetAi(workspace ?? '');
             if (cancelled) return;
             if (ai.mode === 'deepseek_harness') {
                 setSetup({ phase: 'ready', provider: 'deepseek_harness' });
@@ -185,7 +258,7 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
         return () => {
             cancelled = true;
         };
-    }, []);
+    }, [open, workspace]);
 
     // The catalogue is only needed on the install screen, so it is fetched
     // when that screen appears rather than on every panel open. An empty
@@ -241,6 +314,13 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
         const body = (text ?? draft).trim();
         if (!body || busy || setup.phase !== 'ready') return;
         if (!text) setDraft('');
+        recallIndexRef.current = null;
+        let conversationId = activeId;
+        if (!conversationId) {
+            conversationId = newConversationId();
+            remoteSessionRef.current = null;
+            setActiveId(conversationId);
+        }
         const userMsg: Bubble = { role: 'user', content: body };
         setMessages(prev => [
             ...prev,
@@ -274,6 +354,8 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
                         statusItems: removeStatusItem(last.statusItems, 'thinking'),
                     };
                 });
+            } else if (ev.kind === 'session') {
+                remoteSessionRef.current = ev.remote_session_id;
             } else if (ev.kind === 'model_selected') {
                 setDshRoute(`${ev.provider}/${ev.model}`);
                 updateStreamingAssistant(last => ({
@@ -395,23 +477,250 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
                 });
                 setBusy(false);
             }
-        }, getWorkspacePath(), sessionIdRef.current);
-    }, [draft, busy, messages, onPersistedPipeline, setup, updateStreamingAssistant]);
+        }, workspace, conversationSessionKey(workspace, conversationId), remoteSessionRef.current);
+    }, [draft, busy, messages, onPersistedPipeline, setup, updateStreamingAssistant, activeId, workspace]);
 
-    // Esc closes the panel.
+    const runHistoryTask = useCallback((task: () => Promise<void>) => {
+        historyQueueRef.current = historyQueueRef.current
+            .then(task)
+            .catch(err => setHistoryError(String(err)));
+        return historyQueueRef.current;
+    }, []);
+
+    // Persist the active conversation whenever a turn settles. Streaming
+    // bubbles are left out, so a reply is written once it finishes rather
+    // than on every token.
+    const saveSignature = useMemo(() => computeSaveSignature(messages), [messages]);
     useEffect(() => {
+        if (!workspace || !activeId) return;
+        if (saveSignature === savedSignatureRef.current) return;
+        const stable = messagesRef.current.filter(m => !m.streaming);
+        if (!stable.length) return;
+        savedSignatureRef.current = saveSignature;
+        const payload = {
+            id: activeId,
+            title: deriveConversationTitle(stable),
+            remoteSessionId: remoteSessionRef.current,
+            messages: stable.map(toStoredBubble),
+        };
+        void runHistoryTask(async () => {
+            setConversations(await duckieConversationSave(workspace, payload));
+            setHistoryError(null);
+        });
+    }, [saveSignature, activeId, workspace, runHistoryTask]);
+
+    useEffect(() => {
+        if (workspace) writeActiveConversation(workspace, activeId);
+    }, [activeId, workspace]);
+
+    const resetTurnState = useCallback(() => {
+        recallIndexRef.current = null;
+        toolNamesRef.current = {};
+        pendingPersistedPipelineId.current = null;
+        setDshRoute(null);
+    }, []);
+
+    const startNewConversation = useCallback(() => {
+        if (busy) return;
+        resetTurnState();
+        remoteSessionRef.current = null;
+        savedSignatureRef.current = computeSaveSignature([]);
+        setMessages([]);
+        setActiveId(null);
+        setMenu(null);
+        inputRef.current?.focus();
+    }, [busy, resetTurnState]);
+
+    const openConversation = useCallback(async (id: string) => {
+        if (!workspace || busy) return;
+        setMenu(null);
+        try {
+            const conv = await duckieConversationGet(workspace, id);
+            const loaded = restoreBubbles(conv.messages);
+            resetTurnState();
+            remoteSessionRef.current = conv.remoteSessionId ?? null;
+            savedSignatureRef.current = computeSaveSignature(loaded);
+            setMessages(loaded);
+            setActiveId(id);
+            setHistoryError(null);
+        } catch (err) {
+            setHistoryError(String(err));
+        }
+    }, [workspace, busy, resetTurnState]);
+
+    // Load the history once, and reopen the conversation that was active when
+    // the app last closed, so a restart does not drop the user into a blank chat.
+    const openConversationRef = useRef(openConversation);
+    openConversationRef.current = openConversation;
+    useEffect(() => {
+        if (!workspace) return;
+        let cancelled = false;
+        void (async () => {
+            try {
+                const list = await duckieConversationsList(workspace);
+                if (cancelled) return;
+                setConversations(list);
+                if (restoreId && list.some(c => c.id === restoreId)) await openConversationRef.current(restoreId);
+            } catch (err) {
+                if (!cancelled) setHistoryError(String(err));
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [workspace, restoreId]);
+
+    const togglePinned = useCallback((conv: DuckieConversationSummary) => {
+        if (!workspace) return;
+        setMenu(null);
+        void runHistoryTask(async () => {
+            setConversations(await duckieConversationUpdateMeta(workspace, conv.id, { pinned: !conv.pinned }));
+        });
+    }, [workspace, runHistoryTask]);
+
+    const beginRename = useCallback((conv: DuckieConversationSummary) => {
+        setMenu(null);
+        const next = { id: conv.id, draft: conv.title };
+        renamingRef.current = next;
+        setRenaming(next);
+    }, []);
+
+    const updateRenameDraft = useCallback((draftTitle: string) => {
+        setRenaming(prev => {
+            const next = prev ? { ...prev, draft: draftTitle } : prev;
+            renamingRef.current = next;
+            return next;
+        });
+    }, []);
+
+    const cancelRename = useCallback(() => {
+        renamingRef.current = null;
+        setRenaming(null);
+    }, []);
+
+    // Reads the ref, not state: Enter commits and then the input's blur fires
+    // with a stale closure, and Escape must not be undone by that blur.
+    const commitRename = useCallback(() => {
+        const current = renamingRef.current;
+        renamingRef.current = null;
+        setRenaming(null);
+        if (!current || !workspace) return;
+        const title = current.draft.trim();
+        const existing = conversations.find(c => c.id === current.id);
+        if (!title || title === existing?.title) return;
+        void runHistoryTask(async () => {
+            setConversations(await duckieConversationUpdateMeta(workspace, current.id, { title }));
+        });
+    }, [workspace, conversations, runHistoryTask]);
+
+    const deleteConversation = useCallback((id: string) => {
+        if (!workspace) return;
+        if (busy && id === activeId) return;
+        setMenu(null);
+        if (id === activeId) startNewConversation();
+        void runHistoryTask(async () => {
+            setConversations(await duckieConversationDelete(workspace, id));
+        });
+        void chatCloseSession(conversationSessionKey(workspace, id)).catch(() => undefined);
+    }, [workspace, busy, activeId, startNewConversation, runHistoryTask]);
+
+    const openMenu = useCallback((event: React.MouseEvent<HTMLButtonElement>, id: string) => {
+        event.stopPropagation();
+        if (menu?.id === id) {
+            setMenu(null);
+            return;
+        }
+        const rect = event.currentTarget.getBoundingClientRect();
+        const menuHeight = 132;
+        const menuWidth = 176;
+        const below = rect.bottom + 4;
+        const top = below + menuHeight > window.innerHeight - 8 ? Math.max(8, rect.top - menuHeight - 4) : below;
+        const left = Math.min(Math.max(8, rect.left), window.innerWidth - menuWidth - 8);
+        setMenu({ id, top, left, confirmDelete: false });
+    }, [menu]);
+
+    useEffect(() => {
+        if (open) return;
+        setMenu(null);
+        cancelRename();
+    }, [open, cancelRename]);
+
+    // Close the item menu on any press outside it, and when the window moves under it.
+    useEffect(() => {
+        if (!menu) return;
+        const onPointerDown = (e: PointerEvent) => {
+            if (menuRef.current && e.target instanceof Node && menuRef.current.contains(e.target)) return;
+            setMenu(null);
+        };
+        const close = () => setMenu(null);
+        document.addEventListener('pointerdown', onPointerDown, true);
+        window.addEventListener('resize', close);
+        window.addEventListener('blur', close);
+        return () => {
+            document.removeEventListener('pointerdown', onPointerDown, true);
+            window.removeEventListener('resize', close);
+            window.removeEventListener('blur', close);
+        };
+    }, [menu]);
+
+    /** Up recalls this conversation's earlier inputs, newest first; Down walks
+     *  back towards the draft that was being typed. Up only starts recalling
+     *  from the composer's first line so multi-line drafts stay editable; once
+     *  recalling, both keys keep navigating until the text is edited. */
+    const handleRecallKey = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+        if (event.nativeEvent.isComposing || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return;
+        const el = event.currentTarget;
+        const current = recallIndexRef.current;
+        const inputs = messagesRef.current.filter(m => m.role === 'user').map(m => m.content);
+        let next: number;
+        if (event.key === 'ArrowUp') {
+            const onFirstLine =
+                el.selectionStart === el.selectionEnd && !el.value.slice(0, el.selectionStart).includes('\n');
+            if (current === null && !onFirstLine) return;
+            next = (current ?? 0) + 1;
+            if (next > inputs.length) {
+                event.preventDefault();
+                return;
+            }
+            if (current === null) recallStashRef.current = el.value;
+        } else {
+            if (current === null) return;
+            next = current - 1;
+        }
+        event.preventDefault();
+        const value = next === 0 ? recallStashRef.current : inputs[inputs.length - next];
+        recallIndexRef.current = next === 0 ? null : next;
+        setDraft(value);
+        requestAnimationFrame(() => {
+            const input = inputRef.current;
+            if (!input) return;
+            input.setSelectionRange(value.length, value.length);
+            syncComposerHeight(input);
+        });
+    }, []);
+
+    // Esc closes an open item menu first, then the panel. The rename input
+    // stops its own Escape from reaching this listener.
+    useEffect(() => {
+        if (!open) return;
         const h = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onClose();
+            if (e.key !== 'Escape') return;
+            if (menu) {
+                setMenu(null);
+                return;
+            }
+            onClose();
         };
         window.addEventListener('keydown', h);
         return () => window.removeEventListener('keydown', h);
-    }, [onClose]);
+    }, [onClose, open, menu]);
 
-    // Auto-scroll as tokens stream in.
+    // Auto-scroll as tokens stream in, when a conversation opens, and when the panel reopens.
     useEffect(() => {
         const el = scrollRef.current;
         if (el) el.scrollTop = el.scrollHeight;
-    }, [messages]);
+    }, [messages, open]);
 
     useEffect(() => {
         syncComposerHeight(inputRef.current);
@@ -479,7 +788,7 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
                 // a desktop window does. The anchor uses the point the user
                 // pressed, so the cursor keeps the same relative spot on the
                 // header and the panel does not jump out from under it.
-                const restore = base.restore ?? defaultPanelLayout();
+                const restore = base.restore ?? defaultPanelLayout(base.sidebar);
                 const ratio = (drag.startX - base.x) / Math.max(1, base.width);
                 drag.originX = drag.startX - restore.width * ratio;
                 drag.originY = base.y;
@@ -540,6 +849,7 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
                 resize.mode,
                 event.clientX - resize.startX,
                 event.clientY - resize.startY,
+                minPanelWidth(base.sidebar),
             );
             // A resized panel is no longer "maximized", so the restore button
             // does not snap away the size the user just dragged.
@@ -571,10 +881,11 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
         setPanelLayout(prev => {
             const base = prev ?? defaultPanelLayout();
             if (base.maximized) {
-                const restore = base.restore ?? defaultPanelLayout();
+                const restore = base.restore ?? defaultPanelLayout(base.sidebar);
                 return clampPanelLayout({
                     ...base,
                     ...restore,
+                    sidebar: base.sidebar,
                     collapsed: false,
                     maximized: false,
                     restore: null,
@@ -591,16 +902,37 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
     }, []);
 
     const resetPanelLayout = useCallback(() => {
-        setPanelLayout(clampPanelLayout(defaultPanelLayout()));
+        setPanelLayout(prev => clampPanelLayout(defaultPanelLayout(prev?.sidebar ?? true)));
+    }, []);
+
+    /** Showing the sidebar grows the panel leftwards by its width (and hiding
+     *  shrinks it back), so the conversation column keeps its size and the
+     *  panel's right edge stays put. */
+    const toggleSidebar = useCallback(() => {
+        setPanelLayout(prev => {
+            const base = prev ?? defaultPanelLayout();
+            const sidebar = !base.sidebar;
+            if (base.maximized) return clampPanelLayout({ ...base, sidebar });
+            const delta = sidebar ? CHAT_SIDEBAR_WIDTH : -CHAT_SIDEBAR_WIDTH;
+            return clampPanelLayout({
+                ...base,
+                sidebar,
+                width: base.width + delta,
+                x: base.x - delta,
+            });
+        });
     }, []);
 
     const currentLayout = panelLayout ?? defaultPanelLayout();
+    const menuConversation = menu ? conversations.find(c => c.id === menu.id) ?? null : null;
     const panelStyle = {
         left: currentLayout.x,
         top: currentLayout.y,
         width: currentLayout.width,
         height: currentLayout.collapsed ? undefined : currentLayout.height,
     };
+
+    if (!open) return null;
 
     return (
         <aside
@@ -634,6 +966,18 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
                                       ? t('chat.modeOpenAI', { defaultValue: 'OpenAI-compatible' })
                                       : t('chat.localTag')}
                             </span>
+                        ) : null}
+                        {setup.phase === 'ready' && !currentLayout.collapsed ? (
+                            <button
+                                type="button"
+                                className="chat-panel-head-btn"
+                                onClick={toggleSidebar}
+                                title={currentLayout.sidebar ? t('chat.history.hideSidebar') : t('chat.history.showSidebar')}
+                                aria-label={currentLayout.sidebar ? t('chat.history.hideSidebar') : t('chat.history.showSidebar')}
+                                aria-pressed={currentLayout.sidebar}
+                            >
+                                {currentLayout.sidebar ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+                            </button>
                         ) : null}
                     </div>
                     {setup.phase === 'ready' && (dshRoute || activeStatus) ? (
@@ -751,167 +1095,340 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
                     <InstallProgressView progress={setup.progress} />
                 </div>
             ) : (
-                <>
-                    {resizing ? (
-                        <div className="chat-panel-size-indicator" aria-live="polite">
-                            {Math.round(currentLayout.width)} × {Math.round(currentLayout.height)}
-                        </div>
-                    ) : null}
-                    <div ref={scrollRef} className="chat-panel-scroll">
-                        {messages.length === 0 ? (
-                            <div className="chat-panel-empty">
-                                <Workflow size={26} className="chat-panel-empty-icon" />
-                                <div className="chat-panel-empty-title">
-                                    {t('chat.emptyTitle')}
-                                </div>
-                                <div className="chat-panel-empty-hint">
-                                    {t('chat.emptyHint')}
-                                </div>
-                                <div className="chat-panel-prompts">
-                                    {EXAMPLE_PROMPTS.map(p => (
-                                        <button
-                                            key={p}
-                                            type="button"
-                                            className="chat-panel-prompt"
-                                            onClick={() => void send(p)}
-                                        >
-                                            {p}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        ) : (
-                            messages.map((m, i) => (
-                                <div key={i} className={`chat-bubble chat-bubble-${m.role}`}>
-                                    <div className="chat-bubble-head">
-                                        <div className="chat-bubble-head-main">
-                                            {m.role === 'assistant' ? (
-                                                <Sparkles size={12} aria-hidden="true" />
-                                            ) : null}
-                                            <span>{m.role === 'assistant' ? 'Duckie' : '你'}</span>
-                                        </div>
-                                        {m.role === 'assistant' ? (
-                                            <span
-                                                className={`chat-bubble-phase ${m.streaming ? 'chat-bubble-phase-live' : ''}`}
+                <div className="chat-panel-body">
+                    {currentLayout.sidebar ? (
+                        <nav className="chat-history" aria-label={t('chat.history.recent')}>
+                            <button
+                                type="button"
+                                className="chat-history-new"
+                                onClick={startNewConversation}
+                                disabled={busy}
+                                title={busy ? t('chat.history.busyHint') : undefined}
+                            >
+                                <SquarePen size={14} aria-hidden="true" />
+                                <span>{t('chat.history.newChat')}</span>
+                            </button>
+                            <div className="chat-history-label">{t('chat.history.recent')}</div>
+                            <div className="chat-history-list" onScroll={() => setMenu(null)}>
+                                {!workspace ? (
+                                    <div className="chat-history-empty">{t('chat.history.noWorkspace')}</div>
+                                ) : conversations.length === 0 ? (
+                                    <div className="chat-history-empty">{t('chat.history.empty')}</div>
+                                ) : (
+                                    conversations.map(conv => {
+                                        const isActive = conv.id === activeId;
+                                        const title = conv.title || t('chat.history.untitled');
+                                        return (
+                                            <div
+                                                key={conv.id}
+                                                className={`chat-history-item ${isActive ? 'chat-history-item-active' : ''} ${
+                                                    menu?.id === conv.id ? 'chat-history-item-menu-open' : ''
+                                                }`}
                                             >
-                                                {m.streaming ? '处理中' : '已完成'}
-                                            </span>
-                                        ) : null}
-                                    </div>
-                                    {m.content ? (
-                                        <div className="chat-bubble-body">
-                                            <div className="chat-bubble-content">
-                                                {renderMessageContent(m.content)}
-                                                {m.streaming ? <span className="chat-caret" /> : null}
+                                                {renaming?.id === conv.id ? (
+                                                    <input
+                                                        className="chat-history-rename"
+                                                        value={renaming.draft}
+                                                        autoFocus
+                                                        maxLength={120}
+                                                        aria-label={t('chat.history.rename')}
+                                                        onChange={e => updateRenameDraft(e.target.value)}
+                                                        onFocus={e => e.currentTarget.select()}
+                                                        onBlur={commitRename}
+                                                        onKeyDown={e => {
+                                                            if (e.key === 'Enter') {
+                                                                e.preventDefault();
+                                                                commitRename();
+                                                            } else if (e.key === 'Escape') {
+                                                                e.preventDefault();
+                                                                e.stopPropagation();
+                                                                cancelRename();
+                                                            }
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        className="chat-history-item-main"
+                                                        onClick={() => {
+                                                            if (!isActive) void openConversation(conv.id);
+                                                        }}
+                                                        onDoubleClick={() => beginRename(conv)}
+                                                        disabled={busy && !isActive}
+                                                        title={busy && !isActive ? t('chat.history.busyHint') : title}
+                                                        aria-current={isActive ? 'true' : undefined}
+                                                    >
+                                                        {conv.pinned ? (
+                                                            <Pin size={11} className="chat-history-pin" aria-hidden="true" />
+                                                        ) : null}
+                                                        <span className="chat-history-title">{title}</span>
+                                                    </button>
+                                                )}
+                                                {renaming?.id === conv.id ? null : (
+                                                    <button
+                                                        type="button"
+                                                        className="chat-history-more"
+                                                        onClick={e => openMenu(e, conv.id)}
+                                                        title={t('chat.history.more')}
+                                                        aria-label={t('chat.history.more')}
+                                                        aria-haspopup="menu"
+                                                        aria-expanded={menu?.id === conv.id}
+                                                    >
+                                                        <Ellipsis size={14} />
+                                                    </button>
+                                                )}
                                             </div>
-                                        </div>
-                                    ) : null}
-                                    {m.role === 'assistant' && m.statusItems?.length ? (
-                                        <div className="chat-bubble-status" aria-live="polite">
-                                            <div className="chat-status-heading">
-                                                {m.streaming ? '执行进度' : '本轮执行记录'}
-                                            </div>
-                                            {m.statusItems.map(item => (
-                                                <div
-                                                    key={`${i}-${item.key}`}
-                                                    className={`chat-status-card chat-status-${item.tone} ${
-                                                        m.streaming && activeStatus?.key === item.key
-                                                            ? 'chat-status-card-active'
-                                                            : ''
-                                                    } ${item.kind === 'pipeline' ? 'chat-status-card-result' : ''}`}
-                                                >
-                                                    <div className="chat-status-main">
-                                                        <span className="chat-status-icon">
-                                                            <StatusIcon item={item} />
-                                                        </span>
-                                                        <div className="chat-status-copy">
-                                                            {item.kind === 'pipeline' ? (
-                                                                <div className="chat-status-result-badge">结果</div>
-                                                            ) : null}
-                                                            <div className="chat-status-label">{item.label}</div>
-                                                            {item.detail ? (
-                                                                <div className="chat-status-detail">{item.detail}</div>
-                                                            ) : null}
-                                                        </div>
-                                                    </div>
-                                                    {item.pipelineId ? (
-                                                        <button
-                                                            type="button"
-                                                            className="chat-status-action"
-                                                            onClick={() => onPersistedPipeline(item.pipelineId!)}
-                                                        >
-                                                            打开
-                                                        </button>
-                                                    ) : null}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : null}
-                                    {m.role === 'assistant' && !m.streaming && (m.content || m.usage) ? (
-                                        <MessageFooter message={m} />
-                                    ) : null}
-                                    {m.pipeline ? (
-                                        <button
-                                            type="button"
-                                            className="chat-bubble-insert"
-                                            onClick={() => onInsertPipeline(m.pipeline)}
-                                        >
-                                            <Workflow size={12} /> {t('chat.insertIntoCanvas')}
-                                        </button>
-                                    ) : null}
+                                        );
+                                    })
+                                )}
+                            </div>
+                            {historyError ? (
+                                <div className="chat-history-error" role="alert" title={historyError}>
+                                    <AlertCircle size={12} aria-hidden="true" />
+                                    <span>{historyError}</span>
                                 </div>
-                            ))
-                        )}
-                    </div>
-
-                    <form
-                        className="chat-panel-form"
-                        onSubmit={e => {
-                            e.preventDefault();
-                            void send();
-                        }}
-                    >
-                        {busy && activeStatus ? (
-                            <div className="chat-panel-live-banner" aria-live="polite">
-                                <span className="chat-panel-live-dot" />
-                                <span>
-                                    当前阶段：{activeStatus.label}
-                                    {activeStatus.detail ? ` · ${activeStatus.detail}` : ''}
-                                </span>
+                            ) : null}
+                        </nav>
+                    ) : null}
+                    <div className="chat-panel-main">
+                        {resizing ? (
+                            <div className="chat-panel-size-indicator" aria-live="polite">
+                                {Math.round(currentLayout.width)} × {Math.round(currentLayout.height)}
                             </div>
                         ) : null}
-                        <div className="chat-panel-input-row">
-                            <textarea
-                                ref={inputRef}
-                                className="chat-panel-input"
-                                value={draft}
-                                onChange={e => {
-                                    setDraft(e.target.value);
-                                    syncComposerHeight(e.currentTarget);
-                                }}
-                                placeholder={busy ? t('chat.thinking') : t('chat.placeholder')}
-                                rows={2}
-                                disabled={busy}
-                                onKeyDown={e => {
-                                    if (e.key === 'Enter' && !e.shiftKey) {
-                                        e.preventDefault();
-                                        void send();
-                                    }
-                                }}
-                            />
-                            <button
-                                type="submit"
-                                className="chat-panel-send"
-                                disabled={busy || !draft.trim()}
-                                aria-label={t('chat.sendAria')}
-                                title={t('chat.sendTooltip')}
-                            >
-                                {busy ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
-                            </button>
+                        <div ref={scrollRef} className="chat-panel-scroll">
+                            {messages.length === 0 ? (
+                                <div className="chat-panel-empty">
+                                    <Workflow size={26} className="chat-panel-empty-icon" />
+                                    <div className="chat-panel-empty-title">
+                                        {t('chat.emptyTitle')}
+                                    </div>
+                                    <div className="chat-panel-empty-hint">
+                                        {t('chat.emptyHint')}
+                                    </div>
+                                    <div className="chat-panel-prompts">
+                                        {EXAMPLE_PROMPTS.map(p => (
+                                            <button
+                                                key={p}
+                                                type="button"
+                                                className="chat-panel-prompt"
+                                                onClick={() => void send(p)}
+                                            >
+                                                {p}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : (
+                                messages.map((m, i) => (
+                                    <div key={i} className={`chat-bubble chat-bubble-${m.role}`}>
+                                        <div className="chat-bubble-head">
+                                            <div className="chat-bubble-head-main">
+                                                {m.role === 'assistant' ? (
+                                                    <Sparkles size={12} aria-hidden="true" />
+                                                ) : null}
+                                                <span>{m.role === 'assistant' ? 'Duckie' : '你'}</span>
+                                            </div>
+                                            {m.role === 'assistant' ? (
+                                                <span
+                                                    className={`chat-bubble-phase ${m.streaming ? 'chat-bubble-phase-live' : ''}`}
+                                                >
+                                                    {m.streaming ? '处理中' : '已完成'}
+                                                </span>
+                                            ) : null}
+                                        </div>
+                                        {m.content ? (
+                                            <div className="chat-bubble-body">
+                                                <div className="chat-bubble-content">
+                                                    {renderMessageContent(m.content)}
+                                                    {m.streaming ? <span className="chat-caret" /> : null}
+                                                </div>
+                                            </div>
+                                        ) : null}
+                                        {m.role === 'assistant' && m.statusItems?.length ? (
+                                            <div className="chat-bubble-status" aria-live="polite">
+                                                <div className="chat-status-heading">
+                                                    {m.streaming ? '执行进度' : '本轮执行记录'}
+                                                </div>
+                                                {m.statusItems.map(item => (
+                                                    <div
+                                                        key={`${i}-${item.key}`}
+                                                        className={`chat-status-card chat-status-${item.tone} ${
+                                                            m.streaming && activeStatus?.key === item.key
+                                                                ? 'chat-status-card-active'
+                                                                : ''
+                                                        } ${item.kind === 'pipeline' ? 'chat-status-card-result' : ''}`}
+                                                    >
+                                                        <div className="chat-status-main">
+                                                            <span className="chat-status-icon">
+                                                                <StatusIcon item={item} />
+                                                            </span>
+                                                            <div className="chat-status-copy">
+                                                                {item.kind === 'pipeline' ? (
+                                                                    <div className="chat-status-result-badge">结果</div>
+                                                                ) : null}
+                                                                <div className="chat-status-label">{item.label}</div>
+                                                                {item.detail ? (
+                                                                    <div className="chat-status-detail">{item.detail}</div>
+                                                                ) : null}
+                                                            </div>
+                                                        </div>
+                                                        {item.pipelineId ? (
+                                                            <button
+                                                                type="button"
+                                                                className="chat-status-action"
+                                                                onClick={() => onPersistedPipeline(item.pipelineId!)}
+                                                            >
+                                                                打开
+                                                            </button>
+                                                        ) : null}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : null}
+                                        {m.role === 'assistant' && !m.streaming && (m.content || m.usage) ? (
+                                            <MessageFooter message={m} />
+                                        ) : null}
+                                        {m.pipeline ? (
+                                            <button
+                                                type="button"
+                                                className="chat-bubble-insert"
+                                                onClick={() => onInsertPipeline(m.pipeline)}
+                                            >
+                                                <Workflow size={12} /> {t('chat.insertIntoCanvas')}
+                                            </button>
+                                        ) : null}
+                                    </div>
+                                ))
+                            )}
                         </div>
-                    </form>
-                </>
+
+                        <form
+                            className="chat-panel-form"
+                            onSubmit={e => {
+                                e.preventDefault();
+                                void send();
+                            }}
+                        >
+                            {busy && activeStatus ? (
+                                <div className="chat-panel-live-banner" aria-live="polite">
+                                    <span className="chat-panel-live-dot" />
+                                    <span>
+                                        当前阶段：{activeStatus.label}
+                                        {activeStatus.detail ? ` · ${activeStatus.detail}` : ''}
+                                    </span>
+                                </div>
+                            ) : null}
+                            <div className="chat-panel-input-row">
+                                <textarea
+                                    ref={inputRef}
+                                    className="chat-panel-input"
+                                    value={draft}
+                                    onChange={e => {
+                                        // Editing a recalled input makes it the new draft.
+                                        recallIndexRef.current = null;
+                                        setDraft(e.target.value);
+                                        syncComposerHeight(e.currentTarget);
+                                    }}
+                                    placeholder={busy ? t('chat.thinking') : t('chat.placeholder')}
+                                    rows={2}
+                                    disabled={busy}
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter' && !e.shiftKey) {
+                                            e.preventDefault();
+                                            void send();
+                                            return;
+                                        }
+                                        handleRecallKey(e);
+                                    }}
+                                />
+                                <button
+                                    type="submit"
+                                    className="chat-panel-send"
+                                    disabled={busy || !draft.trim()}
+                                    aria-label={t('chat.sendAria')}
+                                    title={t('chat.sendTooltip')}
+                                >
+                                    {busy ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
             )}
+            {menu && menuConversation
+                ? createPortal(
+                      <div
+                          ref={menuRef}
+                          className="chat-history-menu"
+                          role="menu"
+                          style={{ top: menu.top, left: menu.left }}
+                      >
+                          {menu.confirmDelete ? (
+                              <div className="chat-history-confirm">
+                                  <div className="chat-history-confirm-text">{t('chat.history.deleteConfirm')}</div>
+                                  <div className="chat-history-confirm-actions">
+                                      <button
+                                          type="button"
+                                          className="chat-history-confirm-cancel"
+                                          onClick={() => setMenu(prev => (prev ? { ...prev, confirmDelete: false } : prev))}
+                                      >
+                                          {t('chat.history.cancel')}
+                                      </button>
+                                      <button
+                                          type="button"
+                                          className="chat-history-confirm-delete"
+                                          onClick={() => deleteConversation(menuConversation.id)}
+                                          autoFocus
+                                      >
+                                          {t('chat.history.deleteConfirmCta')}
+                                      </button>
+                                  </div>
+                              </div>
+                          ) : (
+                              <>
+                                  <button
+                                      type="button"
+                                      role="menuitem"
+                                      className="chat-history-menu-item"
+                                      onClick={() => beginRename(menuConversation)}
+                                  >
+                                      <Pencil size={13} aria-hidden="true" />
+                                      <span>{t('chat.history.rename')}</span>
+                                  </button>
+                                  <button
+                                      type="button"
+                                      role="menuitem"
+                                      className="chat-history-menu-item"
+                                      onClick={() => togglePinned(menuConversation)}
+                                  >
+                                      {menuConversation.pinned ? (
+                                          <PinOff size={13} aria-hidden="true" />
+                                      ) : (
+                                          <Pin size={13} aria-hidden="true" />
+                                      )}
+                                      <span>
+                                          {menuConversation.pinned ? t('chat.history.unpin') : t('chat.history.pin')}
+                                      </span>
+                                  </button>
+                                  <div className="chat-history-menu-sep" role="separator" />
+                                  <button
+                                      type="button"
+                                      role="menuitem"
+                                      className="chat-history-menu-item chat-history-menu-item-danger"
+                                      disabled={busy && menuConversation.id === activeId}
+                                      title={busy && menuConversation.id === activeId ? t('chat.history.busyHint') : undefined}
+                                      onClick={() => setMenu(prev => (prev ? { ...prev, confirmDelete: true } : prev))}
+                                  >
+                                      <Trash2 size={13} aria-hidden="true" />
+                                      <span>{t('chat.history.delete')}</span>
+                                  </button>
+                              </>
+                          )}
+                      </div>,
+                      document.body,
+                  )
+                : null}
             {!currentLayout.collapsed ? (
                 <>
                     {RESIZE_MODES.map(mode => (
@@ -935,6 +1452,78 @@ export default function ChatPanel({ onClose, onInsertPipeline, onPersistedPipeli
             ) : null}
         </aside>
     );
+}
+
+function readActiveConversation(workspace: string | null): string | null {
+    if (!workspace || typeof window === 'undefined') return null;
+    try {
+        return window.localStorage.getItem(`${ACTIVE_CONVERSATION_KEY}:${workspace}`);
+    } catch {
+        return null;
+    }
+}
+
+function writeActiveConversation(workspace: string, id: string | null) {
+    const key = `${ACTIVE_CONVERSATION_KEY}:${workspace}`;
+    try {
+        if (id) window.localStorage.setItem(key, id);
+        else window.localStorage.removeItem(key);
+    } catch {
+        // Storage can be unavailable; reopening on a new chat is fine.
+    }
+}
+
+function newConversationId(): string {
+    const rand = Math.random().toString(36).slice(2, 8);
+    return `c-${Date.now().toString(36)}-${rand}`;
+}
+
+/** Backend session key: one DSH agent session per conversation. */
+function conversationSessionKey(workspace: string | null, conversationId: string): string {
+    return `duckie:${workspace ?? 'global'}:${conversationId}`;
+}
+
+/** Changes whenever the settled part of the conversation changes: a new
+ *  message, a finished reply, or a pipeline extracted after the fact. */
+function computeSaveSignature(messages: Bubble[]): string {
+    const stable = messages.filter(m => !m.streaming);
+    const last = stable[stable.length - 1];
+    return [
+        stable.length,
+        last?.finishedAt ?? '',
+        last?.content.length ?? 0,
+        last?.pipeline ? 1 : 0,
+    ].join('|');
+}
+
+function deriveConversationTitle(messages: Bubble[]): string {
+    const first = messages.find(m => m.role === 'user')?.content ?? '';
+    const flat = first.replace(/\s+/g, ' ').trim();
+    const chars = Array.from(flat);
+    return chars.length > TITLE_MAX_CHARS ? `${chars.slice(0, TITLE_MAX_CHARS).join('')}…` : flat;
+}
+
+function toStoredBubble(message: Bubble): Omit<Bubble, 'streaming'> {
+    const { streaming: _streaming, ...rest } = message;
+    return rest;
+}
+
+/** History files are user-editable JSON, so keep only well-formed bubbles. */
+function restoreBubbles(raw: unknown[]): Bubble[] {
+    return raw.flatMap(item => {
+        if (!item || typeof item !== 'object') return [];
+        const bubble = item as Partial<Bubble>;
+        if ((bubble.role !== 'user' && bubble.role !== 'assistant') || typeof bubble.content !== 'string') {
+            return [];
+        }
+        return [{
+            ...bubble,
+            role: bubble.role,
+            content: bubble.content,
+            streaming: false,
+            statusItems: Array.isArray(bubble.statusItems) ? finalizeStatusItems(bubble.statusItems) : undefined,
+        } as Bubble];
+    });
 }
 
 /** Sizes come from the Hugging Face file listing, so they are the real
@@ -1085,6 +1674,7 @@ function readSavedPanelLayout(): PanelLayout | null {
             y?: unknown;
             width?: unknown;
             height?: unknown;
+            sidebar?: unknown;
             collapsed?: unknown;
             maximized?: unknown;
             restore?: unknown;
@@ -1095,6 +1685,9 @@ function readSavedPanelLayout(): PanelLayout | null {
                 y: parsed.y,
                 width: typeof parsed.width === 'number' ? parsed.width : CHAT_PANEL_WIDTH,
                 height: typeof parsed.height === 'number' ? parsed.height : CHAT_PANEL_MAX_HEIGHT,
+                // Layouts saved before the sidebar existed get it shown; the
+                // clamp then widens them to fit.
+                sidebar: parsed.sidebar !== false,
                 collapsed: parsed.collapsed === true,
                 maximized: parsed.maximized === true,
                 restore: readRect(parsed.restore),
@@ -1120,13 +1713,22 @@ function readRect(value: unknown): PanelRect | null {
     return null;
 }
 
-function defaultPanelLayout(): PanelLayout {
+function sidebarExtra(sidebar: boolean): number {
+    return sidebar ? CHAT_SIDEBAR_WIDTH : 0;
+}
+
+function minPanelWidth(sidebar: boolean): number {
+    return CHAT_PANEL_MIN_WIDTH + sidebarExtra(sidebar);
+}
+
+function defaultPanelLayout(sidebar = true): PanelLayout {
     if (typeof window === 'undefined') {
         return {
             x: CHAT_PANEL_MARGIN,
             y: CHAT_PANEL_MARGIN,
-            width: CHAT_PANEL_WIDTH,
+            width: CHAT_PANEL_WIDTH + sidebarExtra(sidebar),
             height: CHAT_PANEL_MAX_HEIGHT,
+            sidebar,
             collapsed: false,
             maximized: false,
             restore: null,
@@ -1134,8 +1736,8 @@ function defaultPanelLayout(): PanelLayout {
     }
     const topbarHeight = readTopbarHeight();
     const width = Math.min(
-        CHAT_PANEL_MAX_WIDTH,
-        Math.min(CHAT_PANEL_WIDTH, window.innerWidth - CHAT_PANEL_MARGIN * 2),
+        CHAT_PANEL_MAX_WIDTH + sidebarExtra(sidebar),
+        Math.min(CHAT_PANEL_WIDTH + sidebarExtra(sidebar), window.innerWidth - CHAT_PANEL_MARGIN * 2),
     );
     const height = Math.min(
         CHAT_PANEL_MAX_HEIGHT,
@@ -1146,6 +1748,7 @@ function defaultPanelLayout(): PanelLayout {
         y: topbarHeight + 10,
         width,
         height,
+        sidebar,
         collapsed: false,
         maximized: false,
         restore: null,
@@ -1188,7 +1791,7 @@ function clampPanelLayout(layout: PanelLayout): PanelLayout {
     const availableHeight = area.bottom - area.top;
     // A dragged edge may legitimately grow the panel past the default caps,
     // so the only hard limit is the work area itself.
-    const width = clampSize(layout.width, CHAT_PANEL_MIN_WIDTH, availableWidth);
+    const width = clampSize(layout.width, minPanelWidth(layout.sidebar), availableWidth);
     const height = clampSize(layout.height, CHAT_PANEL_MIN_HEIGHT, availableHeight);
     // While minimized only the header is on screen, so that is what has to
     // stay inside the work area - not the height it will restore to.
@@ -1214,7 +1817,13 @@ function clampSize(value: number, min: number, max: number): number {
 /** Resizes by moving only the dragged edges, so the opposite edge stays put
  *  even when the drag runs into the minimum size. Anchoring it this way is
  *  what stops the panel from sliding away under the cursor. */
-function resizeRect(origin: PanelRect, mode: ResizeMode, deltaX: number, deltaY: number): PanelRect {
+function resizeRect(
+    origin: PanelRect,
+    mode: ResizeMode,
+    deltaX: number,
+    deltaY: number,
+    minWidth: number,
+): PanelRect {
     const area = panelWorkArea();
     let left = origin.x;
     let top = origin.y;
@@ -1222,10 +1831,10 @@ function resizeRect(origin: PanelRect, mode: ResizeMode, deltaX: number, deltaY:
     let bottom = origin.y + origin.height;
 
     if (mode.includes('left')) {
-        left = Math.min(Math.max(origin.x + deltaX, area.left), right - CHAT_PANEL_MIN_WIDTH);
+        left = Math.min(Math.max(origin.x + deltaX, area.left), right - minWidth);
     }
     if (mode.includes('right')) {
-        right = Math.max(Math.min(right + deltaX, area.right), left + CHAT_PANEL_MIN_WIDTH);
+        right = Math.max(Math.min(right + deltaX, area.right), left + minWidth);
     }
     if (mode.includes('top')) {
         top = Math.min(Math.max(origin.y + deltaY, area.top), bottom - CHAT_PANEL_MIN_HEIGHT);

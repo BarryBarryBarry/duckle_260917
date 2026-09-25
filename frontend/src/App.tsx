@@ -390,6 +390,12 @@ export default function App() {
         () => (isInTauri() ? 'checking' : 'ready'),
     );
     const [showChatPanel, setShowChatPanel] = useState(false);
+    // Once opened, Duckie stays mounted (hidden when closed) so a reply that is
+    // still streaming keeps going and the open conversation is not lost.
+    const [chatPanelMounted, setChatPanelMounted] = useState(false);
+    useEffect(() => {
+        if (showChatPanel) setChatPanelMounted(true);
+    }, [showChatPanel]);
     const [showGitPanel, setShowGitPanel] = useState(false);
 
     useEffect(() => {
@@ -2901,8 +2907,11 @@ export default function App() {
                 <ProfileSetupModal onCreate={handleCreateFirstAccount} />
             ) : null}
 
-            {showChatPanel ? (
+            {showChatPanel || chatPanelMounted ? (
                 <ChatPanel
+                    key={workspacePathState ?? 'no-workspace'}
+                    workspace={workspacePathState}
+                    open={showChatPanel}
                     onClose={() => setShowChatPanel(false)}
                     onInsertPipeline={handleInsertAiPipeline}
                     onPersistedPipeline={handleOpenPersistedPipeline}

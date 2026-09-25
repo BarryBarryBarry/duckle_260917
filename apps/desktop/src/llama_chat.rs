@@ -267,6 +267,12 @@ pub enum ChatEvent {
         ok: bool,
         content: serde_json::Value,
     },
+    /// A DSH agent session was started for this conversation (DSH mode).
+    /// `resumed` is false when it had to start fresh instead of resuming.
+    Session {
+        remote_session_id: String,
+        resumed: bool,
+    },
     /// The ACP session is pinned to this provider/model route.
     ModelSelected { provider: String, model: String },
     /// Token accounting for the current turn (DSH mode).

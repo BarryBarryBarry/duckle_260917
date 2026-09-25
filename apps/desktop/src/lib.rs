@@ -24,6 +24,7 @@ mod app_settings;
 mod ci_status;
 mod dbt_engine;
 mod deploy;
+mod duckie_history;
 mod engine_manager;
 mod llama_chat;
 mod pixeltable_engine;
@@ -226,7 +227,13 @@ pub fn run() {
             seed_sample_workspace,
             import_job_file,
             chat_send,
+            chat_close_session,
             chat_extract_pipeline,
+            duckie_history::duckie_conversations_list,
+            duckie_history::duckie_conversation_get,
+            duckie_history::duckie_conversation_save,
+            duckie_history::duckie_conversation_update_meta,
+            duckie_history::duckie_conversation_delete,
             workspace_git_status,
             workspace_git_init,
             workspace_git_commit,
@@ -1308,22 +1315,25 @@ async fn chat_send(
     on_event: Channel<ChatEvent>,
     workspace: Option<String>,
     session_id: Option<String>,
+    resume_session_id: Option<String>,
 ) -> Result<(), String> {
     // #92: route to an external OpenAI-compatible endpoint when one is
     // configured for this workspace, instead of booting the local Qwen model.
     let ai = app_settings::ai_config(workspace.as_deref().unwrap_or(""));
     if ai.mode == "deepseek_harness" {
         let session_id = session_id.unwrap_or_else(|| "duckie-default".to_string());
-        let prompt = history
+        let last_user = history
             .iter()
-            .rev()
-            .find(|m| m.role == "user")
-            .map(|m| m.content.clone())
+            .rposition(|m| m.role == "user")
             .ok_or_else(|| "chat history did not contain a user message".to_string())?;
+        let prompt = history[last_user].content.clone();
+        let prior = history[..last_user].to_vec();
         return agent_bridge::prompt(
             app,
             session_id,
             prompt,
+            prior,
+            resume_session_id,
             workspace.unwrap_or_default(),
             ai,
             on_event,
@@ -1385,6 +1395,12 @@ async fn chat_send(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Stop the DSH agent session behind a Duckie conversation, if one is live.
+#[tauri::command]
+async fn chat_close_session(session_id: String) -> Result<(), String> {
+    agent_bridge::close_session(session_id).await
 }
 
 /// Pull a Duckle pipeline JSON out of an assistant message - the
