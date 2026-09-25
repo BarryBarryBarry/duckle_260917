@@ -227,25 +227,7 @@ export function SettingsModal({
     const secGood: React.CSSProperties = { color: 'var(--success)', textAlign: 'right' };
     const secWarn: React.CSSProperties = { color: 'var(--accent-warn, #d0902f)', textAlign: 'right' };
 
-    const Section = ({ id, title, children }: { id: string; title: string; children: ReactNode }) => {
-        const open = expanded.has(id);
-        return (
-            <div className="settings-section">
-                <button
-                    type="button"
-                    className="settings-section-header"
-                    aria-expanded={open}
-                    onClick={() => toggleSection(id)}
-                >
-                    <span className="settings-cat-chevron" aria-hidden="true">
-                        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    </span>
-                    <span className="settings-section-title">{title}</span>
-                </button>
-                {open ? <div className="settings-section-body">{children}</div> : null}
-            </div>
-        );
-    };
+    const sectionState = (id: string) => ({ open: expanded.has(id), onToggle: () => toggleSection(id) });
 
     return createPortal(
         <div className="modal-backdrop" onClick={handleBackdrop}>
@@ -274,7 +256,7 @@ export function SettingsModal({
                         </p>
                     ) : null}
 
-                    <Section id="appearance" title="Appearance">
+                    <SettingsSection {...sectionState('appearance')} title="Appearance">
                         <label style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>
                             Font size
                         </label>
@@ -313,9 +295,9 @@ export function SettingsModal({
                                 </button>
                             ) : null}
                         </div>
-                    </Section>
+                    </SettingsSection>
 
-                    <Section id="proxy" title="HTTP / HTTPS proxy">
+                    <SettingsSection {...sectionState('proxy')} title="HTTP / HTTPS proxy">
                         <p style={help}>
                             Routes REST and cloud-API connectors and the in-app updater through a proxy, so
                             Duckle works behind a corporate proxy without setting a system environment
@@ -332,9 +314,9 @@ export function SettingsModal({
                             autoComplete="off"
                             style={aiInput}
                         />
-                    </Section>
+                    </SettingsSection>
 
-                    <Section id="memory" title="Memory limit">
+                    <SettingsSection {...sectionState('memory')} title="Memory limit">
                         <p style={help}>
                             Caps total RAM for every run in this workspace (sets DuckDB's memory_limit for
                             both batched and per-stage execution). Leave empty for the engine default
@@ -350,9 +332,9 @@ export function SettingsModal({
                             disabled={!loaded || !workspace}
                             style={aiInput}
                         />
-                    </Section>
+                    </SettingsSection>
 
-                    <Section id="power" title="Power mode">
+                    <SettingsSection {...sectionState('power')} title="Power mode">
                         <p style={help}>
                             Throughput settings for this workspace. Independent pipelines scale well
                             across cores, so running several at once is the lever that pays; splitting a
@@ -395,9 +377,9 @@ export function SettingsModal({
                             faster disk. Every run gets a private subfolder, so concurrent runs cannot
                             collide here.
                         </p>
-                    </Section>
+                    </SettingsSection>
 
-                    <Section id="unsigned" title="Unsigned extensions">
+                    <SettingsSection {...sectionState('unsigned')} title="Unsigned extensions">
                         <p style={help}>
                             Allow loading unsigned or community DuckDB extensions (for example a custom{' '}
                             <code>quack</code> build). When on, the engine starts DuckDB with{' '}
@@ -413,9 +395,9 @@ export function SettingsModal({
                             />
                             Allow unsigned extensions
                         </label>
-                    </Section>
+                    </SettingsSection>
 
-                    <Section id="context" title="Global context file">
+                    <SettingsSection {...sectionState('context')} title="Global context file">
                         <p style={help}>
                             Auto-load context variables from a key/value file before every run, so{' '}
                             <code>{'${KEY}'}</code> resolves everywhere without wiring a node. Supports .env /
@@ -433,9 +415,9 @@ export function SettingsModal({
                             autoComplete="off"
                             style={aiInput}
                         />
-                    </Section>
+                    </SettingsSection>
 
-                    <Section id="ai" title="AI assistant">
+                    <SettingsSection {...sectionState('ai')} title="AI assistant">
                         <p style={help}>
                             Choose how Duckie runs: DeepSeek Harness via ACP + duckle-mcp (default),
                             an external OpenAI-compatible endpoint, or the bundled local Qwen model.
@@ -545,9 +527,9 @@ export function SettingsModal({
                             />
                             Bundled local Qwen via llama.cpp
                         </label>
-                    </Section>
+                    </SettingsSection>
 
-                    <Section id="toolbar" title="Toolbar">
+                    <SettingsSection {...sectionState('toolbar')} title="Toolbar">
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem', cursor: 'pointer' }}>
                             <input type="checkbox" checked={showDives} onChange={e => toggleDives(e.target.checked)} />
                             Show the Dives button (live data views &amp; dashboards) in the toolbar
@@ -556,9 +538,9 @@ export function SettingsModal({
                             <input type="checkbox" checked={showMinimap} onChange={e => toggleMinimap(e.target.checked)} />
                             Show the minimap in the corner of the canvas
                         </label>
-                    </Section>
+                    </SettingsSection>
 
-                    <Section id="security" title="Security and privacy">
+                    <SettingsSection {...sectionState('security')} title="Security and privacy">
                         <p style={help}>
                             Where this workspace keeps credentials, and what is protected. The
                             same facts are in the architecture guide, with citations.
@@ -626,9 +608,9 @@ export function SettingsModal({
                         >
                             Read the architecture guide
                         </button>
-                    </Section>
+                    </SettingsSection>
 
-                    <Section id="tour" title="First run">
+                    <SettingsSection {...sectionState('tour')} title="First run">
                         <p style={help}>
                             Everything you were shown the first time you opened Duckle, available
                             again whenever you want it.
@@ -664,7 +646,7 @@ export function SettingsModal({
                         >
                             Run setup again
                         </button>
-                    </Section>
+                    </SettingsSection>
                 </div>
                 <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                     <button type="button" style={btn} onClick={onClose}>
@@ -678,5 +660,36 @@ export function SettingsModal({
             </div>
         </div>,
         document.body
+    );
+}
+
+// Module-level so its identity is stable across SettingsModal renders; declaring it
+// inside the modal remounted every section body on each keystroke and dropped input focus.
+function SettingsSection({
+    title,
+    open,
+    onToggle,
+    children,
+}: {
+    title: string;
+    open: boolean;
+    onToggle: () => void;
+    children: ReactNode;
+}) {
+    return (
+        <div className="settings-section">
+            <button
+                type="button"
+                className="settings-section-header"
+                aria-expanded={open}
+                onClick={onToggle}
+            >
+                <span className="settings-cat-chevron" aria-hidden="true">
+                    {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                </span>
+                <span className="settings-section-title">{title}</span>
+            </button>
+            {open ? <div className="settings-section-body">{children}</div> : null}
+        </div>
     );
 }
