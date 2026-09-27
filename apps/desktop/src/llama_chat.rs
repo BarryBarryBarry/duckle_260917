@@ -280,9 +280,14 @@ pub enum ChatEvent {
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
         total_tokens: Option<u64>,
+        cache_read_tokens: Option<u64>,
+        model_calls: Option<u32>,
     },
     /// A pipeline was written on disk and the UI should reload it (DSH mode).
     PipelinePersisted { id: String, action: String },
+    /// A run needs database credentials for saved connection(s) (DSH mode).
+    /// Metadata only; the UI collects the secret and stores it encrypted.
+    CredentialsRequired { request: serde_json::Value },
     /// Conversation finished cleanly.
     Done { reason: Option<String> },
     /// Something broke mid-stream - send to the user as an error toast.

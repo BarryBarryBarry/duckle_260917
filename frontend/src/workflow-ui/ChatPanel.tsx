@@ -11,6 +11,7 @@ import {
     Download,
     Ellipsis,
     Gauge,
+    KeyRound,
     Loader2,
     Maximize2,
     Minimize2,
@@ -22,6 +23,7 @@ import {
     PinOff,
     Send,
     Sparkles,
+    ShieldCheck,
     SquarePen,
     Trash2,
     Wrench,
@@ -32,6 +34,7 @@ import {
     chatCloseSession,
     chatExtractPipeline,
     chatSend,
+    duckieConnectionSetCredentials,
     duckieConversationDelete,
     duckieConversationGet,
     duckieConversationSave,
@@ -43,6 +46,7 @@ import {
     llamaModels,
     settingsGetAi,
     type ChatMessage,
+    type CredentialsRequestConnection,
     type DuckieConversationSummary,
     type EngineStatus,
     type InstallProgress,
@@ -58,6 +62,8 @@ type Props = {
     onClose: () => void;
     onInsertPipeline: (pipeline: unknown) => void;
     onPersistedPipeline: (pipelineId: string) => void;
+    /** A connection file changed on disk (credentials saved from the chat). */
+    onConnectionsChanged?: () => void;
 };
 
 type Bubble = ChatMessage & {
@@ -67,12 +73,19 @@ type Bubble = ChatMessage & {
     pipeline?: unknown;
     /** Structured live progress for the current assistant turn. */
     statusItems?: StatusItem[];
+    /** Saved connections this turn could not sign in with. Metadata only: the
+     *  password is typed into the card and goes straight to the backend. */
+    credentialRequests?: CredentialRequest[];
     /** Wall-clock start of the turn, used for the elapsed-time readout. */
     startedAt?: number;
     /** Wall-clock end of the turn. */
     finishedAt?: number;
     /** Token accounting reported by the agent, when it reports any. */
-    usage?: { input?: number; output?: number; total?: number };
+    usage?: { input?: number; output?: number; total?: number; cacheRead?: number; calls?: number };
+};
+
+type CredentialRequest = CredentialsRequestConnection & {
+    status: 'pending' | 'saved' | 'dismissed';
 };
 
 type StatusTone = 'running' | 'done' | 'error' | 'info';
@@ -174,7 +187,14 @@ const RESIZE_LABEL: Record<ResizeMode, string> = {
     'bottom-right': '拖动以调整 Duckie 面板大小（右下角）',
 };
 
-export default function ChatPanel({ workspace: workspaceProp, open, onClose, onInsertPipeline, onPersistedPipeline }: Props) {
+export default function ChatPanel({
+    workspace: workspaceProp,
+    open,
+    onClose,
+    onInsertPipeline,
+    onPersistedPipeline,
+    onConnectionsChanged,
+}: Props) {
     const { t } = useTranslation();
     const [setup, setSetup] = useState<SetupState>({ phase: 'checking' });
     const [messages, setMessages] = useState<Bubble[]>([]);
@@ -375,6 +395,8 @@ export default function ChatPanel({ workspace: workspaceProp, open, onClose, onI
                         input: ev.input_tokens ?? undefined,
                         output: ev.output_tokens ?? undefined,
                         total: ev.total_tokens ?? undefined,
+                        cacheRead: ev.cache_read_tokens ?? undefined,
+                        calls: ev.model_calls ?? undefined,
                     },
                 }));
             } else if (ev.kind === 'tool_call_start') {
@@ -439,6 +461,20 @@ export default function ChatPanel({ workspace: workspaceProp, open, onClose, onI
                     return out;
                 });
                 setBusy(false);
+            } else if (ev.kind === 'credentials_required') {
+                const incoming = ev.request?.connections ?? [];
+                updateStreamingAssistant(last => {
+                    const others = (last.credentialRequests ?? []).filter(
+                        r => !incoming.some(c => c.connectionRef === r.connectionRef),
+                    );
+                    return {
+                        ...last,
+                        credentialRequests: [
+                            ...others,
+                            ...incoming.map(c => ({ ...c, status: 'pending' as const })),
+                        ],
+                    };
+                });
             } else if (ev.kind === 'pipeline_persisted') {
                 pendingPersistedPipelineId.current = ev.id;
                 updateStreamingAssistant(last => ({
@@ -662,6 +698,56 @@ export default function ChatPanel({ workspace: workspaceProp, open, onClose, onI
             window.removeEventListener('blur', close);
         };
     }, [menu]);
+
+    // Once every credential card in a reply is answered and at least one was
+    // saved, tell the agent so it retries. Queued until the reply finishes.
+    const [pendingFollowUp, setPendingFollowUp] = useState<string | null>(null);
+    const sendRef = useRef(send);
+    sendRef.current = send;
+    useEffect(() => {
+        if (!pendingFollowUp || busy || setup.phase !== 'ready') return;
+        setPendingFollowUp(null);
+        void sendRef.current(pendingFollowUp);
+    }, [pendingFollowUp, busy, setup.phase]);
+
+    const resolveCredentialRequest = useCallback((
+        messageIndex: number,
+        connectionRef: string,
+        status: 'saved' | 'dismissed',
+    ) => {
+        setMessages(prev => {
+            const target = prev[messageIndex];
+            if (!target?.credentialRequests) return prev;
+            const requests = target.credentialRequests.map(r =>
+                r.connectionRef === connectionRef ? { ...r, status } : r,
+            );
+            const out = prev.slice();
+            out[messageIndex] = { ...target, credentialRequests: requests };
+            if (requests.every(r => r.status !== 'pending')) {
+                const saved = requests.filter(r => r.status === 'saved').map(r => r.name);
+                if (saved.length) {
+                    setPendingFollowUp(
+                        t('chat.credentials.followUp', { names: saved.join('」「') }),
+                    );
+                }
+            }
+            return out;
+        });
+    }, [t]);
+
+    const saveCredentials = useCallback(async (
+        messageIndex: number,
+        request: CredentialRequest,
+        username: string,
+        password: string,
+    ) => {
+        if (!workspace) throw new Error(t('chat.history.noWorkspace'));
+        await duckieConnectionSetCredentials(workspace, request.connectionRef, username.trim() || null, password);
+        resolveCredentialRequest(messageIndex, request.connectionRef, 'saved');
+        // The editor holds connections in memory; reload so it sees the new
+        // password instead of saving its older copy back over it.
+        onConnectionsChanged?.();
+    }, [workspace, t, resolveCredentialRequest, onConnectionsChanged]);
 
     /** Up recalls this conversation's earlier inputs, newest first; Down walks
      *  back towards the draft that was being typed. Up only starts recalling
@@ -1283,6 +1369,18 @@ export default function ChatPanel({ workspace: workspaceProp, open, onClose, onI
                                                             </button>
                                                         ) : null}
                                                     </div>
+                                                ))}
+                                            </div>
+                                        ) : null}
+                                        {m.role === 'assistant' && m.credentialRequests?.length ? (
+                                            <div className="chat-credentials">
+                                                {m.credentialRequests.map(req => (
+                                                    <CredentialCard
+                                                        key={req.connectionRef}
+                                                        request={req}
+                                                        onSave={(username, password) => saveCredentials(i, req, username, password)}
+                                                        onDismiss={() => resolveCredentialRequest(i, req.connectionRef, 'dismissed')}
+                                                    />
                                                 ))}
                                             </div>
                                         ) : null}
@@ -1937,8 +2035,14 @@ function formatTokenUsage(message: Bubble): { label: string; title: string } | n
     const reported = usage?.total ?? sumTokens(usage?.input, usage?.output);
     if (reported != null) {
         const parts: string[] = [];
-        if (usage?.input != null) parts.push(`输入 ${formatTokenCount(usage.input)}`);
+        if (usage?.input != null) {
+            const cached = usage.cacheRead != null && usage.input > 0
+                ? `（缓存命中 ${formatTokenCount(usage.cacheRead)}，${((usage.cacheRead / usage.input) * 100).toFixed(1)}%）`
+                : '';
+            parts.push(`输入 ${formatTokenCount(usage.input)}${cached}`);
+        }
         if (usage?.output != null) parts.push(`输出 ${formatTokenCount(usage.output)}`);
+        if (usage?.calls != null) parts.push(`模型调用 ${usage.calls} 次（每次都会重新发送完整上下文）`);
         return {
             label: `${formatTokenCount(reported)} tok`,
             title: parts.length ? parts.join(' · ') : '由 DSH 上报的 token 用量',
@@ -1977,6 +2081,110 @@ function formatClock(timestamp: number): string {
         hour: '2-digit',
         minute: '2-digit',
     });
+}
+
+/** Secure credential form for a saved connection. The password lives only in
+ *  this component's state until it is handed to the backend, and is cleared
+ *  right after, so it never reaches the message list or the saved history. */
+function CredentialCard({
+    request,
+    onSave,
+    onDismiss,
+}: {
+    request: CredentialRequest;
+    onSave: (username: string, password: string) => Promise<void>;
+    onDismiss: () => void;
+}) {
+    const { t } = useTranslation();
+    const [username, setUsername] = useState(request.username ?? '');
+    const [password, setPassword] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState<string | null>(null);
+    const target = [request.host, request.port].filter(v => v !== null && v !== undefined && v !== '').join(':');
+    const where = [request.kind, target, request.database].filter(Boolean).join(' · ');
+
+    if (request.status !== 'pending') {
+        return (
+            <div className={`chat-credential chat-credential-${request.status}`}>
+                {request.status === 'saved' ? <ShieldCheck size={13} aria-hidden="true" /> : <KeyRound size={13} aria-hidden="true" />}
+                <span>
+                    {request.status === 'saved'
+                        ? t('chat.credentials.saved', { name: request.name })
+                        : t('chat.credentials.dismissed', { name: request.name })}
+                </span>
+            </div>
+        );
+    }
+
+    const submit = async () => {
+        if (!password || saving) return;
+        setSaving(true);
+        setError(null);
+        try {
+            await onSave(username, password);
+            setPassword('');
+        } catch (err) {
+            setError(String(err));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <form
+            className="chat-credential"
+            onSubmit={e => {
+                e.preventDefault();
+                void submit();
+            }}
+        >
+            <div className="chat-credential-head">
+                <KeyRound size={14} aria-hidden="true" />
+                <span>{t('chat.credentials.title')}</span>
+            </div>
+            <div className="chat-credential-text">
+                {request.reason === 'rejected'
+                    ? t('chat.credentials.rejected', { name: request.name })
+                    : t('chat.credentials.missing', { name: request.name })}
+            </div>
+            {where ? <div className="chat-credential-where">{where}</div> : null}
+            <label className="chat-credential-field">
+                <span>{t('chat.credentials.username')}</span>
+                <input
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={saving}
+                />
+            </label>
+            <label className="chat-credential-field">
+                <span>{t('chat.credentials.password')}</span>
+                <input
+                    type="password"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    autoComplete="new-password"
+                    autoFocus
+                    disabled={saving}
+                />
+            </label>
+            {error ? <div className="chat-credential-error" role="alert">{error}</div> : null}
+            <div className="chat-credential-note">
+                <ShieldCheck size={12} aria-hidden="true" />
+                <span>{t('chat.credentials.privacy')}</span>
+            </div>
+            <div className="chat-credential-actions">
+                <button type="button" className="chat-credential-cancel" onClick={onDismiss} disabled={saving}>
+                    {t('chat.credentials.cancel')}
+                </button>
+                <button type="submit" className="chat-credential-save" disabled={!password || saving}>
+                    {saving ? <Loader2 size={12} className="spin" /> : null}
+                    {t('chat.credentials.save')}
+                </button>
+            </div>
+        </form>
+    );
 }
 
 function ModelPicker({

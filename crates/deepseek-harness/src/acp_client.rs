@@ -14,6 +14,8 @@ use crate::event::HarnessEvent;
 
 const ACP_PROTOCOL_VERSION: u32 = 1;
 const ACP_MODEL_CONFIG_ID: &str = "model";
+/// How long to wait for DSH to write a finished turn to its session log.
+const SESSION_LOG_WAIT: Duration = Duration::from_millis(1500);
 
 #[derive(Debug, Clone)]
 pub struct DshLaunchSpec {
@@ -246,7 +248,22 @@ impl AcpSession {
 
         match &request_result {
             Ok(resp) => {
-                if let Some(usage) = parse_usage(resp) {
+                // DSH answers with a bare stopReason, so fall back to its own
+                // session log for the turn's real consumption.
+                let usage = parse_usage(resp).or_else(|| {
+                    crate::session_log::turn_usage_for_session(
+                        &self.remote_session_id,
+                        SESSION_LOG_WAIT,
+                    )
+                    .map(|u| HarnessEvent::Usage {
+                        input_tokens: Some(u.input_tokens),
+                        output_tokens: Some(u.output_tokens),
+                        total_tokens: Some(u.total_tokens),
+                        cache_read_tokens: u.cache_read_tokens,
+                        model_calls: Some(u.model_calls),
+                    })
+                });
+                if let Some(usage) = usage {
                     on_send_prompt_event(&self.state, usage);
                 }
                 let reason = resp
@@ -592,6 +609,14 @@ fn handle_server_notification(state: &Arc<ClientState>, msg: &Value) {
             if let Some(evt) = pipeline_evt {
                 on_send_prompt_event(state, evt);
             }
+            if let Some(request) = content.get("needsCredentials").filter(|v| v.is_object()) {
+                on_send_prompt_event(
+                    state,
+                    HarnessEvent::CredentialsRequired {
+                        request: request.clone(),
+                    },
+                );
+            }
         }
         _ => {
             if kind.contains("usage") {
@@ -719,6 +744,8 @@ fn parse_usage(value: &Value) -> Option<HarnessEvent> {
         input_tokens: input,
         output_tokens: output,
         total_tokens: total,
+        cache_read_tokens: read_token_count(usage, &["cacheReadTokens", "cachedReadTokens", "cache_read_tokens"]),
+        model_calls: None,
     })
 }
 
@@ -817,6 +844,7 @@ mod tests {
                 input_tokens,
                 output_tokens,
                 total_tokens,
+                ..
             }) => {
                 assert_eq!(input_tokens, Some(1200));
                 assert_eq!(output_tokens, Some(340));

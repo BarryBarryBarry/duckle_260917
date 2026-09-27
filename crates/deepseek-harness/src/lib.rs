@@ -6,6 +6,7 @@
 pub mod acp_client;
 pub mod error;
 pub mod event;
+pub mod session_log;
 
 pub use acp_client::{AcpModelOverride, AcpSelectedModel, AcpSession, DshLaunchSpec};
 pub use error::{Error, Result};

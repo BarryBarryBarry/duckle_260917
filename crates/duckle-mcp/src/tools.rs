@@ -27,7 +27,10 @@ Workflow: call list_components to find component ids, get_component_schema for a
 component's property keys, then create_pipeline (it validates before writing). Use \
 validate_pipeline to compile-check without running and run_pipeline to execute headlessly. \
 Never hardcode secrets: use ${ENV:KEY} placeholders in properties and supply the value via \
-the environment at run time. run_pipeline and build_pipeline need a DuckDB binary \
+the environment at run time. For a database, reference a saved connection instead: call \
+list_connections and set the node's 'connectionRef' to a connection's id (or create_connection \
+without the password first); never ask the user for a password. A run_pipeline result with \
+'needsCredentials' means the user is being asked for it securely - stop and wait. run_pipeline and build_pipeline need a DuckDB binary \
 (DUCKLE_DUCKDB_BIN env or a 'duckdb' arg); build_pipeline also needs the duckle-runner binary.";
 
 // ---------------------------------------------------------------------------
@@ -295,16 +298,16 @@ pub fn list_tools() -> Value {
                 "duckdb": { "type": "string" }
             }, "required": ["out"] })),
         tool("list_connections",
-            "List the workspace's saved connections (secret fields masked).",
+            "List the workspace's saved connections (secret fields masked). Each has an 'id': set it as a database node's 'connectionRef' property and leave host/username/password off the node - the saved connection supplies them at run time. 'missingSecrets' lists secrets the user has not entered yet; do not ask for them, run the pipeline and Duckle will prompt the user securely.",
             json!({ "type": "object", "properties": {
                 "workspace": { "type": "string" }
             }, "required": ["workspace"] })),
         tool("create_connection",
-            "Create a workspace saved connection JSON so pipelines can reference its fields. Writes connections/<id>.json and registers it in repository.json when present.",
+            "Create a workspace saved connection JSON so pipelines can reference it via a node's 'connectionRef' (the returned id). Writes connections/<id>.json and registers it in repository.json when present. Omit the password: Duckle asks the user for it securely the first time a run needs it, and stores it encrypted.",
             json!({ "type": "object", "properties": {
                 "workspace": { "type": "string" },
                 "name": { "type": "string" },
-                "connection": { "type": "object", "description": "Fields like { kind, host, port, database, username, password }." }
+                "connection": { "type": "object", "description": "Fields like { kind, host, port, database, username }. Leave out password and other secrets." }
             }, "required": ["workspace","name","connection"] }))
     ])
 }
@@ -989,6 +992,9 @@ fn t_create_pipeline(args: &Value) -> Result<Value, String> {
         .ok_or("missing 'pipeline' object")?;
     let do_validate = arg_bool(args, "validate", true);
     let overwrite = arg_bool(args, "overwrite", false);
+    if let Some((node, key)) = crate::credentials::literal_password_in_nodes(pipeline) {
+        return Err(crate::credentials::literal_password_error(&node, &key));
+    }
 
     // Normalize into the full saved-pipeline shape the GUI also writes.
     let mut obj = pipeline.as_object().cloned().unwrap_or_default();
@@ -1006,7 +1012,10 @@ fn t_create_pipeline(args: &Value) -> Result<Value, String> {
         .or_else(|| obj.get("id").and_then(|v| v.as_str()).map(String::from))
         .unwrap_or_else(|| gen_id("p"));
     obj.insert("id".to_string(), json!(id));
-    let full = Value::Object(obj);
+    let mut full = Value::Object(obj);
+    // The engine runs on componentId alone, but the canvas also needs node
+    // types, handles and positions or it draws label boxes it cannot edit.
+    crate::canvas_shape::normalize(&mut full);
 
     let mut validation = Value::Null;
     if do_validate {
@@ -1156,6 +1165,11 @@ fn t_update_pipeline(args: &Value) -> Result<Value, String> {
         .get("patch")
         .filter(|v| v.is_object())
         .ok_or("missing 'patch' object")?;
+    // Only what this call writes is checked, so a pipeline saved earlier with
+    // an inline password can still be edited.
+    if let Some((node, key)) = crate::credentials::literal_password_in_nodes(patch) {
+        return Err(crate::credentials::literal_password_error(&node, &key));
+    }
     let do_validate = arg_bool(args, "validate", true);
     let workspace = arg_str(args, "workspace");
     let id = arg_str(args, "id");
@@ -1170,6 +1184,7 @@ fn t_update_pipeline(args: &Value) -> Result<Value, String> {
     let mut doc_val: Value =
         serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
     merge_pipeline(&mut doc_val, patch);
+    crate::canvas_shape::normalize(&mut doc_val);
 
     let mut validation = Value::Null;
     if do_validate {
@@ -1360,6 +1375,17 @@ fn t_run_pipeline(args: &Value) -> Result<Value, String> {
     }
 
     let mut out = serde_json::to_value(&result).map_err(|e| e.to_string())?;
+    if let Some(ws) = arg_str(args, "workspace") {
+        let found = crate::credentials::from_run(&v, &out, std::path::Path::new(ws));
+        if let Some(obj) = out.as_object_mut() {
+            if let Some(needs) = found.needs {
+                obj.insert("needsCredentials".into(), needs);
+                obj.insert("agentNote".into(), json!(crate::credentials::AGENT_NOTE));
+            } else if found.inline_auth_failure {
+                obj.insert("agentNote".into(), json!(crate::credentials::INLINE_HINT));
+            }
+        }
+    }
     // Cap preview rows so the response stays small.
     if let Some(prev) = out.get_mut("preview").and_then(|p| p.as_array_mut()) {
         for node in prev.iter_mut() {
@@ -1640,9 +1666,14 @@ fn t_list_connections(args: &Value) -> Result<Value, String> {
                 Ok(v) => v,
                 Err(_) => continue,
             };
+            let missing = crate::credentials::missing_secrets(&v);
             mask_secrets(&mut v);
+            let id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             out.push(json!({
+                "id": id,
+                "name": crate::credentials::connection_name(std::path::Path::new(ws), &id),
                 "file": path.file_name().map(|s| s.to_string_lossy().into_owned()),
+                "missingSecrets": missing,
                 "connection": v
             }));
         }
@@ -1687,7 +1718,14 @@ fn t_create_connection(args: &Value) -> Result<Value, String> {
             }
         }
     }
-    Ok(json!({ "ok": true, "id": id, "path": path.to_string_lossy(), "registeredInRepository": registered }))
+    Ok(json!({
+        "ok": true,
+        "id": id,
+        "path": path.to_string_lossy(),
+        "registeredInRepository": registered,
+        "missingSecrets": crate::credentials::missing_secrets(conn),
+        "usage": "Set this id as the node's 'connectionRef'. Missing secrets are asked from the user securely when a run needs them."
+    }))
 }
 
 // ---------------------------------------------------------------------------

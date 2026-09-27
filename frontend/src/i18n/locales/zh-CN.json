@@ -142,6 +142,19 @@
       "busyHint": "Duckie 正在回复，完成后可切换对话",
       "showSidebar": "显示历史对话",
       "hideSidebar": "隐藏历史对话"
+    },
+    "credentials": {
+      "title": "需要数据库凭据",
+      "missing": "连接「{{name}}」还没有保存密码。",
+      "rejected": "数据库拒绝了连接「{{name}}」的登录，请重新输入凭据。",
+      "username": "用户名",
+      "password": "密码",
+      "privacy": "密码仅加密保存在本工作区的连接中，不会发送给大模型，也不会出现在聊天记录里。",
+      "save": "保存并继续",
+      "cancel": "取消",
+      "saved": "已安全保存连接「{{name}}」的凭据，Duckie 将自动重试。",
+      "dismissed": "未输入连接「{{name}}」的凭据。",
+      "followUp": "我已在安全表单中保存了「{{names}}」的数据库凭据，请重新运行刚才的操作。"
     }
   },
   "properties": {

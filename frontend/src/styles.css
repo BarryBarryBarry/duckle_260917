@@ -7522,6 +7522,127 @@ select.modal-select:focus {
 .chat-history-confirm-delete:hover {
     filter: brightness(1.08);
 }
+/* Duckie's secure database-credential form. */
+.chat-credentials {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+}
+.chat-credential {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid var(--accent-soft);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--accent-soft) 35%, var(--bg-1));
+}
+.chat-credential-saved,
+.chat-credential-dismissed {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    font-size: 0.8846rem;
+    color: var(--text-2, var(--text-1));
+}
+.chat-credential-saved svg {
+    color: var(--success);
+}
+.chat-credential-dismissed {
+    border-color: var(--border);
+    background: transparent;
+    color: var(--text-3);
+}
+.chat-credential-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 700;
+    color: var(--text-1);
+}
+.chat-credential-head svg {
+    color: var(--accent);
+}
+.chat-credential-text {
+    font-size: 0.9231rem;
+    color: var(--text-1);
+    line-height: 1.5;
+}
+.chat-credential-where {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 0.8077rem;
+    color: var(--text-3);
+    word-break: break-all;
+}
+.chat-credential-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.8462rem;
+    color: var(--text-2, var(--text-1));
+}
+.chat-credential-field input {
+    padding: 7px 9px;
+    border: 1px solid var(--field-border, var(--border));
+    border-radius: var(--radius-input, 6px);
+    background: var(--field-bg, var(--bg-0));
+    color: var(--text-1);
+    font-size: 0.9231rem;
+    outline: none;
+}
+.chat-credential-field input:focus {
+    border-color: var(--accent);
+}
+.chat-credential-error {
+    color: var(--danger);
+    font-size: 0.8462rem;
+    word-break: break-word;
+}
+.chat-credential-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 5px;
+    color: var(--text-3);
+    font-size: 0.7692rem;
+    line-height: 1.45;
+}
+.chat-credential-note svg {
+    flex: none;
+    margin-top: 1px;
+}
+.chat-credential-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.chat-credential-cancel,
+.chat-credential-save {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: var(--radius-btn, 7px);
+    font-size: 0.8846rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.chat-credential-cancel {
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-1);
+}
+.chat-credential-save {
+    border: 1px solid var(--btn-primary-bg, var(--accent));
+    background: var(--btn-primary-bg, var(--accent));
+    color: var(--btn-primary-fg, #fff);
+}
+.chat-credential-save:disabled,
+.chat-credential-cancel:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
 .chat-panel-state {
     flex: 1;
     display: flex;

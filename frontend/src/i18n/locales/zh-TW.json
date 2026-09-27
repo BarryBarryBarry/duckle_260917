@@ -141,6 +141,19 @@
       "busyHint": "Duckie 正在回覆，完成後可切換對話",
       "showSidebar": "顯示歷史對話",
       "hideSidebar": "隱藏歷史對話"
+    },
+    "credentials": {
+      "title": "需要資料庫憑據",
+      "missing": "連線「{{name}}」尚未儲存密碼。",
+      "rejected": "資料庫拒絕了連線「{{name}}」的登入，請重新輸入憑據。",
+      "username": "使用者名稱",
+      "password": "密碼",
+      "privacy": "密碼僅加密儲存在本工作區的連線中，不會傳送給大型模型，也不會出現在聊天紀錄裡。",
+      "save": "儲存並繼續",
+      "cancel": "取消",
+      "saved": "已安全儲存連線「{{name}}」的憑據，Duckie 將自動重試。",
+      "dismissed": "未輸入連線「{{name}}」的憑據。",
+      "followUp": "我已在安全表單中儲存了「{{names}}」的資料庫憑據，請重新執行剛才的操作。"
     }
   },
   "properties": {

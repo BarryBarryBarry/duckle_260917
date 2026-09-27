@@ -234,6 +234,7 @@ pub fn run() {
             duckie_history::duckie_conversation_save,
             duckie_history::duckie_conversation_update_meta,
             duckie_history::duckie_conversation_delete,
+            secrets::duckie_connection_set_credentials,
             workspace_git_status,
             workspace_git_init,
             workspace_git_commit,

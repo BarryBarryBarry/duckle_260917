@@ -571,10 +571,44 @@ export type ChatEvent =
           input_tokens?: number | null;
           output_tokens?: number | null;
           total_tokens?: number | null;
+          cache_read_tokens?: number | null;
+          model_calls?: number | null;
       }
     | { kind: 'pipeline_persisted'; id: string; action: string }
+    | { kind: 'credentials_required'; request: CredentialsRequest }
     | { kind: 'done'; reason?: string | null }
     | { kind: 'error'; message: string };
+
+/** A saved connection a run could not sign in with (metadata only, never a secret). */
+export type CredentialsRequestConnection = {
+    connectionRef: string;
+    name: string;
+    kind?: string | null;
+    host?: string | null;
+    port?: number | string | null;
+    database?: string | null;
+    username?: string | null;
+    /** 'missing' = no password saved yet; 'rejected' = the saved one was refused. */
+    reason: 'missing' | 'rejected';
+    nodes?: string[];
+    error?: string | null;
+};
+
+export type CredentialsRequest = { connections: CredentialsRequestConnection[] };
+
+/**
+ * Store credentials from Duckie's secure form into a saved connection,
+ * encrypted. The password goes only to the local backend, never to the agent.
+ */
+export async function duckieConnectionSetCredentials(
+    workspace: string,
+    connectionId: string,
+    username: string | null,
+    password: string,
+): Promise<void> {
+    if (!isTauri()) throw new Error('Saving credentials needs the desktop app.');
+    await invoke('duckie_connection_set_credentials', { workspace, connectionId, username, password });
+}
 
 /**
  * Send a chat conversation to the local Qwen model. Tokens stream

@@ -39,10 +39,19 @@ pub enum HarnessEvent {
         input_tokens: Option<u64>,
         output_tokens: Option<u64>,
         total_tokens: Option<u64>,
+        /// Prompt tokens served from the provider's cache.
+        cache_read_tokens: Option<u64>,
+        /// Model calls the turn made; each resends the whole context.
+        model_calls: Option<u32>,
     },
 
     /// A tool wrote a pipeline file the GUI should reload and focus.
     PipelinePersisted { id: String, action: String },
+
+    /// A tool result asked for database credentials (`needsCredentials`).
+    /// Carries connection metadata only, never a secret; the UI collects the
+    /// password itself so it does not pass through the model.
+    CredentialsRequired { request: serde_json::Value },
 
     /// Terminal success. `reason` is the model's finish_reason, or
     /// `"max_rounds"` if the loop hit its bound.

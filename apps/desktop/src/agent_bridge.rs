@@ -299,6 +299,8 @@ Use the attached Duckle MCP tools instead of inventing pipeline JSON.\n\
 When the user wants a new pipeline, call create_pipeline with the workspace path so Duckle writes pipelines/<id>.json and registers it in repository.json.\n\
 When the user wants to change an existing pipeline, call update_pipeline so the on-disk file stays authoritative.\n\
 Prefer list_components and get_component_schema before writing a pipeline when you are not certain about component ids or required properties.\n\
+Database credentials: never ask the user for a password and never write one into a pipeline, a connection or your reply. Call list_connections and set the database node's connectionRef to a saved connection's id, leaving host/username/password off the node. If none fits, call create_connection without the password and use the returned id.\n\
+If a run_pipeline result contains needsCredentials, Duckle is showing the user a secure form for the password: tell them in one short sentence to fill it in, then stop and wait. When they say it is saved, run the pipeline again.\n\
 Reply with a short summary after tool work completes.\n\
 Workspace: {}\n\n\
 {}User request:\n{}",
@@ -328,14 +330,19 @@ fn map_event(evt: HarnessEvent) -> Option<ChatEvent> {
             input_tokens,
             output_tokens,
             total_tokens,
+            cache_read_tokens,
+            model_calls,
         } => ChatEvent::Usage {
             input_tokens,
             output_tokens,
             total_tokens,
+            cache_read_tokens,
+            model_calls,
         },
         HarnessEvent::PipelinePersisted { id, action } => {
             ChatEvent::PipelinePersisted { id, action }
         }
+        HarnessEvent::CredentialsRequired { request } => ChatEvent::CredentialsRequired { request },
         HarnessEvent::Done { reason } => ChatEvent::Done {
             reason: Some(reason),
         },

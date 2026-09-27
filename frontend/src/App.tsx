@@ -116,6 +116,7 @@ import type {
 } from './repo-types';
 import { getDefaults, getManifest } from './workflow-ui/fields/component-manifests';
 import type { DuckleNodeData } from './pipeline-types';
+import { flowTypeForComponent, normalizePipelineForCanvas } from './canvas/normalize-pipeline';
 import type { DropPosition, NodeAction, PaneAction } from './canvas/Canvas';
 import { useUndoRedo, type CanvasSnapshot } from './useUndoRedo';
 import type { RepoItem } from './repo-types';
@@ -599,8 +600,16 @@ export default function App() {
                 }
                 if (state) {
                     if (state.engine) setEngine(normalizeEngineId(state.engine));
-                    if (state.pipelineData)
-                        setPipelineData(state.pipelineData as Record<string, PipelineState>);
+                    if (state.pipelineData) {
+                        // Agent-written pipelines can miss the node types and
+                        // edge handles the canvas renders from; fill them in.
+                        const loaded = state.pipelineData as Record<string, PipelineState>;
+                        setPipelineData(
+                            Object.fromEntries(
+                                Object.entries(loaded).map(([id, p]) => [id, normalizePipelineForCanvas(p)]),
+                            ),
+                        );
+                    }
                     if (state.repo)
                         setRepo(state.repo as RepoItem[]);
                     if (state.jobs && (state.jobs as Job[]).length > 0) {
@@ -2243,19 +2252,6 @@ export default function App() {
         [repo],
     );
 
-    // Map a component_id prefix to the React Flow node "kind" the
-    // canvas understands. Mirrors how SAMPLE_NODES classifies new
-    // tiles when a user drags from the palette.
-    const nodeKindFromComponent = (componentId: string): string => {
-        if (componentId.startsWith('src.')) return 'source';
-        if (componentId.startsWith('snk.')) return 'sink';
-        if (componentId.startsWith('ctl.')) return 'control';
-        if (componentId.startsWith('qa.')) return 'transform';
-        if (componentId.startsWith('code.')) return 'transform';
-        if (componentId.startsWith('xf.')) return 'transform';
-        return 'transform';
-    };
-
     // Convert an AI-generated pipeline JSON (from chat) into the
     // canvas's PipelineState shape and replace the current pipeline's
     // content. Auto-lays nodes out left-to-right since the model
@@ -2282,7 +2278,7 @@ export default function App() {
                 const cid = AI_ID_ALIASES[n.type ?? ''] ?? n.type ?? 'src.csv';
                 return {
                     id: n.id ?? `n${i + 1}`,
-                    type: nodeKindFromComponent(cid),
+                    type: flowTypeForComponent(cid),
                     position: { x: 80 + i * 260, y: 160 },
                     data: {
                         label: n.data?.label ?? cid.replace(/^[^.]+\./, ''),
@@ -2915,6 +2911,7 @@ export default function App() {
                     onClose={() => setShowChatPanel(false)}
                     onInsertPipeline={handleInsertAiPipeline}
                     onPersistedPipeline={handleOpenPersistedPipeline}
+                    onConnectionsChanged={handleReloadWorkspace}
                 />
             ) : null}
 

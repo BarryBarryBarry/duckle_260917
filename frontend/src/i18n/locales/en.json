@@ -149,6 +149,19 @@
       "busyHint": "Duckie is replying; switch when it finishes",
       "showSidebar": "Show chat history",
       "hideSidebar": "Hide chat history"
+    },
+    "credentials": {
+      "title": "Database credentials needed",
+      "missing": "The saved connection “{{name}}” has no password yet.",
+      "rejected": "The database rejected the login for “{{name}}”. Enter the credentials again.",
+      "username": "Username",
+      "password": "Password",
+      "privacy": "Stored encrypted in this workspace's connection. Never sent to the AI model or saved in the chat.",
+      "save": "Save and continue",
+      "cancel": "Cancel",
+      "saved": "Credentials for “{{name}}” saved securely; Duckie will retry.",
+      "dismissed": "Credentials for “{{name}}” were not entered.",
+      "followUp": "I saved the database credentials for 「{{names}}」 in the secure form. Please run it again."
     }
   },
   "properties": {

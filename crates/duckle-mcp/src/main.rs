@@ -17,7 +17,9 @@
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 
+mod canvas_shape;
 mod catalog;
+mod credentials;
 mod tools;
 
 /// MCP protocol revision this server implements. 2024-11-05 is broadly
