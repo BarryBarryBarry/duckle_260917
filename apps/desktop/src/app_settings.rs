@@ -27,6 +27,9 @@ struct AppSettings {
     ai_harness_command: Option<String>,
     ai_harness_provider: Option<String>,
     ai_harness_model: Option<String>,
+    /// How long a DSH turn may go silent before Duckie cancels it, in seconds.
+    /// None = DUCKLE_DSH_IDLE_TIMEOUT_SECS or the built-in default; 0 = no limit.
+    ai_harness_idle_timeout_secs: Option<u64>,
     /// #102: total DuckDB memory cap in MB, applied as DUCKLE_MEMORY_LIMIT for
     /// every run in this workspace (batched and per-stage). None = DuckDB
     /// default (~80% of RAM). Stages run sequentially, so this caps peak RAM.
@@ -79,6 +82,7 @@ pub struct AiConfig {
     pub harness_command: Option<String>,
     pub harness_provider: Option<String>,
     pub harness_model: Option<String>,
+    pub harness_idle_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,6 +94,7 @@ pub struct AiProviderConfig {
     pub harness_command: Option<String>,
     pub harness_provider: Option<String>,
     pub harness_model: Option<String>,
+    pub harness_idle_timeout_secs: Option<u64>,
 }
 
 fn settings_path(workspace: &Path) -> PathBuf {
@@ -330,6 +335,7 @@ pub fn settings_get_ai(workspace: String) -> AiConfig {
         harness_command: cfg.harness_command,
         harness_provider: cfg.harness_provider,
         harness_model: cfg.harness_model,
+        harness_idle_timeout_secs: cfg.harness_idle_timeout_secs,
     }
 }
 
@@ -343,6 +349,7 @@ pub fn settings_set_ai(
     harness_command: Option<String>,
     harness_provider: Option<String>,
     harness_model: Option<String>,
+    harness_idle_timeout_secs: Option<u64>,
 ) -> Result<(), String> {
     if workspace.is_empty() {
         return Err("no workspace is open".into());
@@ -356,6 +363,7 @@ pub fn settings_set_ai(
     s.ai_harness_command = clean(harness_command);
     s.ai_harness_provider = clean(harness_provider);
     s.ai_harness_model = clean(harness_model);
+    s.ai_harness_idle_timeout_secs = harness_idle_timeout_secs;
     let mode = s
         .ai_mode
         .clone()
@@ -381,6 +389,7 @@ pub fn ai_config(workspace: &str) -> AiProviderConfig {
             harness_command: None,
             harness_provider: None,
             harness_model: None,
+            harness_idle_timeout_secs: None,
         };
     }
     let s = load(Path::new(workspace));
@@ -401,6 +410,7 @@ pub fn ai_config(workspace: &str) -> AiProviderConfig {
         harness_command: clean(s.ai_harness_command),
         harness_provider: clean(s.ai_harness_provider),
         harness_model: clean(s.ai_harness_model),
+        harness_idle_timeout_secs: s.ai_harness_idle_timeout_secs,
     }
 }
 

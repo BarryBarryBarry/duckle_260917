@@ -1625,6 +1625,8 @@ export type AiConfig = {
     harnessCommand: string | null;
     harnessProvider: string | null;
     harnessModel: string | null;
+    /** Seconds a DSH turn may go silent before it is cancelled; null = default, 0 = no limit. */
+    harnessIdleTimeoutSecs: number | null;
 };
 
 /** Read the workspace Duckie provider config. */
@@ -1638,6 +1640,7 @@ export async function settingsGetAi(workspace: string): Promise<AiConfig> {
             harnessCommand: null,
             harnessProvider: null,
             harnessModel: null,
+            harnessIdleTimeoutSecs: null,
         };
     }
     try {
@@ -1651,6 +1654,7 @@ export async function settingsGetAi(workspace: string): Promise<AiConfig> {
             harnessCommand: null,
             harnessProvider: null,
             harnessModel: null,
+            harnessIdleTimeoutSecs: null,
         };
     }
 }
@@ -1666,6 +1670,7 @@ export async function settingsSetAi(
         harnessCommand: string | null;
         harnessProvider: string | null;
         harnessModel: string | null;
+        harnessIdleTimeoutSecs: number | null;
     },
 ): Promise<void> {
     refuseMachineSettingOnWeb('AI assistant settings');
@@ -1678,6 +1683,7 @@ export async function settingsSetAi(
         harnessCommand: cfg.harnessCommand,
         harnessProvider: cfg.harnessProvider,
         harnessModel: cfg.harnessModel,
+        harnessIdleTimeoutSecs: cfg.harnessIdleTimeoutSecs,
     });
 }
 

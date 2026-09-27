@@ -3317,6 +3317,8 @@ For headless / always-on schedules that run when Duckle is closed, build the pip
 
 The sidebar on the right is **Duckie AI Assistant**. By default it now talks to **DeepSeek Harness** over ACP and lets Harness use **duckle-mcp** to inspect the workspace, create/update pipeline files, and hand the result straight back to the GUI. If your ACP profile has several routes, Settings can also pin Duckie to an explicit DSH provider/model pair; otherwise it can still route Duckie to the bundled **Qwen 2.5 Coder 1.5B** via **llama.cpp** or to your own OpenAI-compatible endpoint.
 
+A DSH turn has no fixed time limit: Duckie keeps waiting as long as DSH is still streaming progress, and cancels the turn only after DSH has been completely silent for the **idle timeout** (default 30 minutes). Change it under Settings → AI assistant → *DSH idle timeout* (per workspace), or with the `DUCKLE_DSH_IDLE_TIMEOUT_SECS` environment variable; `0` disables it. On timeout Duckie sends ACP `session/cancel`, and stops the DSH process if it does not acknowledge, so nothing keeps running unseen.
+
 | | |
 |---|---|
 | **Truly local** | The Qwen model runs as a `llama-server` subprocess on `127.0.0.1`. No API keys. No network calls. Disconnect your wifi and it keeps working. |

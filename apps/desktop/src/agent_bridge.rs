@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use deepseek_harness::{AcpModelOverride, AcpSession, DshLaunchSpec, HarnessEvent};
+use deepseek_harness::{
+    AcpModelOverride, AcpSession, DshLaunchSpec, HarnessEvent, DEFAULT_PROMPT_IDLE_TIMEOUT,
+};
 use tauri::ipc::Channel;
 use tauri::Manager;
 
@@ -15,6 +17,8 @@ use crate::llama_chat::{ChatEvent, ChatMessage};
 const MAX_LIVE_SESSIONS: usize = 4;
 /// Upper bound on the transcript replayed when a session cannot be resumed.
 const REPLAY_MAX_CHARS: usize = 24_000;
+/// Fallback for the DSH turn idle timeout when the workspace does not set one.
+const IDLE_TIMEOUT_ENV: &str = "DUCKLE_DSH_IDLE_TIMEOUT_SECS";
 
 struct SessionEntry {
     fingerprint: String,
@@ -84,6 +88,7 @@ pub async fn prompt(
             None
         };
         let message = duckie_prompt(&workspace_path, replay.as_deref(), &prompt);
+        session.set_prompt_idle_timeout(prompt_idle_timeout(&cfg));
         session
             .prompt(&message, move |evt| {
                 if let Some(mapped) = map_event(evt) {
@@ -111,6 +116,21 @@ pub async fn close_session(session_id: String) -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
+/// The workspace setting wins, then the env var, then the built-in default;
+/// `0` from either source disables the limit.
+fn prompt_idle_timeout(cfg: &AiProviderConfig) -> Option<Duration> {
+    let secs = cfg.harness_idle_timeout_secs.or_else(|| {
+        std::env::var(IDLE_TIMEOUT_ENV)
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+    });
+    match secs {
+        Some(0) => None,
+        Some(n) => Some(Duration::from_secs(n)),
+        None => Some(DEFAULT_PROMPT_IDLE_TIMEOUT),
+    }
+}
+
 /// Returns the session and whether it was started by this call.
 fn get_or_create_session(
     session_id: &str,
@@ -121,17 +141,27 @@ fn get_or_create_session(
     model_override: Option<AcpModelOverride>,
     resume_remote_id: Option<&str>,
 ) -> Result<(Arc<AcpSession>, bool), String> {
+    // A DSH stopped after a silent turn (or one that crashed) cannot take
+    // prompts; start a fresh one that resumes the same agent conversation.
+    let mut dead = None;
     {
         let mut guard = sessions()
             .lock()
             .map_err(|_| "session registry poisoned".to_string())?;
         if let Some(existing) = guard.get_mut(session_id) {
-            if existing.fingerprint == fingerprint {
+            if !existing.session.is_alive() {
+                dead = guard.remove(session_id);
+            } else if existing.fingerprint == fingerprint {
                 existing.last_used = Instant::now();
                 return Ok((Arc::clone(&existing.session), false));
             }
         }
     }
+    let dead_remote_id = dead
+        .as_ref()
+        .map(|entry| entry.session.remote_session_id().to_string());
+    drop(dead);
+    let resume_remote_id = resume_remote_id.or(dead_remote_id.as_deref());
     // Starting DSH can take seconds; do it without holding the registry so
     // other conversations are not blocked behind it.
     let session = Arc::new(
@@ -379,7 +409,12 @@ fn humanize_dsh_error(message: &str) -> String {
             message
         );
     }
-    if message.starts_with("transport: ") {
+    if message.contains("session/prompt idle timeout") {
+        return format!(
+            "DeepSeek Harness 长时间没有任何输出，Duckie 已取消本轮任务。若任务本身需要更久（例如长时间运行的 pipeline），可在设置 → AI assistant 中调大 “DSH idle timeout”（填 0 表示不限制），或设置环境变量 {IDLE_TIMEOUT_ENV}。\n\n原始错误：{message}"
+        );
+    }
+    if message.starts_with("transport: ") || message.starts_with("timeout: ") {
         return format!(
             "DeepSeek Harness 传输层返回了一个错误。请检查 DSH 日志、provider/model 配置和账户状态。\n\n原始错误：{}",
             message

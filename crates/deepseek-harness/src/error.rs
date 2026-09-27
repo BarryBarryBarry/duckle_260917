@@ -19,6 +19,9 @@ pub enum Error {
     #[error("json: {0}")]
     Json(String),
 
+    #[error("timeout: {0}")]
+    Timeout(String),
+
     #[error("cancelled")]
     Cancelled,
 }

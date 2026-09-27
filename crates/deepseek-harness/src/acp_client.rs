@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
@@ -16,6 +17,20 @@ const ACP_PROTOCOL_VERSION: u32 = 1;
 const ACP_MODEL_CONFIG_ID: &str = "model";
 /// How long to wait for DSH to write a finished turn to its session log.
 const SESSION_LOG_WAIT: Duration = Duration::from_millis(1500);
+/// Upper bound for requests that do not run an agent turn (initialize,
+/// session/new, set_config_option, ...).
+const CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
+/// `session/close` runs on drop, so a wedged DSH must not stall it.
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 });
+/// Default for how long a `session/prompt` turn may go without DSH sending
+/// anything at all. A turn only answers once every tool call has finished, so
+/// the limit is on silence, not on the turn's total length. Generous because
+/// a long-running tool (e.g. a pipeline run over bash) can be quiet for a while.
+pub const DEFAULT_PROMPT_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// After an idle timeout, how long DSH gets to honour `session/cancel` before
+/// its process is stopped.
+const CANCEL_GRACE: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 15 });
+const IDLE_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 pub struct DshLaunchSpec {
@@ -52,6 +67,7 @@ pub struct AcpSession {
     remote_session_id: String,
     resumed: bool,
     selected_model: Mutex<Option<AcpSelectedModel>>,
+    prompt_idle_timeout: Mutex<Option<Duration>>,
 }
 
 #[derive(Debug)]
@@ -59,6 +75,32 @@ struct ClientState {
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, mpsc::SyncSender<Result<Value>>>>,
     prompt_sink: Mutex<Option<PromptSink>>,
+    /// When DSH last wrote anything to stdout; drives the prompt idle timeout.
+    last_activity: Mutex<Instant>,
+    /// Set when Duckle stops DSH on purpose, so the resulting EOF is not
+    /// reported to the turn as a second, misleading "process exited" error.
+    stopping: AtomicBool,
+}
+
+impl ClientState {
+    fn touch(&self) {
+        if let Ok(mut last) = self.last_activity.lock() {
+            *last = Instant::now();
+        }
+    }
+
+    fn idle_for(&self) -> Duration {
+        self.last_activity
+            .lock()
+            .map(|last| last.elapsed())
+            .unwrap_or_default()
+    }
+
+    fn forget_pending(&self, id: u64) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.remove(&id);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -126,6 +168,8 @@ impl AcpSession {
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
             prompt_sink: Mutex::new(None),
+            last_activity: Mutex::new(Instant::now()),
+            stopping: AtomicBool::new(false),
         });
         spawn_reader_thread(Arc::clone(&state), Arc::clone(&stdin), stdout);
 
@@ -136,6 +180,7 @@ impl AcpSession {
             remote_session_id: String::new(),
             resumed: false,
             selected_model: Mutex::new(None),
+            prompt_idle_timeout: Mutex::new(Some(DEFAULT_PROMPT_IDLE_TIMEOUT)),
         };
 
         let init = session.request(
@@ -233,18 +278,22 @@ impl AcpSession {
             }
         });
 
-        let request_result = self.request(
-            "session/prompt",
-            json!({
-                "sessionId": self.remote_session_id,
-                "prompt": [
-                    {
-                        "type": "text",
-                        "text": prompt,
-                    }
-                ],
-            }),
-        );
+        let idle_timeout = self.prompt_idle_timeout.lock().ok().and_then(|t| *t);
+        self.state.touch();
+        let request_result = self
+            .send_request(
+                "session/prompt",
+                json!({
+                    "sessionId": self.remote_session_id,
+                    "prompt": [
+                        {
+                            "type": "text",
+                            "text": prompt,
+                        }
+                    ],
+                }),
+            )
+            .and_then(|(id, rx)| self.await_prompt(id, &rx, idle_timeout));
 
         match &request_result {
             Ok(resp) => {
@@ -306,11 +355,12 @@ impl AcpSession {
     }
 
     pub fn close(&self) -> Result<()> {
-        let _ = self.request(
+        let _ = self.request_with_timeout(
             "session/close",
             json!({
                 "sessionId": self.remote_session_id,
             }),
+            CLOSE_TIMEOUT,
         );
         Ok(())
     }
@@ -353,7 +403,47 @@ impl AcpSession {
             .unwrap_or(true)
     }
 
+    /// False once the DSH process has exited (or was stopped after a turn
+    /// went silent), meaning this session can no longer take prompts.
+    pub fn is_alive(&self) -> bool {
+        self.child
+            .lock()
+            .map(|mut child| matches!(child.try_wait(), Ok(None)))
+            .unwrap_or(false)
+    }
+
+    /// How long a `session/prompt` turn may go without any message from DSH
+    /// before it is cancelled. `None` waits indefinitely (DSH exiting still
+    /// ends the turn). Defaults to [`DEFAULT_PROMPT_IDLE_TIMEOUT`].
+    pub fn set_prompt_idle_timeout(&self, timeout: Option<Duration>) {
+        if let Ok(mut current) = self.prompt_idle_timeout.lock() {
+            *current = timeout.filter(|t| !t.is_zero());
+        }
+    }
+
     fn request(&self, method: &str, params: Value) -> Result<Value> {
+        self.request_with_timeout(method, params, CONTROL_REQUEST_TIMEOUT)
+    }
+
+    fn request_with_timeout(&self, method: &str, params: Value, timeout: Duration) -> Result<Value> {
+        let (id, rx) = self.send_request(method, params)?;
+        match rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(_) => {
+                self.state.forget_pending(id);
+                Err(Error::Timeout(format!(
+                    "ACP request timed out after {}s: {method}",
+                    timeout.as_secs()
+                )))
+            }
+        }
+    }
+
+    fn send_request(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<(u64, mpsc::Receiver<Result<Value>>)> {
         let id = self.state.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = mpsc::sync_channel(1);
         self.state
@@ -370,12 +460,64 @@ impl AcpSession {
         });
 
         if let Err(e) = self.write_json(&req) {
-            let _ = self.state.pending.lock().map(|mut p| p.remove(&id));
+            self.state.forget_pending(id);
             return Err(e);
         }
+        Ok((id, rx))
+    }
 
-        rx.recv_timeout(Duration::from_secs(600))
-            .map_err(|_| Error::Transport(format!("ACP request timed out: {method}")))?
+    /// Wait for a `session/prompt` answer for as long as DSH keeps talking;
+    /// only `idle_timeout` of total silence abandons the turn.
+    fn await_prompt(
+        &self,
+        id: u64,
+        rx: &mpsc::Receiver<Result<Value>>,
+        idle_timeout: Option<Duration>,
+    ) -> Result<Value> {
+        loop {
+            match rx.recv_timeout(IDLE_POLL) {
+                Ok(result) => return result,
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(Error::Transport("ACP response channel closed".into()));
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    let Some(limit) = idle_timeout else { continue };
+                    if self.state.idle_for() >= limit {
+                        return Err(self.abandon_prompt(id, rx, limit));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Cancel a silent turn so DSH does not keep working unseen, and stop the
+    /// process if it does not acknowledge the cancel.
+    fn abandon_prompt(
+        &self,
+        id: u64,
+        rx: &mpsc::Receiver<Result<Value>>,
+        limit: Duration,
+    ) -> Error {
+        let acknowledged = self.cancel().is_ok() && rx.recv_timeout(CANCEL_GRACE).is_ok();
+        self.state.forget_pending(id);
+        let outcome = if acknowledged {
+            "the turn was cancelled"
+        } else {
+            self.stop_process();
+            "DSH did not respond to cancel and was stopped"
+        };
+        Error::Timeout(format!(
+            "session/prompt idle timeout: no activity from DSH for {}s; {outcome}",
+            limit.as_secs()
+        ))
+    }
+
+    fn stop_process(&self) {
+        self.state.stopping.store(true, Ordering::SeqCst);
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 
     fn notify(&self, method: &str, params: Value) -> Result<()> {
@@ -410,11 +552,10 @@ impl AcpSession {
 
 impl Drop for AcpSession {
     fn drop(&mut self) {
-        let _ = self.close();
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-            let _ = child.wait();
+        if self.is_alive() {
+            let _ = self.close();
         }
+        self.stop_process();
     }
 }
 
@@ -439,6 +580,7 @@ fn spawn_reader_thread(
                 fail_all_pending(&state, Error::Transport("ACP process exited".into()));
                 return;
             }
+            state.touch();
             let msg: Value = match serde_json::from_str(line.trim()) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -710,6 +852,9 @@ fn fail_all_pending(state: &Arc<ClientState>, error: Error) {
             let _ = tx.send(Err(Error::Transport(error.to_string())));
         }
     }
+    if state.stopping.load(Ordering::SeqCst) {
+        return;
+    }
     on_send_prompt_event(
         state,
         HarnessEvent::Error {
@@ -872,5 +1017,114 @@ mod tests {
         assert!(!supports_resume(&json!({
             "agentCapabilities": { "sessionCapabilities": { "resume": null } }
         })));
+    }
+    /// A stand-in for `dsh --profile acp`: answers initialize and session/new,
+    /// then runs `turn` once the prompt arrives.
+    #[cfg(unix)]
+    fn fake_dsh(turn: &str) -> AcpSession {
+        let script = format!(
+            "read l; echo '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"protocolVersion\":1}}}}'\n\
+             read l; echo '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"sessionId\":\"fake\"}}}}'\n\
+             read l\n\
+             {turn}\n"
+        );
+        AcpSession::start(
+            DshLaunchSpec::new("sh", vec!["-c".into(), script]),
+            Path::new("."),
+            Path::new("duckle-mcp"),
+            None,
+        )
+        .expect("fake DSH handshake")
+    }
+
+    #[cfg(unix)]
+    const ANSWER_CLOSE: &str =
+        "read l; echo '{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{}}'; exec cat >/dev/null";
+
+    #[cfg(unix)]
+    fn run_prompt(session: &AcpSession) -> (Result<()>, Vec<HarnessEvent>) {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&events);
+        let result = session.prompt("hi", move |evt| sink.lock().unwrap().push(evt));
+        let events = events.lock().unwrap().clone();
+        (result, events)
+    }
+
+    #[cfg(unix)]
+    fn errors(events: &[HarnessEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                HarnessEvent::Error { message } => Some(message.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A turn used to be abandoned after a fixed 10 minutes even while DSH was
+    /// still streaming progress, so long agent runs "failed" yet kept going.
+    #[cfg(unix)]
+    #[test]
+    fn a_turn_that_keeps_streaming_outlives_the_idle_timeout() {
+        let turn = format!(
+            "for i in 1 2 3 4 5 6; do echo '{{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{{\"update\":{{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{{\"text\":\"x\"}}}}}}}}'; sleep 0.4; done\n\
+             echo '{{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{{\"stopReason\":\"end_turn\"}}}}'\n\
+             {ANSWER_CLOSE}"
+        );
+        let session = fake_dsh(&turn);
+        session.set_prompt_idle_timeout(Some(Duration::from_secs(1)));
+        let (result, events) = run_prompt(&session);
+        assert!(result.is_ok(), "streaming turn failed: {result:?}");
+        assert!(errors(&events).is_empty(), "{events:?}");
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, HarnessEvent::Done { reason } if reason == "end_turn")));
+        assert!(session.is_alive());
+    }
+
+    /// A silent turn is cancelled so DSH does not keep working unseen.
+    #[cfg(unix)]
+    #[test]
+    fn a_silent_turn_is_cancelled_after_the_idle_timeout() {
+        let turn = format!(
+            "read cancel; echo '{{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{{\"stopReason\":\"cancelled\"}}}}'\n\
+             {ANSWER_CLOSE}"
+        );
+        let session = fake_dsh(&turn);
+        session.set_prompt_idle_timeout(Some(Duration::from_secs(1)));
+        let (result, events) = run_prompt(&session);
+        let err = result.expect_err("silent turn should time out").to_string();
+        assert!(err.starts_with("timeout: session/prompt idle timeout"), "{err}");
+        assert!(err.contains("the turn was cancelled"), "{err}");
+        assert_eq!(errors(&events), vec![err]);
+        assert!(session.is_alive());
+        assert!(!session.is_busy());
+    }
+
+    /// When DSH ignores the cancel it is stopped, and the stop is not reported
+    /// as a second "process exited" error.
+    #[cfg(unix)]
+    #[test]
+    fn dsh_that_ignores_cancel_is_stopped() {
+        let session = fake_dsh("exec sleep 30");
+        session.set_prompt_idle_timeout(Some(Duration::from_secs(1)));
+        let (result, events) = run_prompt(&session);
+        let err = result.expect_err("silent turn should time out").to_string();
+        assert!(err.contains("was stopped"), "{err}");
+        assert_eq!(errors(&events), vec![err]);
+        assert!(!session.is_alive());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zero_idle_timeout_means_no_limit() {
+        let session = fake_dsh("echo '{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{}}'; exec cat >/dev/null");
+        session.set_prompt_idle_timeout(Some(Duration::ZERO));
+        assert_eq!(*session.prompt_idle_timeout.lock().unwrap(), None);
+        session.set_prompt_idle_timeout(Some(Duration::from_secs(90)));
+        assert_eq!(
+            *session.prompt_idle_timeout.lock().unwrap(),
+            Some(Duration::from_secs(90))
+        );
     }
 }

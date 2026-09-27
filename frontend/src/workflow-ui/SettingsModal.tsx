@@ -47,6 +47,8 @@ export function SettingsModal({
     const [aiHarnessCommand, setAiHarnessCommand] = useState('');
     const [aiHarnessProvider, setAiHarnessProvider] = useState('');
     const [aiHarnessModel, setAiHarnessModel] = useState('');
+    // Minutes a DSH turn may stay silent before Duckie cancels it (empty = default).
+    const [aiHarnessIdleMinutes, setAiHarnessIdleMinutes] = useState('');
     // #102: per-workspace total memory cap in MB (empty = engine default).
     const [memLimit, setMemLimit] = useState('');
     // #143: allow loading unsigned / community DuckDB extensions (off by default).
@@ -99,6 +101,9 @@ export function SettingsModal({
                 setAiHarnessCommand(ai.harnessCommand ?? '');
                 setAiHarnessProvider(ai.harnessProvider ?? '');
                 setAiHarnessModel(ai.harnessModel ?? '');
+                setAiHarnessIdleMinutes(
+                    ai.harnessIdleTimeoutSecs != null ? String(ai.harnessIdleTimeoutSecs / 60) : '',
+                );
                 setMemLimit(mem != null ? String(mem) : '');
                 setContextFile(ic ?? '');
                 setAllowUnsigned(unsigned ?? false);
@@ -133,6 +138,7 @@ export function SettingsModal({
                 harnessCommand: aiHarnessCommand.trim() || null,
                 harnessProvider: aiHarnessProvider.trim() || null,
                 harnessModel: aiHarnessModel.trim() || null,
+                harnessIdleTimeoutSecs: idleMinutesToSecs(aiHarnessIdleMinutes),
             });
             const mb = parseInt(memLimit.trim(), 10);
             const memMb = Number.isFinite(mb) && mb > 0 ? mb : null;
@@ -471,6 +477,20 @@ export function SettingsModal({
                                     Set both provider and model to make Duckle call ACP <code>session/set_config_option</code>
                                     after <code>session/new</code>. Leave both blank to use the ACP profile default.
                                 </p>
+                                <input
+                                    type="number"
+                                    min={0}
+                                    value={aiHarnessIdleMinutes}
+                                    onChange={e => setAiHarnessIdleMinutes(e.target.value)}
+                                    placeholder="DSH idle timeout in minutes (default 30, 0 = no limit)"
+                                    disabled={!loaded || !workspace}
+                                    style={aiInput}
+                                />
+                                <p style={help}>
+                                    A Duckie turn keeps waiting while DSH is still streaming progress; it is cancelled only
+                                    after this many minutes without any output from DSH. Leave blank for the default
+                                    (or <code>DUCKLE_DSH_IDLE_TIMEOUT_SECS</code> if set), 0 to never time out.
+                                </p>
                             </>
                         ) : null}
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
@@ -661,6 +681,13 @@ export function SettingsModal({
         </div>,
         document.body
     );
+}
+
+/** Blank or invalid = use the default; 0 = no limit. */
+function idleMinutesToSecs(minutes: string): number | null {
+    const n = Number(minutes.trim());
+    if (minutes.trim() === '' || !Number.isFinite(n) || n < 0) return null;
+    return Math.round(n * 60);
 }
 
 // Module-level so its identity is stable across SettingsModal renders; declaring it
