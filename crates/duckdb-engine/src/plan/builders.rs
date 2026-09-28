@@ -10162,6 +10162,23 @@ fn staged_write(options: &mut Vec<String>, partitioned: bool) {
     }
 }
 
+/// The compression a staged CSV or JSON COPY has to be told about.
+///
+/// DuckDB takes it from the target's extension - exact-case `.gz` or `.zst`,
+/// measured against 1.5.5 (`.gzip`, `.zstd` and `.GZ` all write plain text) -
+/// and a staged target ends in `.duckle-partial`. Without this an `out.csv.gz`
+/// was written as plain text and published under the `.gz` name.
+fn staged_compression(path: &str) -> Option<&'static str> {
+    let dest = path.strip_suffix(STAGED_SUFFIX)?;
+    if dest.ends_with(".gz") {
+        Some("gzip")
+    } else if dest.ends_with(".zst") {
+        Some("zstd")
+    } else {
+        None
+    }
+}
+
 pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
     let path = string_prop(props, "path").unwrap_or_default();
     // The sink form writes `writeHeader`; the source uses `hasHeader`.
@@ -10179,6 +10196,9 @@ pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
     ];
     if !null_val.is_empty() {
         options.push(format!("NULLSTR '{}'", sql_escape(&null_val)));
+    }
+    if let Some(c) = staged_compression(&path) {
+        options.push(format!("COMPRESSION '{c}'"));
     }
     let partition = columns_from_props(props, "partitionBy").unwrap_or_default();
     if !partition.is_empty() {
@@ -10320,10 +10340,11 @@ pub(crate) fn build_json_sink(props: &JsonValue, from_view: &str) -> String {
         .map(|f| f.eq_ignore_ascii_case("array"))
         .unwrap_or(false);
     format!(
-        "COPY (SELECT * FROM {}) TO '{}' (FORMAT JSON, ARRAY {}, USE_TMP_FILE true)",
+        "COPY (SELECT * FROM {}) TO '{}' (FORMAT JSON, ARRAY {}, USE_TMP_FILE true{})",
         quote_ident(from_view),
         sql_escape(&path),
-        if array { "true" } else { "false" }
+        if array { "true" } else { "false" },
+        staged_compression(&path).map(|c| format!(", COMPRESSION '{c}'")).unwrap_or_default()
     )
 }
 

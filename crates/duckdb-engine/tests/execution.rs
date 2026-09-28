@@ -10193,6 +10193,54 @@ fn a_published_output_leaves_no_staging_file_behind() {
     }
 }
 
+/// A sink whose path names a compression writes it compressed. DuckDB picks the
+/// compression of a CSV or JSON COPY from the target's extension, and the staged
+/// target's extension is `.duckle-partial`, so an `out.csv.gz` was written as
+/// plain text and published under the `.gz` name.
+#[test]
+fn a_compressed_output_is_published_compressed() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n");
+
+    for per_stage in [false, true] {
+        for (component, file, magic, reader) in [
+            ("snk.csv", "o.csv.gz", &[0x1f_u8, 0x8b][..], "read_csv_auto"),
+            ("snk.csv", "o.csv.zst", &[0x28, 0xb5, 0x2f, 0xfd][..], "read_csv_auto"),
+            ("snk.jsonl", "o.jsonl.gz", &[0x1f, 0x8b][..], "read_json_auto"),
+        ] {
+            let dir = tmp.path().join(format!("out{per_stage}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            let out = out_path(&dir, file);
+            let sink = node("k", component, json!({ "path": out }));
+            let d = if per_stage {
+                doc(
+                    json!([
+                        node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                        node("w", "ctl.wait", json!({ "duration": 1, "unit": "milliseconds" })),
+                        sink,
+                    ]),
+                    json!([main_edge("e1", "s", "w"), main_edge("e2", "w", "k")]),
+                )
+            } else {
+                doc(
+                    json!([node("s", "src.csv", json!({ "path": csv, "hasHeader": true })), sink]),
+                    json!([main_edge("e1", "s", "k")]),
+                )
+            };
+            let r = engine.execute_pipeline(&d);
+            assert_eq!(r.status, "ok", "{file} (per_stage {per_stage}): {:?}", r.error);
+            let bytes = std::fs::read(&out).unwrap();
+            assert!(
+                bytes.starts_with(magic),
+                "{file} (per_stage {per_stage}) was not written compressed: starts {:02x?}",
+                &bytes[..bytes.len().min(8)]
+            );
+            assert_eq!(count(&format!("{reader}('{out}')")), 2, "{file} (per_stage {per_stage})");
+        }
+    }
+}
+
 /// An encoding DuckDB accepts and reads wrongly is refused, not run.
 ///
 /// A wrong SPELLING is a hard "does not support the encoding" error, which is
