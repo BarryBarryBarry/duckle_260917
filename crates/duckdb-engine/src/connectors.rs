@@ -16167,33 +16167,36 @@ impl DuckdbEngine {
                     Some(dest)
                 };
                 let (rows, response): (Vec<JsonValue>, JsonValue) = match spec.response_format {
-                    RestResponseFormat::Json => {
-                        let response: JsonValue =
-                            serde_json::from_str(&page_body).map_err(|e| {
-                                EngineError::Query(format!("REST response not JSON: {}", e))
-                            })?;
-                        // Locate the rows: the whole response when no responsePath
-                        // is set, else the JSON pointer target. A located ARRAY is
-                        // the row set; a single OBJECT is one row (issue #13: APIs
-                        // like open-meteo return one JSON object, which previously
-                        // yielded zero rows + an empty file with no error). Scalars
-                        // / null / missing pointer are genuinely empty.
-                        let rows = {
-                            let located = if spec.response_path.is_empty() {
-                                Some(&response)
-                            } else {
-                                response.pointer(&spec.response_path)
-                            };
-                            match located {
-                                Some(JsonValue::Array(a)) => a.clone(),
-                                // An empty object means "no data" (like []), not a
-                                // single empty row.
-                                Some(JsonValue::Object(o)) if o.is_empty() => Vec::new(),
-                                Some(v @ JsonValue::Object(_)) => vec![v.clone()],
-                                _ => Vec::new(),
+                    RestResponseFormat::Json | RestResponseFormat::EventStream => {
+                        let documents = if spec.response_format == RestResponseFormat::EventStream {
+                            sse_documents(&page_body)?
+                        } else {
+                            match serde_json::from_str::<JsonValue>(&page_body) {
+                                Ok(response) => vec![response],
+                                // #365: the server says it sent events, and the
+                                // body is not one JSON document, so read the events.
+                                Err(_)
+                                    if page_content_type.as_deref().is_some_and(|t| {
+                                        t.trim().to_ascii_lowercase().starts_with("text/event-stream")
+                                    }) =>
+                                {
+                                    sse_documents(&page_body)?
+                                }
+                                Err(e) => {
+                                    return Err(EngineError::Query(format!(
+                                        "REST response not JSON: {}",
+                                        e
+                                    )))
+                                }
                             }
                         };
-                        (rows, response)
+                        let rows = documents
+                            .iter()
+                            .flat_map(|d| rest_located_rows(d, &spec.response_path))
+                            .collect();
+                        // Pagination reads the last document, which for a single
+                        // JSON response is that response.
+                        (rows, documents.into_iter().last().unwrap_or(JsonValue::Null))
                     }
                     RestResponseFormat::Xml => {
                         let rows =
@@ -19295,6 +19298,109 @@ fn odbc_type_to_duckdb(dt: &odbc_api::DataType) -> Option<String> {
         D::Time { .. } => Some("TIME".into()),
         D::Timestamp { .. } => Some("TIMESTAMP".into()),
         _ => None,
+    }
+}
+
+/// The rows in one REST response document: the whole document when no
+/// responsePath is set, else the JSON pointer target. A located ARRAY is the row
+/// set; a single OBJECT is one row (issue #13: APIs like open-meteo return one
+/// JSON object, which previously yielded zero rows + an empty file with no
+/// error). Scalars / null / missing pointer are genuinely empty.
+fn rest_located_rows(response: &JsonValue, response_path: &str) -> Vec<JsonValue> {
+    let located = if response_path.is_empty() {
+        Some(response)
+    } else {
+        response.pointer(response_path)
+    };
+    match located {
+        Some(JsonValue::Array(a)) => a.clone(),
+        // An empty object means "no data" (like []), not a single empty row.
+        Some(JsonValue::Object(o)) if o.is_empty() => Vec::new(),
+        Some(v @ JsonValue::Object(_)) => vec![v.clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// #365: the JSON documents in a server-sent-events body, one per event.
+///
+/// Read as the HTML spec's event-stream format: a line ends in CRLF, LF or CR;
+/// a blank line ends an event; a line starting `:` is a comment; each `data:`
+/// line adds to the event's data, one leading space dropped and several lines
+/// joined by a newline; `event`, `id` and `retry` say nothing about the rows.
+/// An event with no data, such as a ping, is not a document. Unlike a live
+/// stream, this body has ended, so a last event the server did not close with a
+/// blank line is still read - if it was cut short, its JSON fails to parse and
+/// says so, rather than the event being dropped.
+fn sse_documents(body: &str) -> Result<Vec<JsonValue>, EngineError> {
+    let body = body.strip_prefix('\u{feff}').unwrap_or(body).replace("\r\n", "\n").replace('\r', "\n");
+    let mut payloads: Vec<String> = Vec::new();
+    let mut data: Option<String> = None;
+    for line in body.split('\n') {
+        if line.is_empty() {
+            payloads.extend(data.take());
+            continue;
+        }
+        if line.starts_with(':') {
+            continue;
+        }
+        let (field, value) = match line.split_once(':') {
+            Some((f, v)) => (f, v.strip_prefix(' ').unwrap_or(v)),
+            None => (line, ""),
+        };
+        if field == "data" {
+            match data.as_mut() {
+                Some(d) => {
+                    d.push('\n');
+                    d.push_str(value);
+                }
+                None => data = Some(value.to_string()),
+            }
+        }
+    }
+    payloads.extend(data);
+    payloads
+        .iter()
+        .filter(|p| !p.trim().is_empty())
+        .enumerate()
+        .map(|(i, p)| {
+            serde_json::from_str(p).map_err(|e| {
+                EngineError::Query(format!(
+                    "REST event-stream event {} is not JSON ({}): {}",
+                    i + 1,
+                    e,
+                    p.chars().take(200).collect::<String>()
+                ))
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod sse_tests {
+    use super::sse_documents;
+    use serde_json::json;
+
+    #[test]
+    fn each_event_is_one_document_and_comments_and_pings_are_not() {
+        let body = "\u{feff}: hello\r\nevent: message\r\nid: 7\r\ndata: {\"a\": 1}\r\n\r\n\
+                    event: ping\n\ndata:{\"a\":\ndata: 2}\n\ndata: {\"a\": 3}\r\rdata\n\n";
+        assert_eq!(
+            sse_documents(body).unwrap(),
+            vec![json!({"a": 1}), json!({"a": 2}), json!({"a": 3})]
+        );
+    }
+
+    /// The body has ended, so a last event without its blank line is read.
+    #[test]
+    fn a_last_event_without_its_blank_line_is_read() {
+        assert_eq!(sse_documents("data: [1,2]").unwrap(), vec![json!([1, 2])]);
+        assert_eq!(sse_documents("").unwrap(), Vec::<serde_json::Value>::new());
+    }
+
+    #[test]
+    fn data_that_is_not_json_is_named() {
+        let err = sse_documents("data: {}\n\ndata: [DONE]\n\n").unwrap_err().to_string();
+        assert!(err.contains("event 2") && err.contains("[DONE]"), "{err}");
     }
 }
 

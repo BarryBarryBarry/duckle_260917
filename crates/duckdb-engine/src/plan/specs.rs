@@ -1856,6 +1856,12 @@ pub enum RestResponseFormat {
     /// Pagination is forced to None for XML (SOAP doesn't define a
     /// cross-envelope pagination convention).
     Xml,
+    /// #365: server-sent events (`text/event-stream`). Each event's `data:` is
+    /// one JSON document and `response_path` is walked in each, so a stream of
+    /// records is a row per event and a JSON-RPC answer is the event that
+    /// carries the result. A JSON response labelled `text/event-stream` is
+    /// read this way too, without the format being set.
+    EventStream,
 }
 
 /// src.rest: generic HTTP-API source. Fetches a URL, parses the JSON

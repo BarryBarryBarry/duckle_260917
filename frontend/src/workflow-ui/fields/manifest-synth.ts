@@ -5160,8 +5160,9 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                           options: [
                               { label: 'JSON', value: 'json' },
                               { label: 'XML', value: 'xml' },
+                              { label: 'Server-sent events', value: 'sse' },
                           ],
-                          description: 'Pick XML for an API that answers in XML rather than JSON.',
+                          description: 'Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event\'s data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too.',
                       }] as Field[])
                     : []),
                 ...(comp.id === 'src.soap'

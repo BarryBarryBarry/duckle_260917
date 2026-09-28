@@ -6112,6 +6112,8 @@ fn build_stage(
             || string_prop(&props, "responseFormat").as_deref() == Some("xml")
         {
             RestResponseFormat::Xml
+        } else if string_prop(&props, "responseFormat").as_deref() == Some("sse") {
+            RestResponseFormat::EventStream
         } else {
             RestResponseFormat::Json
         };
@@ -6121,7 +6123,7 @@ fn build_stage(
             // set only that field located no rows at all. Honoured as an alias
             // rather than ignored, so those pipelines start working.
             .or_else(|| string_prop(&props, "jsonPath"))
-            .map(|s| json_pointer_path(&s, response_format == RestResponseFormat::Json))
+            .map(|s| json_pointer_path(&s, response_format != RestResponseFormat::Xml))
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| {
                 if component_id == "src.odata" {

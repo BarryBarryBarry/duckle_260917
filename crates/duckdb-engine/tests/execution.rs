@@ -9334,6 +9334,19 @@ fn serve_once_json(
     std::sync::Arc<std::sync::Mutex<String>>,
     std::thread::JoinHandle<()>,
 ) {
+    serve_once_typed("application/json", body)
+}
+
+/// [`serve_once_json`], answering with `content_type`.
+#[allow(clippy::type_complexity)]
+fn serve_once_typed(
+    content_type: &'static str,
+    body: &'static [u8],
+) -> (
+    u16,
+    std::sync::Arc<std::sync::Mutex<String>>,
+    std::thread::JoinHandle<()>,
+) {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::time::Duration;
@@ -9356,7 +9369,8 @@ fn serve_once_json(
             }
             *cap.lock().unwrap() = String::from_utf8_lossy(&buf).to_string();
             let resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                content_type,
                 body.len()
             );
             let _ = stream.write_all(resp.as_bytes());
@@ -9367,6 +9381,85 @@ fn serve_once_json(
         }
     });
     (port, captured, handle)
+}
+
+/// #365: a JSON-RPC endpoint that answers as server-sent events. Each event's
+/// `data:` is one JSON document and `responsePath` is applied to each, so the
+/// first event's empty `result` contributes no row and the last one's does.
+/// Read with no response format set, because the server says what it sent.
+#[test]
+fn src_rest_reads_a_server_sent_event_stream() {
+    let engine = engine_or_skip!();
+    let body = b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"company_id\\\":3120}\"}]}}\n\n";
+    let (port, _captured, handle) = serve_once_typed("text/event-stream", body);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "whoami.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("w", "src.rest", json!({
+                "url": format!("http://127.0.0.1:{port}/mcp"),
+                "method": "POST",
+                "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\"}",
+                "responsePath": "/result",
+                "paginationType": "none",
+            })),
+            node("k", "snk.jsonl", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "w", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        std::fs::read_to_string(&out).unwrap().trim(),
+        r#"{"content":[{"type":"text","text":"{\"company_id\":3120}"}]}"#
+    );
+}
+
+/// #365: `responseFormat: sse` reads events from a server that does not label
+/// them as such; every event is a row, and a `data:` spread over several lines
+/// is one document.
+#[test]
+fn src_rest_sse_format_makes_every_event_a_row() {
+    let engine = engine_or_skip!();
+    let body = b": keep-alive\r\nid: 1\r\ndata: {\"n\": 1}\r\n\r\ndata: {\"n\":\r\ndata:  2}\r\n\r\nevent: ping\r\n\r\ndata: {\"n\": 3}";
+    let (port, _captured, handle) = serve_once_typed("text/plain", body);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "events.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("e", "src.rest", json!({
+                "url": format!("http://127.0.0.1:{port}/feed"),
+                "responseFormat": "sse",
+            })),
+            node("k", "snk.csv", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "e", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(std::fs::read_to_string(&out).unwrap().replace("\r\n", "\n"), "n\n1\n2\n3\n");
+}
+
+/// #365: an event whose data is not JSON fails the run and says which one,
+/// rather than dropping it.
+#[test]
+fn src_rest_sse_event_that_is_not_json_is_named() {
+    let engine = engine_or_skip!();
+    let body = b"data: {\"n\": 1}\n\ndata: [DONE]\n\n";
+    let (port, _captured, handle) = serve_once_typed("text/event-stream", body);
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "never.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("e", "src.rest", json!({ "url": format!("http://127.0.0.1:{port}/feed") })),
+            node("k", "snk.csv", json!({ "path": out })),
+        ]),
+        json!([main_edge("e1", "e", "k")]),
+    ));
+    let _ = handle.join();
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("event 2") && err.contains("[DONE]"), "{err}");
 }
 
 #[test]
