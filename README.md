@@ -3658,7 +3658,7 @@ Database sinks support an optional **dead-letter (validate-before-insert)** step
 | **Retry** | Per-stage retry policy (configure on Advanced tab) |
 | **Log Message** | Emit an info log line (`{rows}` = upstream count), pass rows through (`ctl.log`) |
 | **Warn** | Emit a warning log line, pass rows through (`ctl.warn`) |
-| **Die / Fail** | Stop the run with a message: always, only when the input has rows, or only when empty (`ctl.die`) |
+| **Die / Fail** | Stop the run with a message: always, only when the input has rows, or only when empty (`ctl.die`). The message takes `{rows}` for the input's row count and `{column}` for that column of the first input row, so it can say why the run stopped (`identity check failed: {reason}`); a name that is not a column stays as typed |
 | **Schedule** | Cron / interval / file-watch triggers via the orchestration crate |
 
 A run variable is read as a value wherever the SQL of a later step names it: on its

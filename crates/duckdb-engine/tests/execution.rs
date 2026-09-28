@@ -15078,6 +15078,36 @@ fn ctl_die_has_rows_guards_a_reject_branch() {
     );
 }
 
+/// #366: a die message says why the run went red, from the offending row's own
+/// columns. `{rows}` keeps its meaning; a name that is not a column stays as typed.
+#[test]
+fn ctl_die_message_reads_the_offending_rows_columns() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(
+        tmp.path(),
+        "in.csv",
+        "fail_code,reason\nsubset,store [1] not visible\nother,second row\n",
+    );
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("die", "ctl.die", json!({
+                "condition": "has-rows",
+                "message": "identity check failed: {reason} (fail_code={fail_code}, rows={rows}, {nope})"
+            })),
+        ]),
+        json!([main_edge("e1", "s", "die")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "error", "ctl.die should have failed the run");
+    let err = r.error.unwrap_or_default();
+    assert!(
+        err.contains("identity check failed: store [1] not visible (fail_code=subset, rows=2, {nope})"),
+        "die message: {err}"
+    );
+}
+
 #[test]
 fn parallelize_runs_independent_branches() {
     // Parallelize: ctl.parallelize snapshots its upstream once, then runs the

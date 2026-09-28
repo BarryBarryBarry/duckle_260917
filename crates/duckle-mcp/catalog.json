@@ -43473,7 +43473,7 @@
                 "kind": "text",
                 "required": true,
                 "placeholder": "Rejected rows present - failing the run",
-                "description": "Use {rows} for the upstream row count."
+                "description": "Use {rows} for the upstream row count, and {column} for that column of the first input row, e.g. {reason}. A name that is not a column stays as typed."
               },
               {
                 "key": "condition",

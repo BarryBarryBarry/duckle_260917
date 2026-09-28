@@ -2421,7 +2421,19 @@ impl DuckdbEngine {
                         _ => true, // "always"
                     };
                     if fire {
-                        let msg = message.replace("{rows}", &rows.to_string());
+                        // #366: the first offending row, read only when the
+                        // message names something other than {rows}.
+                        let first = match (rows > 0, stage.from.as_deref()) {
+                            (true, Some(view)) if message.replace("{rows}", "").contains('{') => self
+                                .run_rows(
+                                    Some(&db_path),
+                                    &format!("SELECT * FROM {} LIMIT 1", plan::quote_ident(view)),
+                                )
+                                .ok()
+                                .and_then(|r| r.into_iter().next()),
+                            _ => None,
+                        };
+                        let msg = die_message(message, rows, first.as_ref());
                         on_event(PipelineEvent::Log {
                             node_id: stage.node_id.clone(),
                             level: "error".into(),
@@ -5502,6 +5514,74 @@ fn allow_unsigned_extensions() -> bool {
     policy::load(ws.as_deref())
         .map(|p| p.allow_unsigned_extensions)
         .unwrap_or(false)
+}
+
+/// #366: a ctl.die message with its placeholders filled.
+///
+/// `{rows}` is the input's row count, as it always was; `{name}` is that
+/// column of `first`, the first offending row, so the message can say why the
+/// run went red rather than only how many rows did. A name that is not a column
+/// stays as typed. One pass, so a value that itself contains `{...}` is written
+/// out as it is rather than expanded again.
+fn die_message(template: &str, rows: u64, first: Option<&JsonValue>) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find(['{', '}']).filter(|&i| after.as_bytes()[i] == b'}') else {
+            out.push('{');
+            rest = after;
+            continue;
+        };
+        let name = &after[..close];
+        match (name, first.and_then(|r| r.get(name))) {
+            ("rows", _) => out.push_str(&rows.to_string()),
+            (_, Some(JsonValue::String(s))) => out.push_str(s),
+            (_, Some(JsonValue::Null)) => out.push_str("NULL"),
+            (_, Some(v)) => out.push_str(&v.to_string()),
+            (_, None) => {
+                out.push('{');
+                out.push_str(name);
+                out.push('}');
+            }
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod die_message_tests {
+    use super::die_message;
+    use serde_json::json;
+
+    #[test]
+    fn a_placeholder_names_a_column_of_the_first_offending_row() {
+        let row = json!({ "reason": "store [1] not visible", "fail_code": "subset", "n": 3, "gone": null });
+        assert_eq!(
+            die_message("failed: {reason} (fail_code={fail_code}, n={n}, gone={gone}, rows={rows})", 2, Some(&row)),
+            "failed: store [1] not visible (fail_code=subset, n=3, gone=NULL, rows=2)"
+        );
+    }
+
+    /// `{rows}` keeps its meaning even when a column shares the name, a name
+    /// that is not a column stays as typed, and a value is not expanded again.
+    #[test]
+    fn rows_unknown_names_and_substituted_values_are_left_alone() {
+        let row = json!({ "rows": "column value", "reason": "{rows} {fail_code}" });
+        assert_eq!(
+            die_message("{rows} | {reason} | {nope} | { | {unclosed", 7, Some(&row)),
+            "7 | {rows} {fail_code} | {nope} | { | {unclosed"
+        );
+    }
+
+    /// With no offending row (a no-rows die) only `{rows}` has a value.
+    #[test]
+    fn without_a_row_only_rows_is_filled() {
+        assert_eq!(die_message("empty: {rows} {reason}", 0, None), "empty: 0 {reason}");
+    }
 }
 
 /// Run a read-only query via the duckdb CLI in `-json` mode and return the
