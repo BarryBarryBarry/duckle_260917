@@ -9915,7 +9915,9 @@ fn append_refusal(component_id: &str, props: &JsonValue) -> Option<&'static str>
     if !crate::is_local_path(&path) || path.contains(['*', '?', '[', '{']) {
         return Some("only a single local file can be appended to");
     }
-    if path.ends_with(".gz") || path.ends_with(".zst") {
+    let compressed = string_prop(props, "compression")
+        .is_some_and(|c| matches!(c.trim().to_ascii_lowercase().as_str(), "gzip" | "zstd"));
+    if compressed || path.ends_with(".gz") || path.ends_with(".zst") {
         return Some("a compressed file cannot be appended to line by line");
     }
     if !columns_from_props(props, "partitionBy").unwrap_or_default().is_empty() {
@@ -10007,10 +10009,12 @@ pub(crate) fn build_sink_sql(
     match component_id {
         "snk.csv" => {
             refuse_unimplemented_file_mode(component_id, props)?;
+            refuse_unwritable_compression(component_id, props)?;
             Ok(build_csv_sink(&staged_props(component_id, props), from_view))
         }
         "snk.tsv" => {
             refuse_unimplemented_file_mode(component_id, props)?;
+            refuse_unwritable_compression(component_id, props)?;
             let mut p = staged_props(component_id, props);
             if let Some(obj) = p.as_object_mut() {
                 obj.insert("delimiter".into(), JsonValue::String("\t".into()));
@@ -10023,6 +10027,7 @@ pub(crate) fn build_sink_sql(
         }
         "snk.json" | "snk.jsonl" => {
             refuse_unimplemented_file_mode(component_id, props)?;
+            refuse_unwritable_compression(component_id, props)?;
             Ok(build_json_sink(&staged_props(component_id, props), from_view))
         }
         "snk.s3" | "snk.gcs" | "snk.azureblob"
@@ -10115,6 +10120,15 @@ pub(crate) fn build_cloud_sink(
     if let Some(obj) = local.as_object_mut() {
         obj.insert("path".into(), JsonValue::String(path.clone()));
         obj.remove("partitionBy");
+    }
+    // Compression is a Parquet setting on the cloud forms, and snk.s3 saves
+    // zstd on every node it makes, so the CSV and JSON builders - which read it
+    // now - must not see it here: an object nobody asked to compress stays
+    // plain, and a name ending .gz or .zst still compresses it.
+    if chosen != "parquet" {
+        if let Some(obj) = local.as_object_mut() {
+            obj.remove("compression");
+        }
     }
     Ok(match chosen.as_str() {
         "csv" => build_csv_sink(&local, from_view),
@@ -10231,6 +10245,33 @@ fn staged_compression(path: &str) -> Option<&'static str> {
     }
 }
 
+/// The compression a CSV or JSON sink writes: Gzip or Zstd when its form says
+/// so, whatever the file is called; otherwise what the name asks for, which
+/// DuckDB reads itself from an unstaged path and `staged_compression` supplies
+/// for a staged one.
+fn text_compression(props: &JsonValue, path: &str) -> Option<&'static str> {
+    match string_prop(props, "compression").map(|c| c.trim().to_ascii_lowercase()).as_deref() {
+        Some("gzip") => Some("gzip"),
+        Some("zstd") => Some("zstd"),
+        _ => staged_compression(path),
+    }
+}
+
+/// A CSV or JSON file can be written plain, gzip or zstd. Snappy and LZ4 are
+/// Parquet codecs the form used to offer here too, and nothing read the choice,
+/// so a pipeline that picked one got a plain file; refused now rather than
+/// still ignored.
+fn refuse_unwritable_compression(component_id: &str, props: &JsonValue) -> Result<(), EngineError> {
+    let c = string_prop(props, "compression").unwrap_or_default();
+    match c.trim().to_ascii_lowercase().as_str() {
+        "" | "none" | "uncompressed" | "auto" | "gzip" | "zstd" => Ok(()),
+        other => Err(EngineError::Unsupported(format!(
+            "{component_id}: compression '{other}' cannot be written for a CSV or JSON file - pick \
+             gzip, zstd or none"
+        ))),
+    }
+}
+
 /// Whether a CSV sink writes a header line. The sink form writes
 /// `writeHeader`; the source uses `hasHeader`. The COPY and an append (#367),
 /// which leaves the header out when the file already has one, both ask here.
@@ -10255,7 +10296,7 @@ pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
     if !null_val.is_empty() {
         options.push(format!("NULLSTR '{}'", sql_escape(&null_val)));
     }
-    if let Some(c) = staged_compression(&path) {
+    if let Some(c) = text_compression(props, &path) {
         options.push(format!("COMPRESSION '{c}'"));
     }
     let partition = columns_from_props(props, "partitionBy").unwrap_or_default();
@@ -10402,7 +10443,7 @@ pub(crate) fn build_json_sink(props: &JsonValue, from_view: &str) -> String {
         quote_ident(from_view),
         sql_escape(&path),
         if array { "true" } else { "false" },
-        staged_compression(&path).map(|c| format!(", COMPRESSION '{c}'")).unwrap_or_default()
+        text_compression(props, &path).map(|c| format!(", COMPRESSION '{c}'")).unwrap_or_default()
     )
 }
 

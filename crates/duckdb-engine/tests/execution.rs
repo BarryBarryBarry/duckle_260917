@@ -10425,6 +10425,53 @@ fn a_compressed_output_is_published_compressed() {
     }
 }
 
+/// The Compression a TSV or JSON sink's form offers is the one it writes,
+/// whatever the file is called, on both execution paths; None leaves it to the
+/// file name. The dropdown was offered and no builder read it.
+#[test]
+fn a_compression_the_form_sets_is_written_on_both_paths() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n");
+
+    for per_stage in [false, true] {
+        for (component, file, compression, magic, reader) in [
+            ("snk.tsv", "o.tsv", "gzip", &[0x1f_u8, 0x8b][..], "read_csv('{p}', compression = 'gzip', delim = '\t', header = true)"),
+            ("snk.jsonl", "o.jsonl", "zstd", &[0x28, 0xb5, 0x2f, 0xfd][..], "read_json_auto('{p}', compression = 'zstd')"),
+            ("snk.json", "o.json.gz", "none", &[0x1f, 0x8b][..], "read_json_auto('{p}')"),
+        ] {
+            let dir = tmp.path().join(format!("set{per_stage}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            let out = out_path(&dir, file);
+            let sink = node("k", component, json!({ "path": out, "compression": compression }));
+            let d = if per_stage {
+                doc(
+                    json!([
+                        node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                        node("w", "ctl.wait", json!({ "duration": 1, "unit": "milliseconds" })),
+                        sink,
+                    ]),
+                    json!([main_edge("e1", "s", "w"), main_edge("e2", "w", "k")]),
+                )
+            } else {
+                doc(
+                    json!([node("s", "src.csv", json!({ "path": csv, "hasHeader": true })), sink]),
+                    json!([main_edge("e1", "s", "k")]),
+                )
+            };
+            let r = engine.execute_pipeline(&d);
+            assert_eq!(r.status, "ok", "{file} (per_stage {per_stage}): {:?}", r.error);
+            let bytes = std::fs::read(&out).unwrap();
+            assert!(
+                bytes.starts_with(magic),
+                "{file} {compression} (per_stage {per_stage}) starts {:02x?}",
+                &bytes[..bytes.len().min(8)]
+            );
+            assert_eq!(count(&reader.replace("{p}", &out)), 2, "{file} (per_stage {per_stage})");
+        }
+    }
+}
+
 /// An encoding DuckDB accepts and reads wrongly is refused, not run.
 ///
 /// A wrong SPELLING is a hard "does not support the encoding" error, which is

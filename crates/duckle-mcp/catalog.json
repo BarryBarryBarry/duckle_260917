@@ -30575,12 +30575,9 @@
                   {
                     "label": "Zstd",
                     "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
-                ]
+                ],
+                "description": "Gzip or Zstd compresses the file whatever it is called. None leaves it to the name: a path ending .gz or .zst is still compressed. A compressed file cannot be appended to."
               }
             ]
           },
@@ -30776,12 +30773,9 @@
                   {
                     "label": "Zstd",
                     "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
-                ]
+                ],
+                "description": "Gzip or Zstd compresses the file whatever it is called. None leaves it to the name: a path ending .gz or .zst is still compressed. A compressed file cannot be appended to."
               }
             ]
           },
@@ -30935,12 +30929,9 @@
                   {
                     "label": "Zstd",
                     "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
-                ]
+                ],
+                "description": "Gzip or Zstd compresses the file whatever it is called. None leaves it to the name: a path ending .gz or .zst is still compressed. A compressed file cannot be appended to."
               }
             ]
           },
@@ -31131,30 +31122,6 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
-                  }
-                ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
                 ]
               }
@@ -31521,30 +31488,6 @@
                     "value": "overwrite"
                   }
                 ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
-                  }
-                ]
               }
             ]
           }
@@ -31616,30 +31559,6 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
-                  }
-                ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
                 ]
               }
@@ -31771,30 +31690,6 @@
                     "value": "overwrite"
                   }
                 ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
-                  }
-                ]
               }
             ]
           }
@@ -31866,30 +31761,6 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
-                  }
-                ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
                 ]
               }
@@ -37709,7 +37580,7 @@
               },
               {
                 "key": "compression",
-                "label": "Compression",
+                "label": "Compression (Parquet)",
                 "kind": "select",
                 "defaultValue": "none",
                 "options": [
@@ -37729,7 +37600,11 @@
                     "label": "Snappy",
                     "value": "snappy"
                   }
-                ]
+                ],
+                "visibleWhen": {
+                  "key": "format",
+                  "equals": "parquet"
+                }
               },
               {
                 "key": "partitionBy",
@@ -37939,7 +37814,7 @@
               },
               {
                 "key": "compression",
-                "label": "Compression",
+                "label": "Compression (Parquet)",
                 "kind": "select",
                 "defaultValue": "none",
                 "options": [
@@ -37959,7 +37834,11 @@
                     "label": "Snappy",
                     "value": "snappy"
                   }
-                ]
+                ],
+                "visibleWhen": {
+                  "key": "format",
+                  "equals": "parquet"
+                }
               },
               {
                 "key": "partitionBy",
@@ -38173,7 +38052,7 @@
               },
               {
                 "key": "compression",
-                "label": "Compression",
+                "label": "Compression (Parquet)",
                 "kind": "select",
                 "defaultValue": "none",
                 "options": [
@@ -38193,7 +38072,11 @@
                     "label": "Snappy",
                     "value": "snappy"
                   }
-                ]
+                ],
+                "visibleWhen": {
+                  "key": "format",
+                  "equals": "parquet"
+                }
               },
               {
                 "key": "partitionBy",
@@ -38407,7 +38290,7 @@
               },
               {
                 "key": "compression",
-                "label": "Compression",
+                "label": "Compression (Parquet)",
                 "kind": "select",
                 "defaultValue": "none",
                 "options": [
@@ -38427,7 +38310,11 @@
                     "label": "Snappy",
                     "value": "snappy"
                   }
-                ]
+                ],
+                "visibleWhen": {
+                  "key": "format",
+                  "equals": "parquet"
+                }
               },
               {
                 "key": "partitionBy",
@@ -38641,7 +38528,7 @@
               },
               {
                 "key": "compression",
-                "label": "Compression",
+                "label": "Compression (Parquet)",
                 "kind": "select",
                 "defaultValue": "none",
                 "options": [
@@ -38661,7 +38548,11 @@
                     "label": "Snappy",
                     "value": "snappy"
                   }
-                ]
+                ],
+                "visibleWhen": {
+                  "key": "format",
+                  "equals": "parquet"
+                }
               },
               {
                 "key": "partitionBy",

@@ -314,9 +314,11 @@ const directWriteField = (): Field => ({
         'Skip the intermediate pass and let a capable upstream source write this file itself. Faster, but the file is usually larger than DuckDB would write for the same compression. Ignored when the upstream cannot do it, in which case the normal path runs.',
 });
 
+// A cloud sink reads Compression for Parquet only (build_cloud_sink strips it
+// before a CSV or JSON write), so it is shown only while the format is Parquet.
 const compressionField = (): Field => ({
     key: 'compression',
-    label: 'Compression',
+    label: 'Compression (Parquet)',
     kind: 'select',
     defaultValue: 'none',
     options: [
@@ -325,6 +327,28 @@ const compressionField = (): Field => ({
         { label: 'Zstd', value: 'zstd' },
         { label: 'Snappy', value: 'snappy' },
     ],
+    visibleWhen: { key: 'format', equals: 'parquet' },
+});
+
+// The codecs a CSV or JSON COPY can write, read by build_csv_sink and
+// build_json_sink. This dropdown used to be offered on every file sink with
+// Snappy among the choices, and no builder read it, so every pick wrote a plain
+// file. Excel, QVD, YAML and TOML have no compression to set, so they no longer
+// show one.
+const TEXT_COMPRESSING_SINKS = new Set(['snk.tsv', 'snk.json', 'snk.jsonl']);
+
+const textCompressionField = (): Field => ({
+    key: 'compression',
+    label: 'Compression',
+    kind: 'select',
+    defaultValue: 'none',
+    options: [
+        { label: 'None', value: 'none' },
+        { label: 'Gzip', value: 'gzip' },
+        { label: 'Zstd', value: 'zstd' },
+    ],
+    description:
+        'Gzip or Zstd compresses the file whatever it is called. None leaves it to the name: a path ending .gz or .zst is still compressed. A compressed file cannot be appended to.',
 });
 
 // Map a database component to the saved-connection kind its picker should
@@ -1788,7 +1812,7 @@ function synthFileSink(comp: ComponentDef): ComponentManifest {
                     // A control that cannot do what it offers is worse than a
                     // missing one, and widening it to the full encoding list
                     // would only have made the promise bigger.
-                    compressionField(),
+                    ...(TEXT_COMPRESSING_SINKS.has(comp.id) ? [textCompressionField()] : []),
                     ...(comp.id === 'snk.parquet' ? [directWriteField()] : []),
                 ],
             },

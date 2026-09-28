@@ -1034,6 +1034,38 @@
         assert_eq!(staged("snk.excel", serde_json::json!({ "path": "/lake/o.xlsx" })), None);
     }
 
+    /// The Compression a CSV or JSON sink's form offers is the one it writes,
+    /// whatever the file is called, and None leaves it to the file name. A codec
+    /// those formats do not have is refused rather than ignored. A cloud sink
+    /// reads it for Parquet only: S3 saves zstd on every node it makes, and a
+    /// CSV object nobody asked to compress has to stay plain.
+    #[test]
+    fn a_text_file_sink_writes_the_compression_it_offers() {
+        use crate::plan::builders::build_sink_sql;
+        let sql = |id: &str, p: serde_json::Value| build_sink_sql(id, &p, "v", &[], None);
+        for (id, c) in [("snk.tsv", "gzip"), ("snk.json", "zstd"), ("snk.jsonl", "gzip"), ("snk.csv", "zstd")] {
+            let s = sql(id, serde_json::json!({ "path": "/lake/o.txt", "compression": c })).unwrap();
+            assert!(s.contains(&format!("COMPRESSION '{c}'")), "{id}: {s}");
+        }
+        let s = sql("snk.tsv", serde_json::json!({ "path": "/lake/o.tsv", "compression": "none" })).unwrap();
+        assert!(!s.contains("COMPRESSION"), "{s}");
+        for id in ["snk.tsv", "snk.json", "snk.jsonl"] {
+            let err = sql(id, serde_json::json!({ "path": "/lake/o.txt", "compression": "snappy" }))
+                .expect_err(id)
+                .to_string();
+            assert!(err.contains("snappy") && err.contains("gzip"), "{id}: {err}");
+        }
+        let csv = sql("snk.gcs", serde_json::json!({ "path": "gs://b/o.csv", "format": "csv", "compression": "zstd" }))
+            .unwrap();
+        assert!(!csv.contains("COMPRESSION"), "{csv}");
+        let pq = sql(
+            "snk.gcs",
+            serde_json::json!({ "path": "gs://b/o.parquet", "format": "parquet", "compression": "zstd" }),
+        )
+        .unwrap();
+        assert!(pq.contains("COMPRESSION 'zstd'"), "{pq}");
+    }
+
     /// #367: a line-oriented file sink appends; where adding lines to the end
     /// of the file would not add rows to it, the append is refused, as before,
     /// rather than replacing the file.
@@ -1054,6 +1086,7 @@
             ("snk.csv", serde_json::json!({ "path": "/lake/o.csv.gz" }), "compressed"),
             ("snk.tsv", serde_json::json!({ "path": "/lake/o.tsv.zst" }), "compressed"),
             ("snk.json", serde_json::json!({ "path": "/lake/o.json", "format": "array" }), "JSON array"),
+            ("snk.tsv", serde_json::json!({ "path": "/lake/o.tsv", "compression": "gzip" }), "compressed"),
             ("snk.csv", serde_json::json!({ "path": "/lake/o.csv", "partitionBy": ["d"] }), "partitioned"),
             ("snk.csv", serde_json::json!({ "path": "s3://b/o.csv" }), "local file"),
             ("snk.jsonl", serde_json::json!({ "path": "/lake/*.jsonl" }), "local file"),

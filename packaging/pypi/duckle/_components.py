@@ -382,7 +382,7 @@ COMPONENTS = {
     'snk.excel': {
         'kind': 'sink',
         'summary': 'Write .xlsx via the DuckDB excel extension',
-        'params': ['path', 'mode', 'compression', 'hasHeader'],
+        'params': ['path', 'mode', 'hasHeader'],
     },
     'snk.execsource': {
         'kind': 'sink',
@@ -542,7 +542,7 @@ COMPONENTS = {
     'snk.qvd': {
         'kind': 'sink',
         'summary': 'Write rows as a Qlik QVD file (.qvd) via a clean-room pure-Rust encoder (no Qlik runtime). Builds the per-column symbol tables + bit-stuffed index; values are typed per cell (int / double / string), nulls preserved. Round-trips with the QVD source and loads in QlikView / Qlik Sense.',
-        'params': ['path', 'mode', 'compression'],
+        'params': ['path', 'mode'],
     },
     'snk.r2': {
         'kind': 'sink',
@@ -632,7 +632,7 @@ COMPONENTS = {
     'snk.toml': {
         'kind': 'sink',
         'summary': 'Write the upstream rows as TOML. TOML disallows a top-level array so the engine wraps under a `rows` key: `[[rows]]` per row.',
-        'params': ['path', 'mode', 'compression'],
+        'params': ['path', 'mode'],
     },
     'snk.tsv': {
         'kind': 'sink',
@@ -672,7 +672,7 @@ COMPONENTS = {
     'snk.yaml': {
         'kind': 'sink',
         'summary': 'Write the upstream rows as a top-level YAML array (`- key: value` per row).',
-        'params': ['path', 'mode', 'compression'],
+        'params': ['path', 'mode'],
     },
     'src.access': {
         'kind': 'source',
