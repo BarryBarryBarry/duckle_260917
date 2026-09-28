@@ -3790,13 +3790,14 @@ impl DuckdbEngine {
         // as its code, IPv4 as a number and UUID / FixedString / 128- and
         // 256-bit integers as raw bytes, so the Schema and Preview tabs showed
         // numbers and bytes. Asked for the query's column types on this same
-        // connection, ClickHouse casts those columns itself before sending them.
+        // connection, ClickHouse casts those columns itself before sending them,
+        // and is asked for String as text, which before 24.3 it sent as bytes.
         // Anything that goes wrong here leaves the query exactly as written.
         let is_clickhouse = spec.entrypoint.as_deref() == Some("AdbcClickhouseInit")
             || spec.driver.to_lowercase().contains("clickhouse");
         let query = if is_clickhouse {
             clickhouse_described(&mut conn, &spec.query)
-                .and_then(|cols| clickhouse_arrow_query(&spec.query, &cols))
+                .map(|cols| clickhouse_arrow_query(&spec.query, &cols))
                 .unwrap_or_else(|| spec.query.clone())
         } else {
             spec.query.clone()
@@ -19356,9 +19357,15 @@ fn clickhouse_described(conn: &mut impl adbc_core::Connection, query: &str) -> O
     Some(out)
 }
 
-/// #364: `query` with the columns that need it cast by ClickHouse, or None
-/// when none do. `SELECT * REPLACE` keeps every name and the column order.
-fn clickhouse_arrow_query(query: &str, columns: &[(String, String)]) -> Option<String> {
+/// #364: `query` with the columns that need it cast by ClickHouse, asking for
+/// String as Arrow text. `SELECT * REPLACE` keeps every name and the column
+/// order.
+///
+/// The setting is on every query, not only one with a cast: before 24.3
+/// ClickHouse sent String as Arrow Binary by default, and a profile can still
+/// say so, which turns every text column - and each one cast to text here -
+/// into bytes.
+fn clickhouse_arrow_query(query: &str, columns: &[(String, String)]) -> String {
     let casts: Vec<String> = columns
         .iter()
         .filter_map(|(name, ty)| {
@@ -19366,10 +19373,16 @@ fn clickhouse_arrow_query(query: &str, columns: &[(String, String)]) -> Option<S
             clickhouse_arrow_cast(name, ty).map(|e| format!("{} AS {}", e, q))
         })
         .collect();
-    if casts.is_empty() {
-        return None;
-    }
-    Some(format!("SELECT * REPLACE ({}) FROM ({})", casts.join(", "), clickhouse_inner(query)))
+    let replace = if casts.is_empty() {
+        String::new()
+    } else {
+        format!(" REPLACE ({})", casts.join(", "))
+    };
+    format!(
+        "SELECT *{} FROM ({}) SETTINGS output_format_arrow_string_as_string = 1",
+        replace,
+        clickhouse_inner(query)
+    )
 }
 
 /// A query ready to sit inside parentheses: a trailing `;` would end it early.
@@ -19417,18 +19430,25 @@ mod clickhouse_arrow_tests {
 
     /// Names and order stay as the query had them; a trailing `;` would end
     /// the wrapped query early, so it goes; a name is quoted for ClickHouse.
+    /// Every query asks for String as Arrow text: before 24.3 ClickHouse sent
+    /// it as Binary by default, and a profile can still say so, which would
+    /// turn every text column - and every column cast to text above - into
+    /// bytes.
     #[test]
-    fn the_query_is_wrapped_only_when_a_column_needs_it() {
+    fn the_query_asks_for_text_and_casts_what_needs_it() {
         let cols = |v: &[(&str, &str)]| v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
         assert_eq!(
             clickhouse_arrow_query(
                 "SELECT * FROM ch_tb LIMIT 5; ",
                 &cols(&[("id", "UInt64"), ("ts", "DateTime"), ("u", "UUID")])
-            )
-            .as_deref(),
-            Some("SELECT * REPLACE (toDateTime64(`ts`, 3) AS `ts`, toString(`u`) AS `u`) FROM (SELECT * FROM ch_tb LIMIT 5)")
+            ),
+            "SELECT * REPLACE (toDateTime64(`ts`, 3) AS `ts`, toString(`u`) AS `u`) FROM (SELECT * FROM ch_tb LIMIT 5) \
+             SETTINGS output_format_arrow_string_as_string = 1"
         );
-        assert_eq!(clickhouse_arrow_query("SELECT 1", &cols(&[("x", "UInt8")])), None);
+        assert_eq!(
+            clickhouse_arrow_query("SELECT 'a' AS s", &cols(&[("s", "String")])),
+            "SELECT * FROM (SELECT 'a' AS s) SETTINGS output_format_arrow_string_as_string = 1"
+        );
         assert_eq!(
             clickhouse_arrow_cast("we`ird", "UUID").as_deref(),
             Some("toString(`we\\`ird`)")

@@ -64,6 +64,17 @@ fn clickhouse_types_arrive_as_what_they_are() {
         ),
     );
 
+    // A server whose Arrow export sends String as Binary - ClickHouse before
+    // 24.3, or a profile setting output_format_arrow_string_as_string = 0 - is
+    // stood in for by the same setting on the connection's URL.
+    let old_server = format!("{}/?output_format_arrow_string_as_string=0", url.trim_end_matches('/'));
+    for uri in [url.clone(), old_server] {
+        check(&bin, &driver, &uri, &table);
+    }
+    clickhouse(&url, &format!("DROP TABLE IF EXISTS {table}"));
+}
+
+fn check(bin: &str, driver: &str, url: &str, table: &str) {
     let tmp = tempfile::tempdir().unwrap();
     let out = tmp.path().join("out.parquet").to_string_lossy().replace('\\', "/");
     let doc: PipelineDoc = serde_json::from_value(json!({
@@ -77,12 +88,11 @@ fn clickhouse_types_arrive_as_what_they_are() {
         "edges": [{ "id": "e", "source": "ch", "target": "k" }]
     }))
     .unwrap();
-    let r = DuckdbEngine::new(bin.clone().into()).execute_pipeline(&doc);
-    clickhouse(&url, &format!("DROP TABLE IF EXISTS {table}"));
-    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let r = DuckdbEngine::new(bin.into()).execute_pipeline(&doc);
+    assert_eq!(r.status, "ok", "{url}: {:?}", r.error);
 
     let types: std::collections::BTreeMap<String, String> =
-        rows(&bin, &format!("SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '{out}')"))
+        rows(bin, &format!("SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM '{out}')"))
             .into_iter()
             .map(|c| (c["column_name"].as_str().unwrap().into(), c["column_type"].as_str().unwrap().into()))
             .collect();
@@ -99,11 +109,11 @@ fn clickhouse_types_arrive_as_what_they_are() {
         ("u256", "VARCHAR"),
         ("name", "VARCHAR"),
     ] {
-        assert_eq!(types.get(col).map(String::as_str), Some(want), "{col}: {types:?}");
+        assert_eq!(types.get(col).map(String::as_str), Some(want), "{url} {col}: {types:?}");
     }
 
     let got = rows(
-        &bin,
+        bin,
         &format!(
             "SELECT name, strftime(dt AT TIME ZONE 'UTC', '%Y-%m-%d %H:%M:%S') AS dt, dtn, \
              strftime(dt_tz AT TIME ZONE 'UTC', '%Y-%m-%d %H:%M:%S') AS dt_tz, u, e, ip, fs, i128, u256 FROM '{out}'"
@@ -123,6 +133,7 @@ fn clickhouse_types_arrive_as_what_they_are() {
             "fs": "abc",
             "i128": "-170141183460469231731687303715884105728",
             "u256": "1234567890123456789012345678901234567890"
-        })]
+        })],
+        "{url}"
     );
 }
