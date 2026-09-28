@@ -6593,6 +6593,9 @@ fn oracle_insert_all_rows_per_stmt(num_cols: usize, batch_size: usize) -> usize 
 ///
 /// A failed rename IS a failure. The rows are on disk under a name nothing else
 /// reads, and a run that reported ok would have published nothing.
+///
+/// An append (#367) to a file that already holds something adds the staged rows
+/// to its end instead; to a new or empty file it is the same rename.
 fn publish_staged(stage: &plan::Stage) -> Result<(), String> {
     let (Some(staged), Some(dest)) = (stage.staged_write.as_deref(), stage.sink_path.as_deref())
     else {
@@ -6601,8 +6604,67 @@ fn publish_staged(stage: &plan::Stage) -> Result<(), String> {
     if !std::path::Path::new(staged).exists() {
         return Ok(());
     }
+    let append = stage.sink_mode.as_deref().is_some_and(|m| m.trim().eq_ignore_ascii_case("append"));
+    if append && std::fs::metadata(dest).is_ok_and(|m| m.len() > 0) {
+        return append_staged(staged, dest, stage.staged_header)
+            .map_err(|e| format!("appending to {}: {}", dest, e));
+    }
     std::fs::rename(staged, dest)
         .map_err(|e| format!("publishing {} from {}: {}", dest, staged, e))
+}
+
+/// #367: add a staged file's rows to the end of `dest`, then remove it.
+///
+/// With `header`, the staged file's first line is its CSV header: it has to be
+/// the line `dest` starts with, since rows added under a different header are
+/// read as the wrong columns, and it is left out because `dest` has it already.
+/// A `dest` that does not end in a line break gets one first, so the first new
+/// row is not run into its last line. A write that fails is cut back off, so
+/// `dest` holds what it held before rather than part of a row.
+fn append_staged(staged: &str, dest: &str, header: bool) -> Result<(), String> {
+    use std::io::{BufRead, Read, Seek, Write};
+    let mut rows = std::io::BufReader::new(std::fs::File::open(staged).map_err(|e| e.to_string())?);
+    if header {
+        let line = |r: &mut dyn BufRead| -> Result<String, String> {
+            let mut l = String::new();
+            r.read_line(&mut l).map_err(|e| e.to_string())?;
+            Ok(l.trim_end_matches(['\r', '\n']).to_string())
+        };
+        let new = line(&mut rows)?;
+        let old = line(&mut std::io::BufReader::new(
+            std::fs::File::open(dest).map_err(|e| e.to_string())?,
+        ))?;
+        if new != old {
+            let cut = |s: &str| s.chars().take(200).collect::<String>();
+            return Err(format!(
+                "the rows have the columns {} and the file starts with {}; nothing was added",
+                cut(&new),
+                cut(&old)
+            ));
+        }
+    }
+    let mut out = std::fs::OpenOptions::new()
+        .read(true)
+        .append(true)
+        .open(dest)
+        .map_err(|e| e.to_string())?;
+    let len = out.metadata().map_err(|e| e.to_string())?.len();
+    let written = (|| -> std::io::Result<()> {
+        let mut last = [0u8];
+        out.seek(std::io::SeekFrom::End(-1))?;
+        out.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            out.write_all(b"\n")?;
+        }
+        std::io::copy(&mut rows, &mut out)?;
+        out.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = out.set_len(len);
+        return Err(e.to_string());
+    }
+    drop(rows);
+    std::fs::remove_file(staged).map_err(|e| format!("removing {}: {}", staged, e))
 }
 
 fn sink_self_count(stage: &plan::Stage) -> Option<String> {
@@ -8176,6 +8238,7 @@ mod tests {
             publish_group: None,
             sink_path: None,
             staged_write: None,
+            staged_header: false,
             sink_mode: None,
             sink_compression: None,
             sink_direct: false,

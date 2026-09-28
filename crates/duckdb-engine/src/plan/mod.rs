@@ -83,6 +83,9 @@ pub struct Stage {
     /// from `builders::staged_sink_path`, the same call that pointed the COPY
     /// there, so the two cannot disagree about whether this sink staged.
     pub staged_write: Option<String>,
+    /// #367: the staged file starts with a CSV header line, which an append to
+    /// a file that already has one leaves out.
+    pub staged_header: bool,
     /// For a file sink: the compression its COPY will use. A source that can
     /// write the destination itself reads this so the file it produces matches
     /// what the sink would have written.
@@ -1930,6 +1933,7 @@ fn build_stage(
         .unwrap_or(JsonValue::Null);
     let mut sink_path: Option<String> = None;
     let mut staged_write: Option<String> = None;
+    let mut staged_header = false;
     let mut sink_compression: Option<String> = None;
     let mut sink_direct = false;
     let mut sink_mode: Option<String> = None;
@@ -3689,6 +3693,9 @@ fn build_stage(
         sink_path = string_prop(&props, "path").filter(|s| !s.is_empty());
         sink_mode = string_prop(&props, "mode").filter(|s| !s.is_empty());
         staged_write = builders::staged_sink_path(component_id, &props);
+        staged_header = staged_write.is_some()
+            && matches!(component_id, "snk.csv" | "snk.tsv")
+            && builders::csv_writes_header(&props);
         sink_compression = string_prop(&props, "compression").filter(|s| !s.is_empty());
         sink_direct = props
             .get("directWrite")
@@ -7353,6 +7360,7 @@ fn build_stage(
         sink_path,
         sink_mode,
         staged_write,
+        staged_header,
         sink_compression,
         sink_direct,
         runtime,

@@ -988,7 +988,12 @@ export const MANIFESTS: Record<string, ComponentManifest> = {
                             // after a second run wrote 3,4. build_sink_sql now
                             // refuses either rather than replacing in silence.
                             { label: 'Overwrite (replace)', value: 'overwrite' },
+                            // #367: a true append - the rows are staged and then
+                            // added to the end of the file.
+                            { label: 'Append (add rows to the end)', value: 'append' },
                         ],
+                        description:
+                            'Append adds this run\'s rows to the end of the file, and writes the header only when it makes the file; rows whose columns are not the file\'s are refused. A compressed, partitioned or remote path cannot be appended to.',
                     },
                     {
                         key: 'delimiter',

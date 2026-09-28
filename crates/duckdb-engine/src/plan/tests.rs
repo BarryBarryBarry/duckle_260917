@@ -1024,14 +1024,45 @@
         assert_eq!(staged("snk.csv", serde_json::json!({ "path": "s3://b/o.csv" })), None);
         // A glob is not a single file.
         assert_eq!(staged("snk.csv", serde_json::json!({ "path": "/lake/*.csv" })), None);
-        // Only overwrite: an append adds to what is there, and publishing by
-        // rename would replace it instead.
+        // #367: an append stages too - the executor adds the staged rows to the
+        // end of the destination instead of renaming over it.
         assert_eq!(
             staged("snk.csv", serde_json::json!({ "path": "/lake/o.csv", "mode": "append" })),
-            None
+            Some("/lake/o.csv.duckle-partial".to_string())
         );
         // A sink that does not write one file this way is untouched.
         assert_eq!(staged("snk.excel", serde_json::json!({ "path": "/lake/o.xlsx" })), None);
+    }
+
+    /// #367: a line-oriented file sink appends; where adding lines to the end
+    /// of the file would not add rows to it, the append is refused, as before,
+    /// rather than replacing the file.
+    #[test]
+    fn a_file_sink_appends_only_where_an_append_is_well_defined() {
+        use crate::plan::builders::build_sink_sql;
+        let sql = |id: &str, p: serde_json::Value| build_sink_sql(id, &p, "v", &[], None);
+        for id in ["snk.csv", "snk.tsv", "snk.json", "snk.jsonl"] {
+            let ok = sql(id, serde_json::json!({ "path": "/lake/o.txt", "mode": "append" }));
+            assert!(
+                ok.as_deref().is_ok_and(|s| s.contains("'/lake/o.txt.duckle-partial'")),
+                "{id}: {ok:?}"
+            );
+        }
+        for (id, props, why) in [
+            ("snk.parquet", serde_json::json!({ "path": "/lake/o.parquet" }), "one file per run"),
+            ("snk.excel", serde_json::json!({ "path": "/lake/o.xlsx" }), "not implemented"),
+            ("snk.csv", serde_json::json!({ "path": "/lake/o.csv.gz" }), "compressed"),
+            ("snk.tsv", serde_json::json!({ "path": "/lake/o.tsv.zst" }), "compressed"),
+            ("snk.json", serde_json::json!({ "path": "/lake/o.json", "format": "array" }), "JSON array"),
+            ("snk.csv", serde_json::json!({ "path": "/lake/o.csv", "partitionBy": ["d"] }), "partitioned"),
+            ("snk.csv", serde_json::json!({ "path": "s3://b/o.csv" }), "local file"),
+            ("snk.jsonl", serde_json::json!({ "path": "/lake/*.jsonl" }), "local file"),
+        ] {
+            let mut props = props;
+            props["mode"] = "append".into();
+            let err = sql(id, props).expect_err(id).to_string();
+            assert!(err.contains(why), "{id}: {err}");
+        }
     }
 
     #[test]

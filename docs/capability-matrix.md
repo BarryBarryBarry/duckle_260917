@@ -141,10 +141,10 @@ How a sink writes, and what it does with rows it cannot.
 
 | Component | Write modes | Rejects | Artifact I/O |
 |---|---|---|---|
-| `snk.csv` | overwrite | - | - |
-| `snk.tsv` | overwrite | - | - |
-| `snk.json` | overwrite | - | - |
-| `snk.jsonl` | overwrite | - | - |
+| `snk.csv` | overwrite, append | - | - |
+| `snk.tsv` | overwrite, append | - | - |
+| `snk.json` | overwrite, append | - | - |
+| `snk.jsonl` | overwrite, append | - | - |
 | `snk.xml` | - | - | - |
 | `snk.excel` | overwrite | - | - |
 | `snk.parquet` | overwrite | - | - |

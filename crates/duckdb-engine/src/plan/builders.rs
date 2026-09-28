@@ -9871,6 +9871,17 @@ fn refuse_unimplemented_file_mode(
     if mode.is_empty() || mode.eq_ignore_ascii_case("overwrite") {
         return Ok(());
     }
+    // #367: a line-oriented file appends, by adding its staged rows to the end.
+    if mode.eq_ignore_ascii_case("append") {
+        return match append_refusal(component_id, props) {
+            None => Ok(()),
+            Some(why) => Err(EngineError::Unsupported(format!(
+                "{component_id}: cannot append to this file - {why}. Written as it stands, the \
+                 COPY would replace the file rather than add to it, so it is refused. Remove the \
+                 mode, or write to a database sink, which does implement it."
+            ))),
+        };
+    }
     Err(EngineError::Unsupported(format!(
         "{component_id}: write mode '{mode}' is not implemented for a file sink - it writes with \
          COPY, which always replaces the file. Running this would have REPLACED the existing data \
@@ -9881,6 +9892,41 @@ fn refuse_unimplemented_file_mode(
             "refusing"
         }
     )))
+}
+
+/// #367: why `component_id` cannot append with these props, or None when it can.
+///
+/// An append adds the staged file's lines to the end of the destination, which
+/// adds rows only to one local, uncompressed, line-oriented file. Anything else
+/// is refused rather than replaced, as every file-sink mode other than
+/// overwrite used to be.
+fn append_refusal(component_id: &str, props: &JsonValue) -> Option<&'static str> {
+    match component_id {
+        "snk.csv" | "snk.tsv" | "snk.json" | "snk.jsonl" => {}
+        "snk.parquet" => {
+            return Some(
+                "a Parquet file cannot be added to in place; write one file per run (a dated \
+                 path, for example) and read the directory with a glob",
+            )
+        }
+        _ => return Some("append is not implemented for this file format"),
+    }
+    let path = string_prop(props, "path").unwrap_or_default();
+    if !crate::is_local_path(&path) || path.contains(['*', '?', '[', '{']) {
+        return Some("only a single local file can be appended to");
+    }
+    if path.ends_with(".gz") || path.ends_with(".zst") {
+        return Some("a compressed file cannot be appended to line by line");
+    }
+    if !columns_from_props(props, "partitionBy").unwrap_or_default().is_empty() {
+        return Some("a partitioned write is a directory of files, not one file");
+    }
+    if component_id.starts_with("snk.json")
+        && string_prop(props, "format").is_some_and(|f| f.eq_ignore_ascii_case("array"))
+    {
+        return Some("a JSON array file cannot be added to; write JSON Lines instead");
+    }
+    None
 }
 
 /// The extension a single-file sink writes under before it is published.
@@ -9908,8 +9954,11 @@ pub(crate) const STAGED_SUFFIX: &str = ".duckle-partial";
 /// sink that wrote to a name nobody renames - a run that reports success having
 /// published nothing.
 ///
-/// Not for: a mode other than overwrite (append adds to what is there, and a
-/// rename would replace it; "error if exists" is a question about the
+/// An append stages too (#367): the executor adds the staged rows to the end of
+/// the destination instead of renaming over it, so an append that fails part
+/// way leaves the destination as it was.
+///
+/// Not for: another mode ("error if exists" is a question about the
 /// destination), a partitioned write (a DIRECTORY of files, not one file), a
 /// remote destination (a rename is a local filesystem operation), or a glob.
 pub(crate) fn staged_sink_path(component_id: &str, props: &JsonValue) -> Option<String> {
@@ -9920,8 +9969,10 @@ pub(crate) fn staged_sink_path(component_id: &str, props: &JsonValue) -> Option<
         return None;
     }
     let mode = string_prop(props, "mode").unwrap_or_default();
-    if !matches!(mode.trim().to_ascii_lowercase().as_str(), "" | "overwrite") {
-        return None;
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "" | "overwrite" => {}
+        "append" if append_refusal(component_id, props).is_none() => {}
+        _ => return None,
     }
     if !columns_from_props(props, "partitionBy")
         .unwrap_or_default()
@@ -9959,6 +10010,7 @@ pub(crate) fn build_sink_sql(
             Ok(build_csv_sink(&staged_props(component_id, props), from_view))
         }
         "snk.tsv" => {
+            refuse_unimplemented_file_mode(component_id, props)?;
             let mut p = staged_props(component_id, props);
             if let Some(obj) = p.as_object_mut() {
                 obj.insert("delimiter".into(), JsonValue::String("\t".into()));
@@ -10179,14 +10231,20 @@ fn staged_compression(path: &str) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
-    let path = string_prop(props, "path").unwrap_or_default();
-    // The sink form writes `writeHeader`; the source uses `hasHeader`.
-    let header = props
+/// Whether a CSV sink writes a header line. The sink form writes
+/// `writeHeader`; the source uses `hasHeader`. The COPY and an append (#367),
+/// which leaves the header out when the file already has one, both ask here.
+pub(crate) fn csv_writes_header(props: &JsonValue) -> bool {
+    props
         .get("writeHeader")
         .or_else(|| props.get("hasHeader"))
         .and_then(JsonValue::as_bool)
-        .unwrap_or(true);
+        .unwrap_or(true)
+}
+
+pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
+    let path = string_prop(props, "path").unwrap_or_default();
+    let header = csv_writes_header(props);
     let delim = string_prop(props, "delimiter").unwrap_or_else(|| ",".into());
     let null_val = string_prop(props, "nullValue").unwrap_or_default();
     let mut options = vec![

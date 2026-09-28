@@ -155,7 +155,11 @@ export const delimiterField = (defaultValue: string): Field => ({
         'Leave blank to let DuckDB sniff it. Anything not listed can be typed in, including a multi-character delimiter such as || or <=>.',
 });
 
-const writeModeField = (): Field => ({
+// #367: a line-oriented file appends by adding the staged rows to its end
+// (builders.rs append_refusal says where it cannot).
+const APPENDING_FILE_SINKS = new Set(['snk.tsv', 'snk.json', 'snk.jsonl']);
+
+const writeModeField = (componentId?: string): Field => ({
     key: 'mode',
     label: 'Write mode',
     kind: 'select',
@@ -163,7 +167,15 @@ const writeModeField = (): Field => ({
     // "Error if exists" was here and no file-sink builder reads `mode`: a COPY
     // always replaces, so the option that promised to refuse a write silently
     // performed one. build_sink_sql now refuses it rather than replacing.
-    options: [{ label: 'Overwrite', value: 'overwrite' }],
+    options: [
+        { label: 'Overwrite', value: 'overwrite' },
+        ...(componentId && APPENDING_FILE_SINKS.has(componentId)
+            ? [{ label: 'Append (add rows to the end)', value: 'append' }]
+            : []),
+    ],
+    ...(componentId && APPENDING_FILE_SINKS.has(componentId)
+        ? { description: 'Append adds this run\'s rows to the end of the file, and writes the header only when it makes the file; rows whose columns are not the file\'s are refused. A compressed, partitioned or remote path cannot be appended to.' }
+        : {}),
 });
 
 // How a cloud storage node signs in: the keys typed here, or, for S3, the
@@ -1768,7 +1780,7 @@ function synthFileSink(comp: ComponentDef): ComponentManifest {
                             { name: 'All files', extensions: ['*'] },
                         ],
                     },
-                    writeModeField(),
+                    writeModeField(comp.id),
                     // No encoding here. DuckDB refuses it on the way out -
                     // "Option ENCODING is not supported for writing - only for
                     // reading" - and no sink builder has ever read the property,

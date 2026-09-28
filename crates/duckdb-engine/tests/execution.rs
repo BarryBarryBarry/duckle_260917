@@ -10286,6 +10286,97 @@ fn a_published_output_leaves_no_staging_file_behind() {
     }
 }
 
+/// #367: a line-oriented file sink appends its rows to what is already there,
+/// on both execution paths. A header is written once, when the file is made.
+#[test]
+fn a_file_sink_appends_its_rows_on_both_paths() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n");
+
+    for per_stage in [false, true] {
+        for (component, file, once) in [
+            ("snk.csv", "o.csv", "id,name\n1,a\n2,b\n"),
+            ("snk.tsv", "o.tsv", "id\tname\n1\ta\n2\tb\n"),
+            ("snk.jsonl", "o.jsonl", "{\"id\":1,\"name\":\"a\"}\n{\"id\":2,\"name\":\"b\"}\n"),
+            ("snk.json", "o.json", "{\"id\":1,\"name\":\"a\"}\n{\"id\":2,\"name\":\"b\"}\n"),
+        ] {
+            let dir = tmp.path().join(format!("append{per_stage}"));
+            std::fs::create_dir_all(&dir).unwrap();
+            let out = out_path(&dir, file);
+            let sink = node("k", component, json!({ "path": out, "mode": "append" }));
+            let d = if per_stage {
+                doc(
+                    json!([
+                        node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                        node("w", "ctl.wait", json!({ "duration": 1, "unit": "milliseconds" })),
+                        sink,
+                    ]),
+                    json!([main_edge("e1", "s", "w"), main_edge("e2", "w", "k")]),
+                )
+            } else {
+                doc(
+                    json!([node("s", "src.csv", json!({ "path": csv, "hasHeader": true })), sink]),
+                    json!([main_edge("e1", "s", "k")]),
+                )
+            };
+            for pass in 1..=2 {
+                let r = engine.execute_pipeline(&d);
+                assert_eq!(r.status, "ok", "{file} pass {pass} (per_stage {per_stage}): {:?}", r.error);
+            }
+            let body = std::fs::read_to_string(&out).unwrap().replace("\r\n", "\n");
+            let rows = once.split_once('\n').filter(|_| !component.contains("json")).map_or(once, |(_, r)| r);
+            assert_eq!(body, format!("{once}{rows}"), "{file} (per_stage {per_stage})");
+            let staged: Vec<_> = std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".duckle-partial"))
+                .collect();
+            assert!(staged.is_empty(), "{file}: an append left its staging file behind");
+        }
+    }
+}
+
+/// #367: an append whose columns are not the file's is refused, and the file is
+/// left as it was - adding lines under another header would corrupt it.
+#[test]
+fn an_append_with_other_columns_is_refused_and_the_file_kept() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,other\n9,z\n");
+    let out = write_file(tmp.path(), "ledger.csv", "id,name\n1,a\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "snk.csv", json!({ "path": out, "mode": "append" })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "error");
+    let err = r.error.unwrap_or_default();
+    assert!(err.contains("id,other") && err.contains("id,name"), "{err}");
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "id,name\n1,a\n");
+}
+
+/// #367: a file that does not end in a line break gets one before the new rows,
+/// so the first of them is not run into its last line.
+#[test]
+fn an_append_starts_on_a_new_line() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n2,b\n");
+    let out = write_file(tmp.path(), "ledger.csv", "id,name\n1,a");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "snk.csv", json!({ "path": out, "mode": "append" })),
+        ]),
+        json!([main_edge("e1", "s", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(std::fs::read_to_string(&out).unwrap().replace("\r\n", "\n"), "id,name\n1,a\n2,b\n");
+}
+
 /// A sink whose path names a compression writes it compressed. DuckDB picks the
 /// compression of a CSV or JSON COPY from the target's extension, and the staged
 /// target's extension is `.duckle-partial`, so an `out.csv.gz` was written as

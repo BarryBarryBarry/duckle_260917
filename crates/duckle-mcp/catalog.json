@@ -30424,8 +30424,13 @@
                   {
                     "label": "Overwrite (replace)",
                     "value": "overwrite"
+                  },
+                  {
+                    "label": "Append (add rows to the end)",
+                    "value": "append"
                   }
-                ]
+                ],
+                "description": "Append adds this run's rows to the end of the file, and writes the header only when it makes the file; rows whose columns are not the file's are refused. A compressed, partitioned or remote path cannot be appended to."
               },
               {
                 "key": "delimiter",
@@ -30545,8 +30550,13 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
+                  },
+                  {
+                    "label": "Append (add rows to the end)",
+                    "value": "append"
                   }
-                ]
+                ],
+                "description": "Append adds this run's rows to the end of the file, and writes the header only when it makes the file; rows whose columns are not the file's are refused. A compressed, partitioned or remote path cannot be appended to."
               },
               {
                 "key": "compression",
@@ -30741,8 +30751,13 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
+                  },
+                  {
+                    "label": "Append (add rows to the end)",
+                    "value": "append"
                   }
-                ]
+                ],
+                "description": "Append adds this run's rows to the end of the file, and writes the header only when it makes the file; rows whose columns are not the file's are refused. A compressed, partitioned or remote path cannot be appended to."
               },
               {
                 "key": "compression",
@@ -30895,8 +30910,13 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
+                  },
+                  {
+                    "label": "Append (add rows to the end)",
+                    "value": "append"
                   }
-                ]
+                ],
+                "description": "Append adds this run's rows to the end of the file, and writes the header only when it makes the file; rows whose columns are not the file's are refused. A compressed, partitioned or remote path cannot be appended to."
               },
               {
                 "key": "compression",
