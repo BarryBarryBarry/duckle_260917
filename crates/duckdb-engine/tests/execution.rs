@@ -8208,6 +8208,58 @@ fn text_padding_lpad_zero_pads() {
     assert_eq!(p2, "01000");
 }
 
+/// #359: an instant has one epoch, whatever zone the host is in. The CSV
+/// sniffer reads `...Z` as TIMESTAMP WITH TIME ZONE, and casting that to
+/// TIMESTAMP takes the host's wall clock, so an IST host answered five and a
+/// half hours late. CI runs in UTC, where this passes either way: it is a gate
+/// on any non-UTC host, which is where the bug lives.
+#[test]
+fn dt_epoch_of_a_zoned_timestamp_is_the_same_instant_on_every_host() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "ts.csv", "id,ts\n1,2026-01-01T12:00:00Z\n");
+    // Both executors: a memory cap takes the pipeline off the batched path.
+    for per_stage in [false, true] {
+        let out = out_path(tmp.path(), &format!("out-{per_stage}.csv"));
+        let mut epoch = json!({ "column": "ts", "mode": "to", "outputColumn": "sec" });
+        if per_stage {
+            epoch["memoryLimitMb"] = json!(128);
+        }
+        let r = engine.execute_pipeline(&doc(
+            json!([
+                node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("e", "xf.dt.epoch", epoch),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "s", "e"), main_edge("e2", "e", "k")]),
+        ));
+        assert_eq!(r.status, "ok", "per_stage={per_stage}: {:?}", r.error);
+        let sec = scalar_string(&format!(
+            "SELECT CAST(CAST(sec AS BIGINT) AS VARCHAR) FROM read_csv_auto('{}') WHERE id = 1",
+            out
+        ));
+        assert_eq!(sec, "1767268800", "per_stage={per_stage}: 2026-01-01T12:00:00Z, on this host's clock");
+    }
+
+    // A timestamp held as text still converts: epoch(VARCHAR) does not bind, so
+    // dropping the cast outright would have broken every string column.
+    let out = out_path(tmp.path(), "text.csv");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "code.sql", json!({ "sql": "SELECT 1 AS id, '2026-01-01 12:00:00'::VARCHAR AS ts" })),
+            node("e", "xf.dt.epoch", json!({ "column": "ts", "mode": "to", "outputColumn": "sec" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "e"), main_edge("e2", "e", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "a VARCHAR timestamp: {:?}", r.error);
+    let sec = scalar_string(&format!(
+        "SELECT CAST(CAST(sec AS BIGINT) AS VARCHAR) FROM read_csv_auto('{}') WHERE id = 1",
+        out
+    ));
+    assert_eq!(sec, "1767268800");
+}
+
 #[test]
 fn dt_epoch_roundtrips() {
     let engine = engine_or_skip!();

@@ -8006,7 +8006,16 @@ pub(crate) fn build_dt_epoch(inputs: &NodeInputs, props: &JsonValue) -> Result<S
             qcol
         )
     } else {
-        format!("epoch(CAST({} AS TIMESTAMP))", qcol)
+        // #359: a TIMESTAMP WITH TIME ZONE already names an instant, and casting
+        // it to TIMESTAMP takes the host's wall clock - an IST host answered
+        // 5h30m late. Everything else keeps the cast, which is what lets a
+        // VARCHAR column in at all: epoch(VARCHAR) does not bind. typeof() folds
+        // to a constant, so only one branch ever runs.
+        format!(
+            "CASE WHEN typeof({c}) = 'TIMESTAMP WITH TIME ZONE' THEN epoch(CAST({c} AS TIMESTAMPTZ)) \
+             ELSE epoch(CAST({c} AS TIMESTAMP)) END",
+            c = qcol
+        )
     };
     let output = string_prop(props, "outputColumn")
         .filter(|s| !s.is_empty())
