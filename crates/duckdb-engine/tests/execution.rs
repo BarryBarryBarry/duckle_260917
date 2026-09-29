@@ -21314,6 +21314,38 @@ fn s3_changed_reads_a_listing_escaped_the_way_minio_escapes_it() {
     assert!(!body.contains("&#"), "{body}");
 }
 
+/// A sequence is checked for totality: every object in the collection is part
+/// of the chain or a refusal. Listing only the first 10,000 keys of a larger
+/// prefix leaves the rest out of that check without saying so, so a chain past
+/// the bound is refused rather than read short.
+#[test]
+fn a_sequence_prefix_larger_than_the_listing_bound_is_refused_not_truncated() {
+    let page = |from: usize, n: usize, last: bool| {
+        let contents: String = (from..from + n)
+            .map(|i| format!("<Contents><Key>d/D{i:06}.zip</Key><Size>1</Size></Contents>"))
+            .collect();
+        let tail = if last {
+            "<IsTruncated>false</IsTruncated>".to_string()
+        } else {
+            format!("<IsTruncated>true</IsTruncated><NextContinuationToken>t{}</NextContinuationToken>", from + n)
+        };
+        let body = format!(r#"<?xml version="1.0"?><ListBucketResult>{tail}{contents}</ListBucketResult>"#);
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    };
+    let mut replies: Vec<String> = (0..10).map(|p| page(p * 1000, 1000, false)).collect();
+    replies.push(page(10_000, 1, true));
+    let (port, _rx) = stub_s3(replies);
+
+    let got = duckle_duckdb_engine::sequence::collect("s3://reg/d/", &s3_props(port, "s3://reg/d/", false));
+    let e = got.map(|v| v.len()).expect_err("10,001 objects read as a shorter chain");
+    assert!(e.contains("10000") || e.contains("10,000"), "{e}");
+}
+
 /// An S3 uri with no credentials must say so. Sending an anonymous request
 /// instead returns 403, which reads as "wrong keys" and sends people to check
 /// credentials they never set.
