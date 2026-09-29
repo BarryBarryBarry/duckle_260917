@@ -6055,7 +6055,12 @@ impl DuckdbEngine {
         // first keys every run, so once those were processed nothing after
         // them was ever reached. The suffix filter is applied the same way.
         let mut walked_past = 0usize;
-        let objects = cfg.list_where(&bucket, &prefix, limit, |o| {
+        // By modification time the oldest can sit anywhere in the prefix, so it
+        // is walked to the end - as a steady-state poll is anyway - keeping only
+        // the `limit` oldest candidates: memory is the cap, not the prefix.
+        let by_modified = spec.order_by_modified;
+        let mut oldest: std::collections::BinaryHeap<ByModified> = Default::default();
+        let listed = cfg.list_where(&bucket, &prefix, if by_modified { usize::MAX } else { limit }, |o| {
             if let Some(sfx) = &spec.suffix {
                 if !o.key.ends_with(sfx.as_str()) {
                     return false;
@@ -6068,8 +6073,20 @@ impl DuckdbEngine {
                 walked_past += 1;
                 return false;
             }
+            if by_modified {
+                oldest.push(ByModified(o.clone()));
+                if oldest.len() > limit {
+                    oldest.pop();
+                }
+                return false;
+            }
             true
         })?;
+        let objects = if by_modified {
+            oldest.into_iter().map(|o| o.0).collect()
+        } else {
+            listed
+        };
         let mut out: Vec<RemoteEntry> = objects
             .into_iter()
             .map(|o| {
@@ -6088,12 +6105,10 @@ impl DuckdbEngine {
                 }
             })
             .collect();
-        // Oldest first, so a capped run works through a backlog in order rather
-        // than taking an arbitrary slice of it - the same rule the SFTP listing
-        // follows, and for the same reason. S3 returns keys in lexical order
-        // already; sorting by the leaf name matches what the SFTP side does when
-        // a prefix has sub-folders in it.
-        out.sort_by(|a, b| a.name.cmp(&b.name));
+        // In the order asked for, the same rule the SFTP listing follows. S3
+        // returns keys in lexical order already; sorting by the leaf name
+        // matches what the SFTP side does when a prefix has sub-folders in it.
+        sort_entries(&mut out, spec.order_by_modified);
         Ok((out, walked_past))
     }
 
@@ -6469,6 +6484,7 @@ impl DuckdbEngine {
             max_entries: 1,
             track_state: false,
             baseline_existing: false,
+            order_by_modified: false,
             user: Some(user.clone()),
             password: auth.password.clone(),
             private_key: auth.private_key.clone(),
@@ -7658,9 +7674,9 @@ impl DuckdbEngine {
                 }
             })
             .collect();
-        // Oldest first, so a capped run works through a backlog in order
-        // rather than taking an arbitrary slice of it.
-        out.sort_by(|a, b| a.name.cmp(&b.name));
+        // In a fixed order, so a capped run works through a backlog in that
+        // order rather than taking an arbitrary slice of it.
+        sort_entries(&mut out, spec.order_by_modified);
         Ok(out)
     }
 
@@ -20246,6 +20262,62 @@ pub(crate) struct RemoteEntry {
     pub fingerprint: String,
 }
 
+/// #324: the order a listing is taken in, so a capped run works through a
+/// backlog in that order. By modification time it is oldest first, with the
+/// name breaking ties, and an entry whose time is unknown comes last since
+/// nothing says it is old. By name it is oldest first only when the names
+/// carry the date.
+fn sort_entries(entries: &mut [RemoteEntry], by_modified: bool) {
+    if by_modified {
+        entries.sort_by(|a, b| {
+            modified_cmp(a.modified_at.as_deref(), b.modified_at.as_deref())
+                .then_with(|| a.name.cmp(&b.name))
+        });
+    } else {
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+}
+
+/// Two modification times from one listing. SFTP's are epoch seconds and
+/// compare as numbers; S3's are RFC 3339 and compare as text.
+fn modified_cmp(a: Option<&str>, b: Option<&str>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Some(x), Some(y)) => match (x.parse::<i64>(), y.parse::<i64>()) {
+            (Ok(x), Ok(y)) => x.cmp(&y),
+            _ => x.cmp(y),
+        },
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+/// An S3 object ordered by modification time then key, so a max-heap of them
+/// holds the oldest few: the newest is on top, ready to be dropped.
+struct ByModified(crate::s3::S3Object);
+
+impl Ord for ByModified {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        modified_cmp(self.0.last_modified.as_deref(), other.0.last_modified.as_deref())
+            .then_with(|| self.0.key.cmp(&other.0.key))
+    }
+}
+
+impl PartialOrd for ByModified {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for ByModified {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for ByModified {}
+
 /// Combine whatever signals the protocol gave into one comparable string.
 ///
 /// Conservative on purpose. None of these are guarantees: an ETag can be
@@ -21426,6 +21498,52 @@ mod ftp_tests {
         assert!(!is_sftp_target("files.example.com", 21));
         assert!(!is_sftp_target("ftp://files.example.com", 21));
         assert!(!is_sftp_target("ftps://files.example.com", 990));
+    }
+}
+
+#[cfg(test)]
+mod changed_order_tests {
+    use super::{sort_entries, RemoteEntry};
+
+    fn entry(name: &str, modified: Option<&str>) -> RemoteEntry {
+        RemoteEntry {
+            uri: format!("sftp://h/d/{name}"),
+            name: name.to_string(),
+            size: None,
+            modified_at: modified.map(str::to_string),
+            etag: None,
+            fingerprint: String::new(),
+        }
+    }
+
+    fn names(entries: &[RemoteEntry]) -> Vec<&str> {
+        entries.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    /// #324: oldest first means by time, not by name. SFTP reports epoch
+    /// seconds, which compare as numbers - "999" is older than "1000" - and an
+    /// entry with no time comes last, since nothing says it is old.
+    #[test]
+    fn modified_order_is_oldest_first_with_the_name_breaking_ties() {
+        let mut e = vec![
+            entry("a", Some("1000")),
+            entry("b", None),
+            entry("c", Some("999")),
+            entry("e", Some("1000")),
+            entry("d", Some("1000")),
+        ];
+        sort_entries(&mut e, true);
+        assert_eq!(names(&e), vec!["c", "a", "d", "e", "b"]);
+
+        let mut e = vec![
+            entry("x", Some("2026-01-03T00:00:00.000Z")),
+            entry("y", Some("2026-01-01T00:00:00.000Z")),
+        ];
+        sort_entries(&mut e, true);
+        assert_eq!(names(&e), vec!["y", "x"]);
+
+        sort_entries(&mut e, false);
+        assert_eq!(names(&e), vec!["x", "y"], "name order is still there");
     }
 }
 

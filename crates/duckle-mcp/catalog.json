@@ -1028,7 +1028,24 @@
                 "label": "Max files per run",
                 "kind": "number",
                 "defaultValue": 1000,
-                "description": "Bounds the first run against a directory holding years of drops. What is left over is taken by the next run, oldest first - only what was emitted is recorded as processed."
+                "description": "Bounds the first run against a directory holding years of drops. What is left over is taken by the next run, in the order below - only what was emitted is recorded as processed."
+              },
+              {
+                "key": "orderBy",
+                "label": "Take files in",
+                "kind": "select",
+                "defaultValue": "name",
+                "options": [
+                  {
+                    "label": "Name order",
+                    "value": "name"
+                  },
+                  {
+                    "label": "Oldest first (modification time)",
+                    "value": "modified"
+                  }
+                ],
+                "description": "The order a capped run works through a backlog in. Name order is oldest first only when the names carry the date, like D20260901.zip. Oldest first goes by each file's modification time, the name breaking ties; on S3 it reads the whole prefix to find them, holding only \"Max files per run\" of them at a time."
               },
               {
                 "key": "trackState",

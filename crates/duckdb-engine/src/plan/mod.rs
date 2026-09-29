@@ -5683,6 +5683,16 @@ fn build_stage(
                 )))
             }
         };
+        let order_by_modified = match string_prop(&props, "orderBy").as_deref().map(str::trim) {
+            None | Some("") | Some("name") => false,
+            Some("modified") => true,
+            Some(other) => {
+                return Err(EngineError::Config(format!(
+                    "{}: orderBy must be name or modified, not '{}'",
+                    component_id, other
+                )))
+            }
+        };
         if baseline_existing && !track_state {
             return Err(EngineError::Config(format!(
                 "{}: firstRun baseline_existing needs trackState on. With nothing \
@@ -5705,6 +5715,7 @@ fn build_stage(
                 .unwrap_or(1000) as usize,
             track_state,
             baseline_existing,
+            order_by_modified,
             user: string_prop(&props, "user").filter(|s| !s.is_empty()),
             password: string_prop(&props, "password").filter(|s| !s.is_empty()),
             private_key: string_prop(&props, "privateKey").filter(|s| !s.is_empty()),

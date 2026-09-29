@@ -21346,6 +21346,79 @@ fn a_sequence_prefix_larger_than_the_listing_bound_is_refused_not_truncated() {
     assert!(e.contains("10000") || e.contains("10,000"), "{e}");
 }
 
+/// #324: `orderBy: modified` takes a capped run's files oldest first by their
+/// modification time, wherever they sit in the prefix - here the two oldest
+/// sort LAST by name, so name order would take the wrong two.
+#[test]
+fn s3_changed_takes_the_oldest_first_when_ordered_by_modification_time() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+
+    let page = r#"<?xml version="1.0"?><ListBucketResult><IsTruncated>false</IsTruncated>
+      <Contents><Key>in/a.csv</Key><Size>1</Size><ETag>&quot;e1&quot;</ETag><LastModified>2026-01-03T00:00:00.000Z</LastModified></Contents>
+      <Contents><Key>in/b.csv</Key><Size>1</Size><ETag>&quot;e2&quot;</ETag><LastModified>2026-01-02T00:00:00.000Z</LastModified></Contents>
+      <Contents><Key>in/c.csv</Key><Size>1</Size><ETag>&quot;e3&quot;</ETag><LastModified>2026-01-01T00:00:00.000Z</LastModified></Contents>
+    </ListBucketResult>"#;
+    let reply = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{}",
+        page.len(),
+        page
+    );
+    let (port, _rx) = stub_s3(vec![reply.clone(), reply]);
+    let emitted = |order: &str, name: &str| {
+        let out = out_path(tmp.path(), &format!("{name}.csv"));
+        let mut props = s3_props(port, "s3://raw/in/", true);
+        props["maxEntries"] = json!(2);
+        props["orderBy"] = json!(order);
+        let r = engine.execute_pipeline_named(
+            &doc(
+                json!([
+                    node("c", "src.changed", props),
+                    node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+                ]),
+                json!([main_edge("e1", "c", "k")]),
+            ),
+            name,
+        );
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+        let body = std::fs::read_to_string(&out).unwrap_or_default().replace("\r\n", "\n");
+        body.lines()
+            .skip(1)
+            .filter_map(|l| l.split(',').next().map(str::to_string))
+            .filter(|u| !u.is_empty())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(emitted("modified", "bytime"), vec!["s3://raw/in/c.csv", "s3://raw/in/b.csv"]);
+    assert_eq!(emitted("name", "byname"), vec!["s3://raw/in/a.csv", "s3://raw/in/b.csv"]);
+}
+
+/// An order this does not know is refused, not read as name order.
+#[test]
+fn changed_with_an_unknown_order_is_refused() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let mut props = s3_props(1, "s3://raw/in/", true);
+    props["orderBy"] = json!("newest");
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("c", "src.changed", props),
+                node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "x.csv") })),
+            ]),
+            json!([main_edge("e1", "c", "k")]),
+        ),
+        "badorder",
+    );
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("orderBy") && e.contains("modified"), "{e}");
+}
+
 /// An S3 uri with no credentials must say so. Sending an anonymous request
 /// instead returns 403, which reads as "wrong keys" and sends people to check
 /// credentials they never set.

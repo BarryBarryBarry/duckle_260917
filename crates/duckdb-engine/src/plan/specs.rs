@@ -2588,6 +2588,9 @@ pub struct ChangedSourceSpec {
     /// already there. False emits it, which is a backfill. True records it as
     /// OBSERVED, not processed, and emits only what is added or replaced later.
     pub baseline_existing: bool,
+    /// #324: the order a listing is taken in. False is by name; true is oldest
+    /// first by modification time, with the name breaking ties.
+    pub order_by_modified: bool,
     // SFTP auth, ignored for https.
     pub user: Option<String>,
     pub password: Option<String>,
