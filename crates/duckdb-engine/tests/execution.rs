@@ -21049,6 +21049,67 @@ fn s3_changed_lists_a_prefix_and_follows_the_continuation_token() {
     );
 }
 
+/// #324: maxEntries caps what one run EMITS, not how far the listing looks.
+/// Capping the listing instead hands back the same first keys every run: once
+/// they are processed, each later run finds only those, reports nothing new,
+/// and every object after them is never seen - a backlog that stays hidden
+/// behind a green run.
+#[test]
+fn s3_changed_reaches_past_processed_keys_when_the_cap_is_smaller_than_the_prefix() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "list.csv");
+
+    let page = r#"<?xml version="1.0"?><ListBucketResult>
+      <IsTruncated>false</IsTruncated>
+      <Contents><Key>in/a.csv</Key><Size>10</Size><ETag>&quot;e1&quot;</ETag></Contents>
+      <Contents><Key>in/b.csv</Key><Size>20</Size><ETag>&quot;e2&quot;</ETag></Contents>
+      <Contents><Key>in/c.csv</Key><Size>30</Size><ETag>&quot;e3&quot;</ETag></Contents>
+    </ListBucketResult>"#;
+    let reply = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{}",
+        page.len(),
+        page
+    );
+    let (port, _rx) = stub_s3(vec![reply.clone(), reply]);
+    let mut props = s3_props(port, "s3://raw/in/", true);
+    props["maxEntries"] = json!(2);
+    let pipeline = doc(
+        json!([
+            node("c", "src.changed", props),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "c", "k")]),
+    );
+    let emitted = || {
+        let body = std::fs::read_to_string(&out).unwrap_or_default();
+        let mut uris: Vec<String> = body
+            .replace("\r\n", "\n")
+            .lines()
+            .skip(1)
+            .filter_map(|l| l.split(',').next().map(str::to_string))
+            .filter(|u| !u.is_empty())
+            .collect();
+        uris.sort();
+        uris
+    };
+
+    let r = engine.execute_pipeline_named(&pipeline, "s3strand");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(emitted(), vec!["s3://raw/in/a.csv", "s3://raw/in/b.csv"], "the cap");
+
+    let r = engine.execute_pipeline_named(&pipeline, "s3strand");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        emitted(),
+        vec!["s3://raw/in/c.csv"],
+        "the object after the processed ones was never reached"
+    );
+}
+
 /// An S3 uri with no credentials must say so. Sending an anonymous request
 /// instead returns 403, which reads as "wrong keys" and sends people to check
 /// credentials they never set.

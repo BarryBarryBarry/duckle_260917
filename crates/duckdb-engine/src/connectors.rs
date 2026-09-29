@@ -5762,14 +5762,16 @@ impl DuckdbEngine {
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
 
-        let entries = if spec.listing {
-            self.list_remote_entries(spec)?
+        // An S3 listing walks past what is already processed rather than
+        // returning it, so those come back as a count, not as entries.
+        let (entries, walked_past) = if spec.listing {
+            self.list_remote_entries(spec, &seen)?
         } else {
-            vec![self.probe_remote_entry(spec)?]
+            (vec![self.probe_remote_entry(spec)?], 0)
         };
 
         let mut rows: Vec<JsonValue> = Vec::new();
-        let mut unchanged_count = 0usize;
+        let mut unchanged_count = walked_past;
         for e in &entries {
             let status = match seen.get(&e.uri) {
                 Some(prev) if *prev == e.fingerprint => {
@@ -5839,11 +5841,12 @@ impl DuckdbEngine {
             ));
         }
 
+        let listed = entries.len() + walked_past;
         let msg = format!(
             "changed: {} of {} entr{} changed at {}{}",
             emitted,
-            entries.len(),
-            if entries.len() == 1 { "y" } else { "ies" },
+            listed,
+            if listed == 1 { "y" } else { "ies" },
             spec.uri,
             if unchanged_count > 0 {
                 format!(" ({} unchanged)", unchanged_count)
@@ -5985,26 +5988,38 @@ impl DuckdbEngine {
         })
     }
 
-    /// Every object under a prefix.
-    fn s3_list(&self, spec: &plan::ChangedSourceSpec) -> Result<Vec<RemoteEntry>, EngineError> {
+    /// The objects under a prefix this run could emit, and how many already
+    /// processed ones were walked past to find them.
+    fn s3_list(
+        &self,
+        spec: &plan::ChangedSourceSpec,
+        seen: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(Vec<RemoteEntry>, usize), EngineError> {
         let cfg = self.s3_config(spec)?;
         let (bucket, prefix) = crate::s3::parse_s3_uri(&spec.uri)?;
-        // The cap goes DOWN into the listing rather than being applied after it:
-        // a prefix holding a million objects must not be walked in full to hand
-        // back a hundred. A suffix filter can discard some of what comes back,
-        // so the request asks for enough to still fill the cap afterwards.
-        let want = if spec.suffix.is_some() {
-            spec.max_entries.saturating_mul(4).max(spec.max_entries)
-        } else {
-            spec.max_entries
-        };
-        let objects = cfg.list(&bucket, &prefix, want)?;
+        // #324: the cap goes down into the listing as a count of what this run
+        // can EMIT. Objects already processed at the same fingerprint are
+        // walked past, not counted: capping what is listed returned the same
+        // first keys every run, so once those were processed nothing after
+        // them was ever reached. The suffix filter is applied the same way.
+        let mut walked_past = 0usize;
+        let objects = cfg.list_where(&bucket, &prefix, spec.max_entries, |o| {
+            if let Some(sfx) = &spec.suffix {
+                if !o.key.ends_with(sfx.as_str()) {
+                    return false;
+                }
+            }
+            let uri = format!("s3://{}/{}", bucket, o.key);
+            let fingerprint =
+                remote_fingerprint(o.etag.as_deref(), o.last_modified.as_deref(), o.size);
+            if seen.get(&uri) == Some(&fingerprint) {
+                walked_past += 1;
+                return false;
+            }
+            true
+        })?;
         let mut out: Vec<RemoteEntry> = objects
             .into_iter()
-            .filter(|o| match &spec.suffix {
-                Some(sfx) => o.key.ends_with(sfx.as_str()),
-                None => true,
-            })
             .map(|o| {
                 let name = o.key.rsplit('/').next().unwrap_or(&o.key).to_string();
                 RemoteEntry {
@@ -6027,7 +6042,7 @@ impl DuckdbEngine {
         // already; sorting by the leaf name matches what the SFTP side does when
         // a prefix has sub-folders in it.
         out.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(out)
+        Ok((out, walked_past))
     }
 
     /// xf.artifact.copy: land the bytes named by the upstream rows somewhere
@@ -7407,9 +7422,10 @@ impl DuckdbEngine {
     fn list_remote_entries(
         &self,
         spec: &plan::ChangedSourceSpec,
-    ) -> Result<Vec<RemoteEntry>, EngineError> {
+        seen: &std::collections::BTreeMap<String, String>,
+    ) -> Result<(Vec<RemoteEntry>, usize), EngineError> {
         if spec.uri.starts_with("s3://") || spec.uri.starts_with("s3a://") {
-            return self.s3_list(spec);
+            return self.s3_list(spec, seen);
         }
         if !spec.uri.starts_with("sftp://") {
             return Err(EngineError::Config(format!(
@@ -7420,7 +7436,9 @@ impl DuckdbEngine {
         }
         let (host, port, user, path) = parse_sftp_uri(&spec.uri)?;
         let user = spec.user.clone().or(user).unwrap_or_default();
-        self.sftp_list(spec, &host, port, &user, &path)
+        // A directory listing is one response with every entry in it, so there
+        // is nothing to walk past: the caller compares each one.
+        Ok((self.sftp_list(spec, &host, port, &user, &path)?, 0))
     }
 
     /// Connect, run `f` against the SFTP session, disconnect. Shared by the

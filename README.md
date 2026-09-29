@@ -2208,6 +2208,8 @@ reports nothing.
 What was processed advances only when the whole run succeeds, and only for
 rows that were actually emitted - so a failure downstream re-offers the same
 files, and a run capped by `maxEntries` does not mark the remainder as done.
+`maxEntries` caps what a run emits, not how far it looks: an S3 listing walks
+past what is already processed to reach the rest of the prefix.
 
 ### Maintain a DuckLake through the same pipelines (`src.ducklake.maintain`)
 

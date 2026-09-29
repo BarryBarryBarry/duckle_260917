@@ -397,17 +397,31 @@ impl S3Config {
         prefix: &str,
         limit: usize,
     ) -> Result<Vec<S3Object>, EngineError> {
+        self.list_where(bucket, prefix, limit, |_| true)
+    }
+
+    /// The objects under a prefix that `keep` accepts, following continuation
+    /// tokens until `limit` of them are found or the prefix runs out.
+    ///
+    /// #324: the limit counts what is KEPT. A caller skipping what it has
+    /// already processed has to walk past those however many there are; a
+    /// limit on what is listed hands back the same first keys every time.
+    pub fn list_where(
+        &self,
+        bucket: &str,
+        prefix: &str,
+        limit: usize,
+        mut keep: impl FnMut(&S3Object) -> bool,
+    ) -> Result<Vec<S3Object>, EngineError> {
         let mut out: Vec<S3Object> = Vec::new();
         let mut token: Option<String> = None;
         loop {
             // Canonical query has to be sorted by key, encoded, and identical
-            // to what is sent.
+            // to what is sent. A full page every time: a skipped object takes
+            // a slot in it, so the page cannot shrink to what is left to keep.
             let mut params: Vec<(String, String)> = vec![
                 ("list-type".into(), "2".into()),
-                (
-                    "max-keys".into(),
-                    1000.min(limit.saturating_sub(out.len())).max(1).to_string(),
-                ),
+                ("max-keys".into(), "1000".into()),
             ];
             if !prefix.is_empty() {
                 params.push(("prefix".into(), prefix.to_string()));
@@ -453,13 +467,17 @@ impl S3Config {
                     // to process.
                     continue;
                 }
-                out.push(S3Object {
+                let object = S3Object {
                     size: between(chunk, "<Size>", "</Size>").and_then(|s| s.parse().ok()),
                     etag: between(chunk, "<ETag>", "</ETag>")
                         .map(|s| s.replace("&quot;", "").trim_matches('"').to_string()),
                     last_modified: between(chunk, "<LastModified>", "</LastModified>"),
                     key: unescape_xml(&key),
-                });
+                };
+                if !keep(&object) {
+                    continue;
+                }
+                out.push(object);
                 if out.len() >= limit {
                     return Ok(out);
                 }
