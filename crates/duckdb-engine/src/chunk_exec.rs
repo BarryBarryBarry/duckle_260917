@@ -116,6 +116,7 @@ pub fn plan_for(
         &std::env::var("DUCKLE_ENVIRONMENT").unwrap_or_else(|_| "default".into()),
     );
     let id = backfill::new_id(&format!("{name}-{node_id}"));
+    let pid = backfill::this_process_owns(&id);
     let staging = staging_dir(workspace, &id);
     Ok(Backfill {
         pipeline: name.clone(),
@@ -123,7 +124,7 @@ pub fn plan_for(
         created_at: chrono::Utc::now().to_rfc3339(),
         release_id: release.clone(),
         max_concurrent: plan.concurrency,
-        pid: Some(std::process::id()),
+        pid,
         kind: Kind::Chunk,
         chunk_node: Some(node_id.to_string()),
         staging: Some(staging.display().to_string()),

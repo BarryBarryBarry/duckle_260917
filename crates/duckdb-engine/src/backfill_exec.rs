@@ -95,14 +95,16 @@ pub fn plan_for(
         workspace,
         &std::env::var("DUCKLE_ENVIRONMENT").unwrap_or_else(|_| "default".into()),
     );
+    let id = backfill::new_id(&name);
+    let pid = backfill::this_process_owns(&id);
     Ok(Backfill {
-        id: backfill::new_id(&name),
+        id,
         pipeline: name.clone(),
         pipeline_path: pipeline_path.display().to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
         release_id: release.clone(),
         max_concurrent: max_concurrent.max(1),
-        pid: Some(std::process::id()),
+        pid,
         kind: backfill::Kind::Partition,
         chunk_node: None,
         staging: None,
@@ -423,6 +425,7 @@ pub fn execute_with(
     // Clearing the pid is the only change here, so it goes through the file
     // too: returning this process's copy would hand the caller a plan without
     // whatever was cancelled or retried while it ran.
+    backfill::released(&id);
     match backfill::update(workspace, &id, |disk| disk.pid = None) {
         Ok((fresh, ())) => fresh,
         Err(_) => {

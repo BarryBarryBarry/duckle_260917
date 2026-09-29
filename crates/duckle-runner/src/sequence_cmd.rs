@@ -193,8 +193,10 @@ pub fn run() -> ExitCode {
         println!("nothing published yet: no links to plan");
         return ExitCode::from(0);
     }
+    let id = backfill::new_id(&format!("{pipeline}-seq"));
+    let pid = backfill::this_process_owns(&id);
     let plan = Backfill {
-        id: backfill::new_id(&format!("{pipeline}-seq")),
+        id,
         pipeline: pipeline.clone(),
         pipeline_path: args.path.display().to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -202,7 +204,7 @@ pub fn run() -> ExitCode {
         // A chain is serial by construction - the claim predicate sees to that -
         // so asking for more workers would only allocate threads that block.
         max_concurrent: 1,
-        pid: Some(std::process::id()),
+        pid,
         kind: Kind::Sequence,
         chunk_node: None,
         staging: None,

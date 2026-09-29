@@ -2136,7 +2136,7 @@ fn api_backfill_action(state: &Arc<State>, req: &Request) -> Reply {
             if n == 0 {
                 return respond_json(&json!({ "retried": 0, "id": id }));
             }
-            plan.pid = Some(std::process::id());
+            plan.pid = backfill::this_process_owns(&plan.id);
             if let Err(e) = backfill::save(&ws, &plan) {
                 return respond_err("500 Internal Server Error", &e);
             }

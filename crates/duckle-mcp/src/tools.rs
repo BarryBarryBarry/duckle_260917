@@ -827,7 +827,7 @@ fn t_backfill(args: &Value) -> Result<Value, String> {
             if n == 0 {
                 return Ok(json!({ "retried": 0, "note": "nothing was failed or interrupted" }));
             }
-            plan.pid = Some(std::process::id());
+            plan.pid = backfill::this_process_owns(&plan.id);
             backfill::save(&ws, &plan)?;
             let Some(duckdb) = resolve_duckdb(arg_str(args, "duckdb")) else {
                 return Err("no DuckDB binary; set DUCKLE_DUCKDB_BIN or pass 'duckdb'".into());

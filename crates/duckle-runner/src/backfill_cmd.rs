@@ -274,7 +274,7 @@ fn retry(args: &Args) -> ExitCode {
         println!("nothing to retry in {id}");
         return ExitCode::from(0);
     }
-    b.pid = Some(std::process::id());
+    b.pid = backfill::this_process_owns(&b.id);
     if let Err(e) = backfill::save(&args.workspace, &b) {
         eprintln!("duckle-runner backfill retry: {e}");
         return ExitCode::from(2);
