@@ -727,7 +727,7 @@ COMPONENTS = {
     'src.changed': {
         'kind': 'source',
         'summary': 'Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForE...',
-        'params': ['uri', 'listing', 'suffix', 'maxEntries', 'orderBy', 'trackState', 'firstRun', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'headers', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl'],
+        'params': ['uri', 'listing', 'suffix', 'include', 'exclude', 'maxEntries', 'orderBy', 'trackState', 'firstRun', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'headers', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl'],
     },
     'src.chroma': {
         'kind': 'source',

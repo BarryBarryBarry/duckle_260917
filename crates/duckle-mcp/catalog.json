@@ -1024,6 +1024,20 @@
                 "description": "Listing mode. Skips anything else in the directory."
               },
               {
+                "key": "include",
+                "label": "Only paths matching",
+                "kind": "text",
+                "placeholder": "*.zip, 2026/*/part-*.csv",
+                "description": "Listing mode. Comma-separated globs, matched against the path below the directory or prefix: * matches any run of characters, including /, and ? one character. Blank takes everything."
+              },
+              {
+                "key": "exclude",
+                "label": "Never paths matching",
+                "kind": "text",
+                "placeholder": "*.tmp, archive/*",
+                "description": "Listing mode. Applied after the include filter, so a partial upload or an archive folder never comes out. A filtered file is not part of the collection at all."
+              },
+              {
                 "key": "maxEntries",
                 "label": "Max files per run",
                 "kind": "number",

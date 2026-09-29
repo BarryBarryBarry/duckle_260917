@@ -6066,6 +6066,9 @@ impl DuckdbEngine {
                     return false;
                 }
             }
+            if !globs_admit(below_folder(&o.key, &prefix), &spec.include, &spec.exclude) {
+                return false;
+            }
             let uri = format!("s3://{}/{}", bucket, o.key);
             let fingerprint =
                 remote_fingerprint(o.etag.as_deref(), o.last_modified.as_deref(), o.size);
@@ -6481,6 +6484,8 @@ impl DuckdbEngine {
             uri: src.to_string(),
             listing: false,
             suffix: None,
+            include: Vec::new(),
+            exclude: Vec::new(),
             max_entries: 1,
             track_state: false,
             baseline_existing: false,
@@ -7662,6 +7667,7 @@ impl DuckdbEngine {
                 Some(s) => name.ends_with(s.as_str()),
                 None => true,
             })
+            .filter(|(name, _, _)| globs_admit(name, &spec.include, &spec.exclude))
             .map(|(name, size, mtime)| {
                 let modified = mtime.map(|m| m.to_string());
                 RemoteEntry {
@@ -25290,11 +25296,25 @@ impl<R: std::io::Read> std::io::Read for CappedReader<R> {
 
 /// Does this member pass the include / exclude filters?
 fn member_wanted(name: &str, spec: &plan::ArchiveExtractSpec) -> bool {
+    globs_admit(name, &spec.include, &spec.exclude)
+}
+
+/// Include and exclude globs, as archive members and src.changed listings
+/// both take them: an empty include admits everything, and exclude wins.
+fn globs_admit(name: &str, include: &[String], exclude: &[String]) -> bool {
     let matches = |pat: &String| glob_match(pat, name);
-    if !spec.include.is_empty() && !spec.include.iter().any(matches) {
+    if !include.is_empty() && !include.iter().any(matches) {
         return false;
     }
-    !spec.exclude.iter().any(matches)
+    !exclude.iter().any(matches)
+}
+
+/// An S3 key as a path below the folder a prefix names: `in/` and `in/D2026`
+/// both name the folder `in/`, so a glob reads `D20260901.zip`, or
+/// `archive/old.zip` for a key one level further down.
+fn below_folder<'a>(key: &'a str, prefix: &str) -> &'a str {
+    let folder = &prefix[..prefix.rfind('/').map_or(0, |i| i + 1)];
+    key.strip_prefix(folder).unwrap_or(key)
 }
 
 /// Where a node's accepted profiles live.

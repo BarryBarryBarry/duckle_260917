@@ -21419,6 +21419,53 @@ fn changed_with_an_unknown_order_is_refused() {
     assert!(e.contains("orderBy") && e.contains("modified"), "{e}");
 }
 
+/// #324: include and exclude globs, matched against the path below the folder
+/// the uri names - so `archive/*` reaches into a sub-folder, and a partial
+/// upload's `.tmp` never comes out. A filtered object is not part of the
+/// collection, so it is not reported as unchanged either.
+#[test]
+fn s3_changed_lists_only_what_the_include_and_exclude_globs_admit() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "list.csv");
+
+    let page = r#"<?xml version="1.0"?><ListBucketResult><IsTruncated>false</IsTruncated>
+      <Contents><Key>in/a.csv</Key><Size>1</Size><ETag>&quot;e1&quot;</ETag></Contents>
+      <Contents><Key>in/a.csv.tmp</Key><Size>1</Size><ETag>&quot;e2&quot;</ETag></Contents>
+      <Contents><Key>in/archive/old.csv</Key><Size>1</Size><ETag>&quot;e3&quot;</ETag></Contents>
+      <Contents><Key>in/b.csv</Key><Size>1</Size><ETag>&quot;e4&quot;</ETag></Contents>
+      <Contents><Key>in/notes.txt</Key><Size>1</Size><ETag>&quot;e5&quot;</ETag></Contents>
+    </ListBucketResult>"#;
+    let reply = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{}",
+        page.len(),
+        page
+    );
+    let (port, _rx) = stub_s3(vec![reply]);
+    let mut props = s3_props(port, "s3://raw/in/", true);
+    props["include"] = json!("*.csv, *.tmp");
+    props["exclude"] = json!("archive/*, *.tmp");
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("c", "src.changed", props),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "c", "k")]),
+        ),
+        "s3globs",
+    );
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let body = std::fs::read_to_string(&out).unwrap_or_default().replace("\r\n", "\n");
+    let uris: Vec<&str> = body.lines().skip(1).filter_map(|l| l.split(',').next()).collect();
+    assert_eq!(uris, vec!["s3://raw/in/a.csv", "s3://raw/in/b.csv"], "{body}");
+    let note = r.nodes.get("c").and_then(|n| n.note.clone()).unwrap_or_default();
+    assert!(note.contains("2 of 2"), "filtered objects are not entries: {note}");
+}
+
 /// An S3 uri with no credentials must say so. Sending an anonymous request
 /// instead returns 403, which reads as "wrong keys" and sends people to check
 /// credentials they never set.

@@ -2578,6 +2578,10 @@ pub struct ChangedSourceSpec {
     pub listing: bool,
     /// Only list entries whose name ends with this (listing mode).
     pub suffix: Option<String>,
+    /// #324: listing mode's globs, matched against the path below the folder
+    /// the uri names. An empty include admits everything; exclude wins.
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
     /// Most entries to emit in one run, so a first run against a directory
     /// with years of drops does not try to process all of it at once.
     pub max_entries: usize,

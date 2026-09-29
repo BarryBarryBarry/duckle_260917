@@ -5708,6 +5708,9 @@ fn build_stage(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
             suffix: string_prop(&props, "suffix").filter(|s| !s.is_empty()),
+            // The same array-or-comma-separated shape a column list takes.
+            include: column_list(&props, "include"),
+            exclude: column_list(&props, "exclude"),
             max_entries: props
                 .get("maxEntries")
                 .and_then(|v| v.as_u64())
