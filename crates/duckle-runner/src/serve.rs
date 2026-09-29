@@ -3985,8 +3985,8 @@ fn run_scheduled(state: &State, id: &str, file: &str, params: &HashMap<String, S
             return;
         }
     };
-    // #317: named as the schedule's, so a run input that overrides one of them
-    // is recorded as having displaced it.
+    // #317: named as the schedule's, so the run's provenance record says where
+    // each value came from.
     match execute_one_with(state, file, "scheduled", params, "schedule", None, None) {
         Ok(v) => {
             let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("?");
