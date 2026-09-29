@@ -6,6 +6,13 @@ import { getWorkspacePath } from './workspace';
 import type { Column } from './pipeline-types';
 import type { Edge, Node } from '@xyflow/react';
 import type { DuckleNodeData } from './pipeline-types';
+import type { PipelineRunFields } from './run-resolve';
+
+/**
+ * #317: what a run carries besides its graph - the pipeline's own top-level
+ * fields, and the declared parameters' values for the engine to check and apply.
+ */
+export type RunInput = { fields?: PipelineRunFields; params?: Record<string, string> };
 
 type AutodetectPayload = {
     columns: Column[];
@@ -157,12 +164,13 @@ export type PipelineEvent =
  * line carries the RunResult. Mirrors the desktop Channel without Tauri.
  */
 async function runViaSse(
-    pipeline: { nodes: Node<DuckleNodeData>[]; edges: Edge[] },
+    pipeline: PipelineRunFields & { nodes: Node<DuckleNodeData>[]; edges: Edge[] },
     onEvent?: (evt: PipelineEvent) => void,
     pipelineId?: string,
     pipelineName?: string | null,
     workspacePath?: string | null,
     targetNodeId?: string,
+    params?: Record<string, string>,
 ): Promise<RunResult | null> {
     const fail = (error: string): RunResult => ({
         status: 'error',
@@ -182,6 +190,7 @@ async function runViaSse(
                 workspacePath: workspacePath ?? null,
                 // Present for run-to-here (partial); omitted/null = full run.
                 targetNodeId: targetNodeId ?? null,
+                params: params ?? null,
             }),
         });
         if (!res.ok) {
@@ -241,22 +250,25 @@ export async function runPipeline(
     pipelineId?: string,
     workspacePath?: string | null,
     pipelineName?: string | null,
+    input?: RunInput,
 ): Promise<RunResult | null> {
     if (!isTauri() && !isWebBackend()) return null;
+    const pipeline = { ...(input?.fields ?? {}), nodes, edges };
     // Web edition streams progress over SSE so the live per-node animation works
     // just like the desktop Channel.
     if (isWebBackend()) {
-        return runViaSse({ nodes, edges }, onEvent, pipelineId, pipelineName, workspacePath);
+        return runViaSse(pipeline, onEvent, pipelineId, pipelineName, workspacePath, undefined, input?.params);
     }
     const channel = new Channel<PipelineEvent>();
     if (onEvent) channel.onmessage = onEvent;
     try {
         return await invoke<RunResult>('run_pipeline', {
-            pipeline: { nodes, edges },
+            pipeline,
             onEvent: channel,
             pipelineId: pipelineId ?? null,
             pipelineName: pipelineName ?? null,
             workspacePath: workspacePath ?? null,
+            params: input?.params ?? null,
         });
     } catch (err) {
         console.error('runPipeline failed', err);
@@ -278,18 +290,21 @@ export async function runPipelinePartial(
     pipelineId?: string,
     workspacePath?: string | null,
     pipelineName?: string | null,
+    input?: RunInput,
 ): Promise<RunResult | null> {
     if (!isTauri() && !isWebBackend()) return null;
+    const pipeline = { ...(input?.fields ?? {}), nodes, edges };
     // Web edition: run-to-here streams over SSE like a full run, passing the
     // target node so the server runs only the subgraph up to it.
     if (isWebBackend()) {
-        return runViaSse({ nodes, edges }, onEvent, pipelineId, pipelineName, workspacePath, targetNodeId);
+        return runViaSse(pipeline, onEvent, pipelineId, pipelineName, workspacePath, targetNodeId, input?.params);
     }
     const channel = new Channel<PipelineEvent>();
     if (onEvent) channel.onmessage = onEvent;
     try {
         return await invoke<RunResult>('run_pipeline_partial', {
-            pipeline: { nodes, edges },
+            params: input?.params ?? null,
+            pipeline,
             targetNodeId,
             onEvent: channel,
             pipelineId: pipelineId ?? null,

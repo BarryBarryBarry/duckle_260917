@@ -627,6 +627,17 @@ one of the accepted values`). A `--param` without `=`, or the same name twice, i
 a usage error rather than a guess at which was meant, and the run record gives
 their source as `--param`.
 
+In the editor, desktop or web, **Run** opens a form with a control for each
+declared parameter: a list for an `enum`, true / false for a `boolean`, a date
+or date-time picker, a number field that knows its `minimum` and `maximum`, and a
+masked field for a `secret`, each with its `description`. A blank field sends
+nothing, so the declared `default` applies and a `required` one is refused
+(`run_date is required`). The values go to the engine rather than being
+substituted in the browser, so a run started from the editor is held to the
+contract like any other, and the pipeline's `maxRunSeconds` and `resourcePool`
+apply to it too. A value a context gives a declared parameter is filled in for
+you to keep or change.
+
 **Where a value came from is kept.** When two surfaces bind the same parameter -
 a schedule and the run that starts, say - the later one wins, which is a
 documented rule and not a clever one. What is not thrown away is that something

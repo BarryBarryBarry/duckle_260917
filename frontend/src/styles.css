@@ -9582,3 +9582,9 @@ select.modal-select:focus {
     font-family: var(--font-mono, monospace);
 }
 .conn-test-button { margin-right: auto; }
+
+/* Run parameters (#127 / #317): one labelled control per parameter. */
+.run-param { display: flex; flex-direction: column; gap: 4px; font-size: 1rem; }
+.run-param-name { font-weight: 600; }
+.run-param-required { color: var(--danger); }
+.run-param-hint { font-size: 12px; opacity: 0.7; }

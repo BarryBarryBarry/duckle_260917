@@ -492,6 +492,7 @@ async fn run_pipeline(
     pipeline_id: Option<String>,
     pipeline_name: Option<String>,
     workspace_path: Option<String>,
+    params: Option<std::collections::HashMap<String, String>>,
 ) -> Result<RunResult, String> {
     let engine = engine()?.for_new_run();
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.clone());
@@ -504,6 +505,10 @@ async fn run_pipeline(
     resolve_saved_connections(&mut pipeline, &workspace_path)?;
     duckle_duckdb_engine::context::apply_env(&mut pipeline);
     duckle_duckdb_engine::context::apply_vault(&mut pipeline);
+    // #317: the run prompt's values meet the pipeline's declared contract here,
+    // as a run from any other surface does: checked, defaults filled, and each
+    // one a value rather than statement text.
+    duckle_duckdb_engine::context::apply_params(&mut pipeline, &params.unwrap_or_default())?;
     ensure_pixeltable_if_used(&app, &pipeline);
     let name = pipeline_name.clone();
     let receipt = begin_desktop_run(&workspace_path, &pipeline, pipeline_id.as_deref().unwrap_or("pipeline"), "desktop");
@@ -606,6 +611,7 @@ async fn run_pipeline_partial(
     pipeline_id: Option<String>,
     pipeline_name: Option<String>,
     workspace_path: Option<String>,
+    params: Option<std::collections::HashMap<String, String>>,
 ) -> Result<RunResult, String> {
     let engine = engine()?.for_new_run();
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.clone());
@@ -615,6 +621,10 @@ async fn run_pipeline_partial(
     resolve_saved_connections(&mut pipeline, &workspace_path)?;
     duckle_duckdb_engine::context::apply_env(&mut pipeline);
     duckle_duckdb_engine::context::apply_vault(&mut pipeline);
+    // #317: the run prompt's values meet the pipeline's declared contract here,
+    // as a run from any other surface does: checked, defaults filled, and each
+    // one a value rather than statement text.
+    duckle_duckdb_engine::context::apply_params(&mut pipeline, &params.unwrap_or_default())?;
     ensure_pixeltable_if_used(&app, &pipeline);
     let target = target_node_id;
     let name = pipeline_name.clone();

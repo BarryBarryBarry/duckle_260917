@@ -11,7 +11,7 @@ import type { Edge, Node } from '@xyflow/react';
 import type { DuckleNodeData } from '../src/pipeline-types';
 import type { RepoItem } from '../src/repo-types';
 import { livePreviewable } from '../src/live-preview';
-import { buildContextVars, discoverParams, resolveForRun, resolveTimeBuiltin } from '../src/run-resolve';
+import { buildContextVars, discoverParams, pipelineRunFields, resolveForRun, resolveTimeBuiltin } from '../src/run-resolve';
 import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterBuilderField';
 import { scheduleActionError, scheduleForSave, serverSchedule } from '../src/schedule-save';
 import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
@@ -1280,6 +1280,40 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'schedule action: the list view renders the error',
         list.includes('{error ?'),
         'the error is set but only the edit form shows it',
+    );
+}
+
+// #317: a declared parameter is the engine's to fill - it checks the value against
+// the declaration, applies the default and treats it as a value. So the editor
+// must not prompt for one as a bare placeholder, nor substitute a context of the
+// same name, and a run carries the pipeline's own top-level fields.
+{
+    const nodes = [node('k', 'snk.csv', { path: 'out/${region}-${batch}.csv' })];
+    const declared = ['region'];
+    const params = discoverParams(nodes, {}, declared);
+    check(
+        '#317: a declared parameter is not prompted for as a bare placeholder',
+        !params.includes('region') && params.includes('batch'),
+        `prompted ${JSON.stringify(params)}`,
+    );
+    const path = String(
+        resolveForRun(nodes, [context('dev', { region: 'us', batch: '7' })], undefined, undefined, undefined, declared)[0]
+            .data.properties?.path,
+    );
+    check(
+        '#317: a context does not pre-empt a declared parameter',
+        path === 'out/${region}-7.csv',
+        `the browser substituted it, bypassing the contract: ${path}`,
+    );
+    const fields = pipelineRunFields({
+        formatVersion: 1, nodes: [], edges: [], viewport: { x: 1 },
+        parameters: { region: { type: 'string' } }, maxRunSeconds: 60, resourcePool: 'etl',
+    });
+    check(
+        '#317: a run carries the parameter contract, time limit and pool, and nothing else',
+        JSON.stringify(fields) ===
+            JSON.stringify({ formatVersion: 1, parameters: { region: { type: 'string' } }, maxRunSeconds: 60, resourcePool: 'etl' }),
+        JSON.stringify(fields),
     );
 }
 

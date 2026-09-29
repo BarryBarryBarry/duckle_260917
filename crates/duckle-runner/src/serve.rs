@@ -975,6 +975,9 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
             if let Err(e) = crate::apply_env_pass(&mut doc, &state.workspace, &env_file) {
                 return respond_err("400 Bad Request", &e);
             }
+            if let Err(e) = apply_editor_params(&mut doc, &args) {
+                return respond_err("400 Bad Request", &e);
+            }
             duckle_duckdb_engine::context::apply_workspace_context_then_time(&mut doc, &state.workspace);
             let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
             let engine = DuckdbEngine::new(state.duckdb.clone());
@@ -1437,6 +1440,20 @@ fn record_editor_history(
 
 /// `event: result` line. The frontend turns these back into the same live
 /// per-node animation the desktop gets from the Tauri Channel.
+/// #317: the parameter values an editor run carries, through the boundary every
+/// other surface's run goes through: the pipeline's declared contract checks
+/// them, fills its defaults, and treats each one as a value, not statement text.
+/// Called where the console's run calls it, after the env pass and before the
+/// workspace context, so the two agree on what wins.
+fn apply_editor_params(doc: &mut PipelineDoc, args: &Value) -> Result<(), String> {
+    let params: std::collections::HashMap<String, String> = args
+        .get("params")
+        .and_then(Value::as_object)
+        .map(|o| o.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
+        .unwrap_or_default();
+    duckle_duckdb_engine::context::apply_params(doc, &params).map(|_| ())
+}
+
 fn run_stream(
     stream: &mut TcpStream,
     state: &WebState,
@@ -1462,6 +1479,9 @@ fn run_stream(
     // context, then the ${date}/${datetime} builtins.
     let env_file = state.workspace.join("secrets.env");
     if let Err(e) = crate::apply_env_pass(&mut doc, &state.workspace, &env_file) {
+        return write_reply(stream, &respond_err("400 Bad Request", &e));
+    }
+    if let Err(e) = apply_editor_params(&mut doc, &args) {
         return write_reply(stream, &respond_err("400 Bad Request", &e));
     }
     duckle_duckdb_engine::context::apply_workspace_context_then_time(&mut doc, &state.workspace);
@@ -7150,6 +7170,84 @@ mod tests {
             runs, fired,
             "the ledger says {fired} occurrences fired and {runs} runs actually happened"
         );
+    }
+
+    /// #317: a run the editor starts is held to the pipeline's parameter
+    /// contract, as a run from any other surface is. Editor runs sent only nodes
+    /// and edges and substituted prompted values in the browser, so a declared
+    /// default never filled anything and a value outside the declaration ran.
+    /// Both editor paths: the command and the stream.
+    #[test]
+    fn an_editor_run_is_held_to_the_pipelines_parameter_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let duckdb = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| std::path::Path::new(b).exists());
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from(duckdb.clone().unwrap_or_else(|| "duckdb".into())),
+            dist: ws.clone(),
+            host: "127.0.0.1".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "127.0.0.1", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
+        let out = ws.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let slash = |p: &std::path::Path| p.to_string_lossy().replace('\\', "/");
+        let run = |params: serde_json::Value| {
+            serde_json::json!({
+                "pipeline": {
+                    "parameters": { "region": { "type": "string", "enum": ["eu", "us"], "default": "eu" } },
+                    "nodes": [
+                        { "id": "s", "position": { "x": 0, "y": 0 },
+                          "data": { "label": "s", "componentId": "src.csv",
+                                    "properties": { "path": slash(&ws.join("in.csv")), "hasHeader": true } } },
+                        { "id": "k", "position": { "x": 0, "y": 0 },
+                          "data": { "label": "k", "componentId": "snk.csv",
+                                    "properties": { "path": format!("{}/${{region}}.csv", slash(&out)) } } }
+                    ],
+                    "edges": [{ "id": "e", "source": "s", "target": "k" }]
+                },
+                "params": params,
+                "pipelineName": "regional",
+            })
+        };
+        let cmd = |body: &serde_json::Value| {
+            let mut req = request("POST", "/api/cmd/run_pipeline", Some("Bearer s3cret"));
+            req.body = serde_json::to_vec(body).unwrap();
+            let reply = route_web(&req, &state);
+            (reply.code(), String::from_utf8_lossy(&reply.body).into_owned())
+        };
+
+        let (code, body) = cmd(&run(serde_json::json!({ "region": "mars" })));
+        assert_eq!(code, 400, "a value outside the enum ran: {body}");
+        assert!(body.contains("region"), "{body}");
+
+        let owner = state.console.identify(Some("Bearer s3cret"), None).expect("the owner signs in");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let streamed = serde_json::to_vec(&run(serde_json::json!({ "region": "mars" }))).unwrap();
+        std::thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let (mut stream, _) = listener.accept().unwrap();
+                super::run_stream(&mut stream, &state, &owner, &streamed)
+            });
+            let mut conn = std::net::TcpStream::connect(addr).unwrap();
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut conn, &mut text);
+            let _ = server.join().unwrap();
+            assert!(text.starts_with("HTTP/1.1 400") && text.contains("region"), "the stream ran it: {text}");
+        });
+        assert_eq!(std::fs::read_dir(&out).unwrap().count(), 0, "a refused run wrote something");
+
+        let Some(_) = duckdb else {
+            eprintln!("skipping the default half: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let (code, body) = cmd(&run(serde_json::json!({})));
+        assert_eq!(code, 200, "{body}");
+        assert!(out.join("eu.csv").exists(), "the declared default did not fill ${{region}}: {body}");
     }
 
     /// The web editor's History tab lists the pipeline's runs, and the runs the
