@@ -1351,6 +1351,18 @@ export default function App() {
         [activeJobId, jobs],
     );
 
+    // Bulk close from the tab context menu. `keepId` is the tab the menu was
+    // opened on; it becomes active if the active tab is among those closed.
+    const handleCloseJobs = useCallback(
+        (ids: string[], keepId: string) => {
+            if (ids.length === 0) return;
+            const closing = new Set(ids);
+            setJobs(js => js.filter(j => !closing.has(j.id)));
+            if (closing.has(activeJobId)) setActiveJobId(keepId);
+        },
+        [activeJobId],
+    );
+
     const [runResult, setRunResult] = useState<RunResult | null>(null);
     // The pipeline the run result belongs to. The canvas badges, the Output tab
     // and the Problems count show it only while that pipeline is open: a
@@ -2784,6 +2796,7 @@ export default function App() {
                         isRunning={isRunning}
                         onSelectJob={setActiveJobId}
                         onCloseJob={handleCloseJob}
+                        onCloseJobs={handleCloseJobs}
                         onNewJob={handleNewJob}
                         onRun={handleRun}
                         onStop={handleStop}

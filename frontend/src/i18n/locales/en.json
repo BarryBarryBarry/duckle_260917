@@ -30,6 +30,10 @@
   "header": {
     "unsavedChanges": "unsaved changes",
     "closeTab": "Close {{name}}",
+    "closeThisTab": "Close",
+    "closeOtherTabs": "Close Others",
+    "closeTabsToLeft": "Close Tabs to the Left",
+    "closeTabsToRight": "Close Tabs to the Right",
     "newPipeline": "New pipeline",
     "stop": "Stop",
     "stopTooltip": "Stop pipeline (F6)",

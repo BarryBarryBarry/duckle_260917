@@ -28,6 +28,10 @@
   "header": {
     "unsavedChanges": "未保存的更改",
     "closeTab": "关闭 {{name}}",
+    "closeThisTab": "关闭",
+    "closeOtherTabs": "关闭其它",
+    "closeTabsToLeft": "关闭左边标签页",
+    "closeTabsToRight": "关闭右边标签页",
     "newPipeline": "新建管道",
     "stop": "停止",
     "stopTooltip": "停止管道（F6）",

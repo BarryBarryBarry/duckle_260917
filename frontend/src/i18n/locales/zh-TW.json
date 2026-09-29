@@ -27,6 +27,10 @@
   "header": {
     "unsavedChanges": "未儲存的變更",
     "closeTab": "關閉{{name}}",
+    "closeThisTab": "關閉",
+    "closeOtherTabs": "關閉其他",
+    "closeTabsToLeft": "關閉左側分頁",
+    "closeTabsToRight": "關閉右側分頁",
     "newPipeline": "新管道",
     "stop": "停止",
     "stopTooltip": "停止管道（ F6 ）",

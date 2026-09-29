@@ -17,7 +17,10 @@ import {
     X,
     Zap,
     Home,
+    ArrowLeftToLine,
+    ArrowRightToLine,
 } from 'lucide-react';
+import { useContextMenu, type MenuItem } from './ContextMenu';
 
 export type Job = {
     id: string;
@@ -31,6 +34,8 @@ type Props = {
     isRunning: boolean;
     onSelectJob: (id: string) => void;
     onCloseJob: (id: string) => void;
+    /** Close several tabs at once; `keepId` is the tab the context menu was opened on. */
+    onCloseJobs: (ids: string[], keepId: string) => void;
     onNewJob: () => void;
     onRun: () => void;
     onStop: () => void;
@@ -57,6 +62,7 @@ export default function EditorHeader({
     isRunning,
     onSelectJob,
     onCloseJob,
+    onCloseJobs,
     onNewJob,
     onRun,
     onStop,
@@ -100,10 +106,53 @@ export default function EditorHeader({
         fn();
     };
 
+    const tabMenu = useContextMenu();
+
+    const onTabContextMenu = (e: React.MouseEvent, index: number) => {
+        const job = jobs[index];
+        const others = jobs.filter(j => j.id !== job.id).map(j => j.id);
+        const left = jobs.slice(0, index).map(j => j.id);
+        const right = jobs.slice(index + 1).map(j => j.id);
+        const items: MenuItem[] = [
+            {
+                kind: 'item',
+                key: 'close',
+                label: t('header.closeThisTab', 'Close'),
+                icon: <X size={13} />,
+                onClick: () => onCloseJob(job.id),
+            },
+            {
+                kind: 'item',
+                key: 'close-others',
+                label: t('header.closeOtherTabs', 'Close Others'),
+                onClick: () => onCloseJobs(others, job.id),
+                disabled: others.length === 0,
+            },
+            { kind: 'separator', key: 'sep' },
+            {
+                kind: 'item',
+                key: 'close-left',
+                label: t('header.closeTabsToLeft', 'Close Tabs to the Left'),
+                icon: <ArrowLeftToLine size={13} />,
+                onClick: () => onCloseJobs(left, job.id),
+                disabled: left.length === 0,
+            },
+            {
+                kind: 'item',
+                key: 'close-right',
+                label: t('header.closeTabsToRight', 'Close Tabs to the Right'),
+                icon: <ArrowRightToLine size={13} />,
+                onClick: () => onCloseJobs(right, job.id),
+                disabled: right.length === 0,
+            },
+        ];
+        tabMenu.open(e, items);
+    };
+
     return (
         <div className="editor-header">
             <div className="job-tabs" role="tablist" aria-label="Open pipelines">
-                {jobs.map(job => {
+                {jobs.map((job, index) => {
                     const isActive = job.id === activeJobId;
                     return (
                         <div
@@ -111,6 +160,7 @@ export default function EditorHeader({
                             className={'job-tab' + (isActive ? ' is-active' : '')}
                             role="tab"
                             aria-selected={isActive}
+                            onContextMenu={e => onTabContextMenu(e, index)}
                         >
                             <button
                                 type="button"
@@ -343,6 +393,7 @@ export default function EditorHeader({
                     ) : null}
                 </div>
             </div>
+            {tabMenu.element}
         </div>
     );
 }
