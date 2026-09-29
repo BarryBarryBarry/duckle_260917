@@ -3463,7 +3463,9 @@ fn connection_test_reaches_a_rest_api_with_its_auth() {
 }
 
 /// A host that never answers fails the test within seconds rather than leaving
-/// the editor waiting out the operating system's TCP timeout.
+/// the editor waiting out the operating system's TCP timeout. One connect timeout
+/// (10 s) and a process start, not two: asking the catalog first and then the ping
+/// waited both out, 37 s on a Windows CI runner.
 #[test]
 fn connection_test_gives_up_on_a_host_that_never_answers() {
     let engine = engine_or_skip!();
@@ -3473,7 +3475,8 @@ fn connection_test_gives_up_on_a_host_that_never_answers() {
         "database": "postgres", "username": "u", "password": "p"
     }));
     assert!(!r.ok, "{}", r.message);
-    assert!(started.elapsed() < std::time::Duration::from_secs(30), "took {:?}", started.elapsed());
+    eprintln!("a host that never answers took {:?}", started.elapsed());
+    assert!(started.elapsed() < std::time::Duration::from_secs(25), "took {:?}", started.elapsed());
 }
 
 #[test]

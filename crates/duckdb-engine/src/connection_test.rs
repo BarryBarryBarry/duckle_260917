@@ -30,9 +30,10 @@ pub struct ConnectionTest {
 
 /// How a connection kind is tested.
 enum Probe {
-    /// A database. `list` names what the login can see as a column called
-    /// `name`; `ping` only proves the connection works and is asked when `list`
-    /// fails, so a login that may not read the catalog still tests as connected.
+    /// A database. `ping` proves the connection works and is asked first, so a
+    /// host that never answers costs one connect timeout rather than two; `list`
+    /// then names what the login can see as a column called `name`, and a login
+    /// that may not read the catalog still tests as connected.
     /// Neither has an ORDER BY: a driver caps the query by wrapping it in a
     /// derived table, where SQL Server refuses one, so the names are sorted here.
     Tables { component: &'static str, list: &'static str, ping: &'static str },
@@ -100,19 +101,19 @@ impl DuckdbEngine {
         match probe {
             Probe::Tables { component, list, ping } => {
                 let format = component.trim_start_matches("src.");
+                if let Err(e) = self.probe_names(format, &props, ping) {
+                    return failed(blank(&e.to_string(), &secrets));
+                }
                 match self.probe_names(format, &props, list) {
                     Ok(names) => found(names, "table", "visible to this login"),
-                    Err(list_err) => match self.probe_names(format, &props, ping) {
-                        Ok(_) => ConnectionTest {
-                            ok: true,
-                            message: blank(
-                                &format!("Connected, but the tables could not be listed: {list_err}"),
-                                &secrets,
-                            ),
-                            objects: Vec::new(),
-                            more: false,
-                        },
-                        Err(e) => failed(blank(&e.to_string(), &secrets)),
+                    Err(list_err) => ConnectionTest {
+                        ok: true,
+                        message: blank(
+                            &format!("Connected, but the tables could not be listed: {list_err}"),
+                            &secrets,
+                        ),
+                        objects: Vec::new(),
+                        more: false,
                     },
                 }
             }
