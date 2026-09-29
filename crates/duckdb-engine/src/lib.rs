@@ -806,6 +806,19 @@ impl DuckdbEngine {
             .unwrap_or_default()
     }
 
+    /// The rows of the LAST statement in `sql`, for a script that sets up
+    /// before it asks. A `CREATE SECRET` answers with a `Success` row of its own,
+    /// which `run_rows` returns as if it were the query's; measured on 1.5.5, an
+    /// empty final result still prints `[]`, so the last array is always the
+    /// final statement's.
+    fn run_last_rows(&self, db: Option<&Path>, sql: &str) -> Result<Vec<JsonValue>, EngineError> {
+        let out = self.run(db, sql, true)?;
+        match parse_json_arrays_checked(&out) {
+            Ok(arrays) => Ok(arrays.into_iter().last().unwrap_or_default()),
+            Err((_, reason)) => Err(json_bridge_failure(&reason, &out)),
+        }
+    }
+
     fn run_rows(&self, db: Option<&Path>, sql: &str) -> Result<Vec<JsonValue>, EngineError> {
         let out = self.run(db, sql, true)?;
         // Checked, because these rows are the ones a sink writes: 26 sink
@@ -937,12 +950,13 @@ impl DuckdbEngine {
         };
         let prelude = self.source_prelude(format, &options);
 
+        // The prelude can open with a CREATE SECRET, whose own answer comes first.
         let describe_sql = format!("{}DESCRIBE {};", prelude, select);
-        let cols = self.run_rows(None, &describe_sql)?;
+        let cols = self.run_last_rows(None, &describe_sql)?;
         let schema: Vec<Column> = cols.iter().filter_map(parse_describe_row).collect();
 
         let sample_sql = format!("{}{} LIMIT {};", prelude, select, PREVIEW_LIMIT);
-        let rows = self.run_rows(None, &sample_sql).unwrap_or_default();
+        let rows = self.run_last_rows(None, &sample_sql).unwrap_or_default();
 
         Ok(Inspection {
             schema,

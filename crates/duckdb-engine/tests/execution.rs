@@ -3222,6 +3222,42 @@ fn pg_env() -> Option<(String, u64, String, String, String)> {
     Some((host, port, db, user, pass))
 }
 
+/// Autodetect on an S3-compatible source reads the object's own schema and rows.
+/// The inspect script starts with the CREATE SECRET its reader needs, and that
+/// statement answers with a row of its own.
+#[test]
+fn minio_autodetect_reads_the_object_schema() {
+    let engine = engine_or_skip!();
+    let host = match std::env::var("DUCKLE_MINIO_HOST") {
+        Ok(h) if !h.is_empty() => h,
+        _ => {
+            eprintln!("skipping: set DUCKLE_MINIO_HOST to run against MinIO");
+            return;
+        }
+    };
+    let port = std::env::var("DUCKLE_MINIO_PORT").unwrap_or_else(|_| "9000".into());
+    let bucket = std::env::var("DUCKLE_MINIO_BUCKET").unwrap_or_else(|_| "duckle-test".into());
+    let access = std::env::var("DUCKLE_MINIO_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".into());
+    let secret = std::env::var("DUCKLE_MINIO_SECRET_KEY").unwrap_or_else(|_| "minioadmin".into());
+    let insp = engine
+        .inspect(
+            "minio",
+            json!({
+                "bucket": bucket, "key": "orders.parquet", "region": "us-east-1",
+                "accessKey": access, "secretKey": secret,
+                "endpoint": format!("{host}:{port}"), "urlStyle": "path", "useSsl": "false",
+                "format": "parquet"
+            }),
+        )
+        .expect("inspect");
+    assert!(!insp.schema.is_empty(), "no schema: {insp:?}");
+    assert!(
+        insp.schema.iter().all(|c| !c.name.eq_ignore_ascii_case("success")),
+        "the CREATE SECRET row was read as the schema: {insp:?}"
+    );
+    assert!(!insp.sample_rows.is_empty() && insp.sample_rows[0].get("success").is_none() && insp.sample_rows[0].get("Success").is_none(), "{insp:?}");
+}
+
 #[test]
 fn pg_sink_then_source_roundtrip() {
     let engine = engine_or_skip!();
