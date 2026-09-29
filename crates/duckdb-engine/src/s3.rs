@@ -470,7 +470,7 @@ impl S3Config {
                 let object = S3Object {
                     size: between(chunk, "<Size>", "</Size>").and_then(|s| s.parse().ok()),
                     etag: between(chunk, "<ETag>", "</ETag>")
-                        .map(|s| s.replace("&quot;", "").trim_matches('"').to_string()),
+                        .map(|s| unescape_xml(&s).trim_matches('"').to_string()),
                     last_modified: between(chunk, "<LastModified>", "</LastModified>"),
                     key: unescape_xml(&key),
                 };
@@ -733,7 +733,7 @@ impl S3Config {
                 between(&body, "<Message>", "</Message>").unwrap_or(body.clone())
             )));
         }
-        Ok(between(&body, "<ETag>", "</ETag>").map(|s| s.replace("&quot;", "")))
+        Ok(between(&body, "<ETag>", "</ETag>").map(|s| unescape_xml(&s).trim_matches('"').to_string()))
     }
 
     fn abort_multipart(&self, bucket: &str, key: &str, upload_id: &str) -> Result<(), EngineError> {
@@ -823,11 +823,44 @@ fn between(hay: &str, open: &str, close: &str) -> Option<String> {
 /// The object is then fetched under a key that does not exist and is silently
 /// missing from the listing.
 fn unescape_xml(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
+    // One pass, so `&amp;#39;` is the text `&#39;` rather than an apostrophe.
+    // Numeric references matter: MinIO and other Go-based stores write `&#34;`
+    // and `&#39;` where AWS writes `&quot;` and `&apos;`.
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        let decoded = tail.find(';').filter(|end| *end <= 12).and_then(|end| {
+            let ch = match &tail[1..end] {
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "amp" => Some('&'),
+                name => name
+                    .strip_prefix('#')
+                    .and_then(|n| match n.strip_prefix(['x', 'X']) {
+                        Some(hex) => u32::from_str_radix(hex, 16).ok(),
+                        None => n.parse::<u32>().ok(),
+                    })
+                    .and_then(char::from_u32),
+            }?;
+            Some((ch, end + 1))
+        });
+        match decoded {
+            Some((ch, len)) => {
+                out.push(ch);
+                rest = &tail[len..];
+            }
+            None => {
+                out.push('&');
+                rest = &tail[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 /// A reader that hashes what passes through it.
@@ -1369,6 +1402,21 @@ mod tests {
         assert_eq!(unescape_xml("a&amp;b.csv"), "a&b.csv");
         assert_eq!(unescape_xml("&lt;tag&gt;"), "<tag>");
         assert_eq!(unescape_xml("say &quot;hi&quot;"), "say \"hi\"");
+    }
+
+    /// MinIO and other Go-based stores escape with numeric references - `&#34;`
+    /// for a quote, `&#39;` for an apostrophe - where AWS uses the named ones.
+    /// Left encoded, a key with an apostrophe names an object that does not exist.
+    #[test]
+    fn numeric_character_references_are_decoded_once() {
+        assert_eq!(unescape_xml("Zoe&#39;s drop.csv"), "Zoe's drop.csv");
+        assert_eq!(unescape_xml("&#34;e1&#34;"), "\"e1\"");
+        assert_eq!(unescape_xml("tab&#x9;and &#X41;"), "tab\tand A");
+        // Decoded once: an escaped ampersand followed by text that looks like a
+        // reference is that text, not a second decoding of it.
+        assert_eq!(unescape_xml("a&amp;#39;b"), "a&#39;b");
+        // Not a reference at all: left as it is.
+        assert_eq!(unescape_xml("R&D; &#zz; &"), "R&D; &#zz; &");
     }
 
     /// A stub that answers a fixed script of responses and records the request

@@ -21249,6 +21249,57 @@ fn changed_baseline_existing_without_tracked_state_is_refused() {
     assert!(e.contains("emit_existing") && e.contains("baseline_existing"), "{e}");
 }
 
+/// A listing from MinIO writes `&#39;` and `&#34;` where AWS writes named
+/// entities. The uri has to name the real key, and the etag must be the same
+/// value a HEAD reports - and state saved while the etag still carried `&#34;`
+/// must keep matching, or every object in the collection comes out again.
+#[test]
+fn s3_changed_reads_a_listing_escaped_the_way_minio_escapes_it() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "list.csv");
+
+    let page = r#"<?xml version="1.0"?><ListBucketResult><IsTruncated>false</IsTruncated>
+      <Contents><Key>in/a.csv</Key><Size>10</Size><ETag>&#34;e1&#34;</ETag></Contents>
+      <Contents><Key>in/Zoe&#39;s drop.csv</Key><Size>20</Size><ETag>&#34;e2&#34;</ETag></Contents>
+    </ListBucketResult>"#;
+    let reply = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{}",
+        page.len(),
+        page
+    );
+    let (port, _rx) = stub_s3(vec![reply]);
+    // a.csv was processed by a version that kept the reference in its etag.
+    let state = tmp.path().join("state").join("s3minio");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(
+        state.join("c.json"),
+        json!({ "seen": { "s3://raw/in/a.csv": "etag=&#34;e1&#34; size=10" } }).to_string(),
+    )
+    .unwrap();
+
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("c", "src.changed", s3_props(port, "s3://raw/in/", true)),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "c", "k")]),
+        ),
+        "s3minio",
+    );
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let body = std::fs::read_to_string(&out).unwrap_or_default().replace("\r\n", "\n");
+    let rows: Vec<&str> = body.lines().skip(1).filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(rows.len(), 1, "a.csv is unchanged, only the new key comes out: {body}");
+    assert!(rows[0].contains("s3://raw/in/Zoe's drop.csv"), "{body}");
+    assert!(rows[0].contains(",e2,"), "the etag without its quotes: {body}");
+    assert!(!body.contains("&#"), "{body}");
+}
+
 /// An S3 uri with no credentials must say so. Sending an anonymous request
 /// instead returns 403, which reads as "wrong keys" and sends people to check
 /// credentials they never set.

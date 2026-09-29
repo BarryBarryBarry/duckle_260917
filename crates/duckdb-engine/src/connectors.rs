@@ -5767,8 +5767,14 @@ impl DuckdbEngine {
             prior_state
                 .as_ref()
                 .and_then(|v| v.get(key).cloned())
-                .and_then(|v| serde_json::from_value(v).ok())
+                .and_then(|v| serde_json::from_value::<std::collections::BTreeMap<String, String>>(v).ok())
                 .unwrap_or_default()
+                .into_iter()
+                // A MinIO listing's etag kept its `&#34;` quotes until numeric
+                // references were decoded. The same fingerprint, read as such,
+                // rather than every object in the collection coming out again.
+                .map(|(uri, fingerprint)| (uri, fingerprint.replace("&#34;", "")))
+                .collect()
         };
         // What has already been processed: uri -> fingerprint.
         let mut seen = saved_map("seen");
