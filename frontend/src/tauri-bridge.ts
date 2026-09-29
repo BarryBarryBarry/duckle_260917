@@ -58,6 +58,40 @@ export async function tauriAutodetect(
     return null;
 }
 
+// ---- Test connection ---------------------------------------------------
+
+/** What testing a connection found (the engine's `ConnectionTest`). */
+export type ConnectionTestResult = {
+    ok: boolean;
+    message: string;
+    /** Tables and views, or the objects at the top of a bucket, sorted. */
+    objects: string[];
+    /** More were visible than `objects` lists. */
+    more: boolean;
+};
+
+/**
+ * Test a connection as the editor holds it, saved or not. The engine runs what a
+ * node using it runs, so a pass here is a connection a run can use. In the web
+ * editor it needs the admin role, like every connection command.
+ */
+export async function testConnection(payload: unknown): Promise<ConnectionTestResult> {
+    if (!isTauri() && !isWebBackend()) {
+        return {
+            ok: false,
+            message: 'Testing a connection needs the desktop app or duckle serve.',
+            objects: [],
+            more: false,
+        };
+    }
+    try {
+        return await invoke<ConnectionTestResult>('connection_test', { payload });
+    } catch (err) {
+        const message = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+        return { ok: false, message, objects: [], more: false };
+    }
+}
+
 // ---- Pipeline execution ------------------------------------------------
 
 export type NodeRunStatus = {

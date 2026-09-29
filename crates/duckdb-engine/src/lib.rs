@@ -59,6 +59,7 @@ pub mod props;
 pub mod affected;
 pub mod format;
 pub mod fromsql;
+pub mod connection_test;
 pub mod catalog;
 pub mod runlock;
 pub mod s3;
@@ -99,6 +100,7 @@ pub(crate) use util::*;
 pub use util::{is_secret_prop_key, literal_secrets, SECRET_NEEDLES};
 pub use history::{append_run_record, load_run_history, record_run, RunRecord};
 pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
+pub use connection_test::ConnectionTest;
 use plan::{
     quote_ident, AiChunkSpec, AiClassifySpec, AiDedupeSpec, AiEmbedSpec, AiLlmSpec, AiOnInvalid,
     AiPiiSpec, AiResponseFormat,
@@ -977,6 +979,24 @@ impl DuckdbEngine {
         format: &str,
         options: &JsonValue,
     ) -> Result<Inspection, EngineError> {
+        let out = self.run_driver_probe(format, options, PREVIEW_ROW_LIMIT)?;
+        let out_str = out.to_string_lossy().replace('\\', "/");
+        // The parquet carries the real schema the driver returned.
+        let inspection = self.inspect("parquet", serde_json::json!({ "path": out_str }));
+        let _ = std::fs::remove_file(&out);
+        inspection
+    }
+
+    /// Run `src.<format>` with `options`, its query capped at `cap` rows, into a
+    /// throwaway parquet, and return that file for the caller to read and remove.
+    /// The driver is the one a run uses, so what lands in the file is what a run
+    /// of the node would read.
+    fn run_driver_probe(
+        &self,
+        format: &str,
+        options: &JsonValue,
+        cap: usize,
+    ) -> Result<std::path::PathBuf, EngineError> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static INSPECT_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -996,7 +1016,7 @@ impl DuckdbEngine {
         let component_id = format!("src.{}", format);
         // Cap the driver fetch where we can; correctness does not depend on it.
         let mut src_props = options.clone();
-        if let Some(capped) = plan::preview_source_query(format, &src_props, PREVIEW_ROW_LIMIT) {
+        if let Some(capped) = plan::preview_source_query(format, &src_props, cap) {
             if let Some(obj) = src_props.as_object_mut() {
                 obj.insert("query".to_string(), JsonValue::String(capped));
             }
@@ -1063,10 +1083,7 @@ impl DuckdbEngine {
                 .unwrap_or_else(|| format!("autodetect failed for src.{}", format));
             return Err(EngineError::Query(msg));
         }
-        // The parquet carries the real schema the driver returned.
-        let inspection = self.inspect("parquet", serde_json::json!({ "path": out_str }));
-        let _ = std::fs::remove_file(&out);
-        inspection
+        Ok(out)
     }
 
     /// SQL Server / Synapse autodetect that never trips the tiberius COLMETADATA

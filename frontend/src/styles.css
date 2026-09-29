@@ -9560,3 +9560,25 @@ select.modal-select:focus {
     opacity: 0.6;
     font-size: 11px;
 }
+
+/* Test connection (Connections editor): the verdict, and what the connection can see. */
+.conn-test {
+    margin: 0 20px 12px;
+    padding: 8px 10px;
+    border-left: 2px solid var(--success);
+    background: color-mix(in srgb, var(--success) 8%, transparent);
+    font-size: 12px;
+}
+.conn-test-fail {
+    border-left-color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+.conn-test-message { white-space: pre-wrap; word-break: break-word; }
+.conn-test-objects {
+    margin: 6px 0 0;
+    padding-left: 16px;
+    max-height: 160px;
+    overflow: auto;
+    font-family: var(--font-mono, monospace);
+}
+.conn-test-button { margin-right: auto; }

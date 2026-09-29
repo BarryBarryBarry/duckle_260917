@@ -3222,6 +3222,141 @@ fn pg_env() -> Option<(String, u64, String, String, String)> {
     Some((host, port, db, user, pass))
 }
 
+/// Test connection against a live database: a connection that signs in lists
+/// what its login can see, including a table made here; a wrong password fails,
+/// and never appears in what the test says. The connection is a payload as the
+/// Connections editor holds it, `username` and all, so the test proves the
+/// saved connection reaches a node the way a run resolves it.
+fn assert_connection_test(engine: &DuckdbEngine, conn: serde_json::Value, expect: &str) {
+    let r = engine.test_connection(&conn);
+    assert!(r.ok, "{}: {}", conn["kind"], r.message);
+    assert!(
+        r.objects.iter().any(|o| o.eq_ignore_ascii_case(expect)),
+        "{} should list {expect}: {:?} ({})",
+        conn["kind"],
+        r.objects,
+        r.message
+    );
+    let mut bad = conn.clone();
+    bad["password"] = json!("definitely-not-the-password");
+    let r = engine.test_connection(&bad);
+    assert!(!r.ok, "{} accepted a wrong password: {}", conn["kind"], r.message);
+    assert!(!r.message.contains("definitely-not-the-password"), "the password leaked: {}", r.message);
+}
+
+#[test]
+fn pg_connection_test_lists_tables_and_refuses_a_bad_password() {
+    let engine = engine_or_skip!();
+    let Some((host, port, db, user, pass)) = pg_env() else {
+        eprintln!("skipping: set DUCKLE_PG_HOST to run against a real PostgreSQL");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let table = format!("duckle_conntest_{}", std::process::id());
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("w", "snk.postgres", json!({
+                "host": host, "port": port, "database": db, "user": user, "password": pass,
+                "schemaName": "public", "tableName": table, "mode": "overwrite"
+            })),
+        ]),
+        json!([main_edge("e", "s", "w")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_connection_test(
+        &engine,
+        json!({ "kind": "postgres", "host": host, "port": port, "database": db, "username": user, "password": pass }),
+        &format!("public.{table}"),
+    );
+}
+
+#[test]
+fn mysql_connection_test_lists_tables_and_refuses_a_bad_password() {
+    let engine = engine_or_skip!();
+    let Some((host, port, db, user, pass)) = mysql_env() else {
+        eprintln!("skipping: set DUCKLE_MYSQL_HOST to run against a real MySQL");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let table = format!("duckle_conntest_{}", std::process::id());
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("w", "snk.mysql", json!({
+                "host": host, "port": port, "database": db, "user": user, "password": pass,
+                "tableName": table, "mode": "overwrite"
+            })),
+        ]),
+        json!([main_edge("e", "s", "w")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_connection_test(
+        &engine,
+        json!({ "kind": "mysql", "host": host, "port": port, "database": db, "username": user, "password": pass }),
+        &format!("{db}.{table}"),
+    );
+}
+
+#[test]
+fn sqlserver_connection_test_lists_tables_and_refuses_a_bad_password() {
+    let engine = engine_or_skip!();
+    let Some((host, port, db, user, pass)) = mssql_env() else {
+        eprintln!("skipping: set DUCKLE_MSSQL_HOST to run against a real SQL Server");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let table = format!("duckle_conntest_{}", std::process::id());
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("w", "snk.sqlserver", json!({
+                "host": host, "port": port, "database": db, "user": user, "password": pass,
+                "schema": "dbo", "tableName": table, "mode": "overwrite", "trustCert": true
+            })),
+        ]),
+        json!([main_edge("e", "s", "w")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_connection_test(
+        &engine,
+        json!({ "kind": "sqlserver", "host": host, "port": port, "database": db, "username": user, "password": pass, "trustCert": true }),
+        &format!("dbo.{table}"),
+    );
+}
+
+#[test]
+fn minio_connection_test_lists_the_bucket_and_refuses_a_bad_secret() {
+    let engine = engine_or_skip!();
+    let host = match std::env::var("DUCKLE_MINIO_HOST") {
+        Ok(h) if !h.is_empty() => h,
+        _ => {
+            eprintln!("skipping: set DUCKLE_MINIO_HOST to run against MinIO");
+            return;
+        }
+    };
+    let port = std::env::var("DUCKLE_MINIO_PORT").unwrap_or_else(|_| "9000".into());
+    let bucket = std::env::var("DUCKLE_MINIO_BUCKET").unwrap_or_else(|_| "duckle-test".into());
+    let access = std::env::var("DUCKLE_MINIO_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".into());
+    let secret = std::env::var("DUCKLE_MINIO_SECRET_KEY").unwrap_or_else(|_| "minioadmin".into());
+    let conn = json!({
+        "kind": "s3", "bucket": bucket, "region": "us-east-1",
+        "accessKey": access, "secretKey": secret,
+        "endpoint": format!("{host}:{port}"), "urlStyle": "path", "useSsl": "false"
+    });
+    let r = engine.test_connection(&conn);
+    assert!(r.ok, "{}", r.message);
+    assert!(r.objects.iter().any(|o| o == "orders.parquet"), "{:?} ({})", r.objects, r.message);
+    let mut bad = conn.clone();
+    bad["secretKey"] = json!("definitely-not-the-secret");
+    let r = engine.test_connection(&bad);
+    assert!(!r.ok, "a wrong secret key was accepted: {}", r.message);
+    assert!(!r.message.contains("definitely-not-the-secret"), "the secret leaked: {}", r.message);
+}
+
 /// Autodetect on an S3-compatible source reads the object's own schema and rows.
 /// The inspect script starts with the CREATE SECRET its reader needs, and that
 /// statement answers with a row of its own.
@@ -3256,6 +3391,20 @@ fn minio_autodetect_reads_the_object_schema() {
         "the CREATE SECRET row was read as the schema: {insp:?}"
     );
     assert!(!insp.sample_rows.is_empty() && insp.sample_rows[0].get("success").is_none() && insp.sample_rows[0].get("Success").is_none(), "{insp:?}");
+}
+
+/// A host that never answers fails the test within seconds rather than leaving
+/// the editor waiting out the operating system's TCP timeout.
+#[test]
+fn connection_test_gives_up_on_a_host_that_never_answers() {
+    let engine = engine_or_skip!();
+    let started = std::time::Instant::now();
+    let r = engine.test_connection(&json!({
+        "kind": "postgres", "host": "10.255.255.1", "port": 5432,
+        "database": "postgres", "username": "u", "password": "p"
+    }));
+    assert!(!r.ok, "{}", r.message);
+    assert!(started.elapsed() < std::time::Duration::from_secs(30), "took {:?}", started.elapsed());
 }
 
 #[test]

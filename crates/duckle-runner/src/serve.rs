@@ -1132,6 +1132,14 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
                 Err(e) => respond_err("500 Internal Server Error", &e),
             }
         }
+        // Test a connection as the Connections editor holds it, saved or not.
+        // The name starts with "connection", so the gate above asked for admin.
+        "connection_test" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let payload = args.get("payload").cloned().unwrap_or(Value::Null);
+            let engine = DuckdbEngine::new(state.duckdb.clone());
+            respond_json(&serde_json::to_value(engine.test_connection(&payload)).unwrap_or(json!({})))
+        }
         // Compile to per-stage SQL for the Plan tab.
         "compile_pipeline" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
@@ -6137,6 +6145,40 @@ mod tests {
         // And the name that did not work finds nothing, which is what makes
         // this test about the name rather than about sessions in general.
         assert!(console.identify(None, Some(&format!("duckle_sid={sid}"))).is_none());
+    }
+
+    /// Test connection makes the server dial whatever host the form names, with
+    /// the credentials typed into it, so it is an administrator's command like the
+    /// other connection commands, and an operator is refused.
+    #[test]
+    fn only_an_administrator_can_test_a_connection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let operator = {
+            let store = crate::auth_store::AuthStore::open(&ws).unwrap();
+            store.create_api_key("op", console_auth::Role::Operator, None).unwrap()
+        };
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from("duckdb"),
+            dist: ws.clone(),
+            host: "0.0.0.0".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "0.0.0.0", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        let ask = |auth: &str| {
+            let mut req = request("POST", "/api/cmd/connection_test", Some(auth));
+            // A kind with no test, so the answer needs no server to exist.
+            req.body = serde_json::to_vec(&serde_json::json!({ "payload": { "kind": "kafka" } })).unwrap();
+            route_web(&req, &state)
+        };
+        assert_eq!(ask(&format!("Bearer {operator}")).code(), 403, "an operator must not test a connection");
+        let reply = ask("Bearer s3cret");
+        assert_eq!(reply.code(), 200, "{}", String::from_utf8_lossy(&reply.body));
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(body["ok"], false, "{body}");
+        assert!(body["message"].as_str().unwrap_or("").contains("kafka"), "{body}");
     }
 
     /// #314: the web editor can complete SQL, the same way the desktop does.

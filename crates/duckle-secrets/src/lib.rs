@@ -619,6 +619,17 @@ fn merge_rest_connection(conn: &JsonValue, map: &mut serde_json::Map<String, Jso
     }
 }
 
+/// The properties a `component_id` node gets from `conn`, as if it named the
+/// connection and nothing else. "Test connection" uses it on the connection
+/// being edited, which may not be saved yet, so the test sees exactly what a
+/// run of that node would.
+pub fn connection_node_props(component_id: &str, conn: &JsonValue) -> Result<JsonValue, String> {
+    let kind = conn.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    let mut props = JsonValue::Object(Default::default());
+    merge_generic_connection(component_id, kind, conn, &mut props)?;
+    Ok(props)
+}
+
 fn merge_generic_connection(
     component_id: &str,
     kind: &str,
@@ -653,6 +664,10 @@ fn merge_generic_connection(
         "connectTimeout",
         "options",
         "connParams",
+        // SQL Server's TLS choices, so a connection to a server with a
+        // self-signed certificate works without each node saying so.
+        "encrypt",
+        "trustCert",
     ];
     let map = props
         .as_object_mut()

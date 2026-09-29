@@ -219,6 +219,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping,
             autodetect_schema,
+            connection_test,
             run_pipeline,
             run_pipeline_partial,
             run_history,
@@ -377,6 +378,17 @@ fn engine() -> Result<DuckdbEngine, String> {
 /// `read_parquet`, `read_json_auto`, `sqlite_scan`. The hand-rolled
 /// `CsvConnector` stays as a backup for environments where the DuckDB
 /// engine fails to come up.
+/// Test a connection as the Connections editor holds it, saved or not: does it
+/// reach its server, and what can it see there. It can wait on a host that does
+/// not answer, so it runs off the async runtime.
+#[tauri::command]
+async fn connection_test(payload: JsonValue) -> Result<duckle_duckdb_engine::ConnectionTest, String> {
+    let eng = engine()?;
+    tokio::task::spawn_blocking(move || eng.test_connection(&payload))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn autodetect_schema(
     format: String,

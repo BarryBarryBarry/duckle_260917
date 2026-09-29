@@ -61,6 +61,10 @@ export type ConnectionPayload = {
     // engine reads and the form had no way to say, so a connection could not
     // describe either one.
     useSsl?: string;
+    // SQL Server's TLS choices, as booleans: the engine reads them with as_bool,
+    // so the text "true" would be ignored.
+    encrypt?: boolean;
+    trustCert?: boolean;
     sessionToken?: string;
     accountName?: string;
     accountKey?: string;
