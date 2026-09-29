@@ -6069,6 +6069,9 @@ impl DuckdbEngine {
             if !globs_admit(below_folder(&o.key, &prefix), &spec.include, &spec.exclude) {
                 return false;
             }
+            if !inside_window(o.last_modified.as_deref(), spec) {
+                return false;
+            }
             let uri = format!("s3://{}/{}", bucket, o.key);
             let fingerprint =
                 remote_fingerprint(o.etag.as_deref(), o.last_modified.as_deref(), o.size);
@@ -6486,6 +6489,8 @@ impl DuckdbEngine {
             suffix: None,
             include: Vec::new(),
             exclude: Vec::new(),
+            modified_since: None,
+            modified_before: None,
             max_entries: 1,
             track_state: false,
             baseline_existing: false,
@@ -7668,6 +7673,7 @@ impl DuckdbEngine {
                 None => true,
             })
             .filter(|(name, _, _)| globs_admit(name, &spec.include, &spec.exclude))
+            .filter(|(_, _, mtime)| inside_window(mtime.map(|m| m.to_string()).as_deref(), spec))
             .map(|(name, size, mtime)| {
                 let modified = mtime.map(|m| m.to_string());
                 RemoteEntry {
@@ -21551,6 +21557,17 @@ mod changed_order_tests {
         sort_entries(&mut e, false);
         assert_eq!(names(&e), vec!["x", "y"], "name order is still there");
     }
+
+    /// Both listings' times, read as instants: SFTP's epoch seconds and S3's
+    /// RFC 3339. Something else is not a time, rather than a guess at one.
+    #[test]
+    fn a_listing_time_is_read_as_an_instant() {
+        use super::listed_instant;
+        let at = |s: &str| listed_instant(s).map(|t| t.to_rfc3339());
+        assert_eq!(at("1767225600"), Some("2026-01-01T00:00:00+00:00".into()));
+        assert_eq!(at("2026-01-01T00:00:00.000Z"), Some("2026-01-01T00:00:00+00:00".into()));
+        assert_eq!(at("yesterday"), None);
+    }
 }
 
 #[cfg(test)]
@@ -25307,6 +25324,29 @@ fn globs_admit(name: &str, include: &[String], exclude: &[String]) -> bool {
         return false;
     }
     !exclude.iter().any(matches)
+}
+
+/// A listing's modification time as an instant: SFTP's epoch seconds or S3's
+/// RFC 3339. Anything else is not a time, rather than a guess at one.
+fn listed_instant(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let s = s.trim();
+    match s.parse::<i64>() {
+        Ok(secs) => chrono::DateTime::from_timestamp(secs, 0),
+        Err(_) => chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|t| t.with_timezone(&chrono::Utc)),
+    }
+}
+
+/// #324: inside the modification-time window, `since` inclusive and `before`
+/// exclusive. An entry with no readable time is kept: nothing says it falls
+/// outside, and skipping data on a missing signal loses it.
+fn inside_window(modified: Option<&str>, spec: &plan::ChangedSourceSpec) -> bool {
+    let Some(t) = modified.and_then(listed_instant) else {
+        return true;
+    };
+    spec.modified_since.map_or(true, |since| t >= since)
+        && spec.modified_before.map_or(true, |before| t < before)
 }
 
 /// An S3 key as a path below the folder a prefix names: `in/` and `in/D2026`

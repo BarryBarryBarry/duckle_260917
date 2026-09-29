@@ -5693,6 +5693,35 @@ fn build_stage(
                 )))
             }
         };
+        // #324: a modification-time window. In UTC: the session timezone is
+        // never pinned, so a bare date means midnight UTC rather than midnight
+        // wherever the run happens to be.
+        let bound = |key: &str| -> Result<Option<chrono::DateTime<chrono::Utc>>, EngineError> {
+            let Some(text) = string_prop(&props, key)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+            else {
+                return Ok(None);
+            };
+            chrono::DateTime::parse_from_rfc3339(&text)
+                .map(|t| t.with_timezone(&chrono::Utc))
+                .ok()
+                .or_else(|| {
+                    chrono::NaiveDate::parse_from_str(&text, "%Y-%m-%d")
+                        .ok()
+                        .and_then(|d| d.and_hms_opt(0, 0, 0))
+                        .map(|t| t.and_utc())
+                })
+                .map(Some)
+                .ok_or_else(|| {
+                    EngineError::Config(format!(
+                        "{}: {} must be an RFC 3339 time or a YYYY-MM-DD date, not '{}'",
+                        component_id, key, text
+                    ))
+                })
+        };
+        let modified_since = bound("modifiedSince")?;
+        let modified_before = bound("modifiedBefore")?;
         if baseline_existing && !track_state {
             return Err(EngineError::Config(format!(
                 "{}: firstRun baseline_existing needs trackState on. With nothing \
@@ -5711,6 +5740,8 @@ fn build_stage(
             // The same array-or-comma-separated shape a column list takes.
             include: column_list(&props, "include"),
             exclude: column_list(&props, "exclude"),
+            modified_since,
+            modified_before,
             max_entries: props
                 .get("maxEntries")
                 .and_then(|v| v.as_u64())

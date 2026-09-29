@@ -21466,6 +21466,66 @@ fn s3_changed_lists_only_what_the_include_and_exclude_globs_admit() {
     assert!(note.contains("2 of 2"), "filtered objects are not entries: {note}");
 }
 
+/// #324: a modification-time window, `modifiedSince` inclusive and
+/// `modifiedBefore` exclusive, in UTC. An object with no time is kept: nothing
+/// says it falls outside, and skipping data on a missing signal loses it.
+#[test]
+fn s3_changed_lists_only_what_was_modified_inside_the_window() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "list.csv");
+
+    let page = r#"<?xml version="1.0"?><ListBucketResult><IsTruncated>false</IsTruncated>
+      <Contents><Key>in/a.csv</Key><Size>1</Size><ETag>&quot;e1&quot;</ETag><LastModified>2026-01-01T23:59:59.000Z</LastModified></Contents>
+      <Contents><Key>in/b.csv</Key><Size>1</Size><ETag>&quot;e2&quot;</ETag><LastModified>2026-01-02T00:00:00.000Z</LastModified></Contents>
+      <Contents><Key>in/c.csv</Key><Size>1</Size><ETag>&quot;e3&quot;</ETag><LastModified>2026-01-03T00:00:00.000Z</LastModified></Contents>
+      <Contents><Key>in/d.csv</Key><Size>1</Size><ETag>&quot;e4&quot;</ETag></Contents>
+    </ListBucketResult>"#;
+    let reply = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n{}",
+        page.len(),
+        page
+    );
+    let (port, _rx) = stub_s3(vec![reply]);
+    let mut props = s3_props(port, "s3://raw/in/", true);
+    props["modifiedSince"] = json!("2026-01-02");
+    props["modifiedBefore"] = json!("2026-01-03T00:00:00Z");
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("c", "src.changed", props),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "c", "k")]),
+        ),
+        "s3window",
+    );
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let body = std::fs::read_to_string(&out).unwrap_or_default().replace("\r\n", "\n");
+    let uris: Vec<&str> = body.lines().skip(1).filter_map(|l| l.split(',').next()).collect();
+    assert_eq!(uris, vec!["s3://raw/in/b.csv", "s3://raw/in/d.csv"], "{body}");
+
+    // A bound that is not a time is refused, not read as "no bound".
+    let mut props = s3_props(1, "s3://raw/in/", true);
+    props["modifiedSince"] = json!("last tuesday");
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("c", "src.changed", props),
+                node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "x.csv") })),
+            ]),
+            json!([main_edge("e1", "c", "k")]),
+        ),
+        "s3badwindow",
+    );
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("modifiedSince") && e.contains("last tuesday"), "{e}");
+}
+
 /// An S3 uri with no credentials must say so. Sending an anonymous request
 /// instead returns 403, which reads as "wrong keys" and sends people to check
 /// credentials they never set.

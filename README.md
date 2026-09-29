@@ -2222,7 +2222,9 @@ files, and a run capped by `maxEntries` does not mark the remainder as done.
 `maxEntries` caps what a run emits, not how far it looks: an S3 listing walks
 past what is already processed to reach the rest of the prefix. `include`
 and `exclude` take comma-separated globs matched against the path below the
-directory or prefix (`*.zip`, `archive/*`), with exclude applied last. `orderBy`
+directory or prefix (`*.zip`, `archive/*`), with exclude applied last. `modifiedSince` (inclusive) and `modifiedBefore`
+(exclusive) bound it by modification time, in UTC - a bare date is midnight
+UTC - and keep a file whose time the server does not report. `orderBy`
 decides which files a capped run takes first: `name` (the default) is oldest
 first only when the names carry the date, and `modified` goes by each file's
 modification time, the name breaking ties.

@@ -1038,6 +1038,20 @@
                 "description": "Listing mode. Applied after the include filter, so a partial upload or an archive folder never comes out. A filtered file is not part of the collection at all."
               },
               {
+                "key": "modifiedSince",
+                "label": "Modified since",
+                "kind": "text",
+                "placeholder": "2026-09-01  or  2026-09-01T06:00:00Z",
+                "description": "Listing mode. Only files modified at or after this time, in UTC: a bare date is midnight UTC. A file whose time the server does not report is kept, since nothing says it is outside the window."
+              },
+              {
+                "key": "modifiedBefore",
+                "label": "Modified before",
+                "kind": "text",
+                "placeholder": "2026-10-01",
+                "description": "Listing mode. Only files modified before this time, in UTC. With \"Modified since\" it makes a window that includes its start and excludes its end."
+              },
+              {
                 "key": "maxEntries",
                 "label": "Max files per run",
                 "kind": "number",

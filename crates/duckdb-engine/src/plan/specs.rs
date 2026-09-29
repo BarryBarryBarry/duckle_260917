@@ -2582,6 +2582,10 @@ pub struct ChangedSourceSpec {
     /// the uri names. An empty include admits everything; exclude wins.
     pub include: Vec<String>,
     pub exclude: Vec<String>,
+    /// #324: listing mode's modification-time window, `since` inclusive and
+    /// `before` exclusive.
+    pub modified_since: Option<chrono::DateTime<chrono::Utc>>,
+    pub modified_before: Option<chrono::DateTime<chrono::Utc>>,
     /// Most entries to emit in one run, so a first run against a directory
     /// with years of drops does not try to process all of it at once.
     pub max_entries: usize,
