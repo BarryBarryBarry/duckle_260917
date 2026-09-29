@@ -3393,6 +3393,75 @@ fn minio_autodetect_reads_the_object_schema() {
     assert!(!insp.sample_rows.is_empty() && insp.sample_rows[0].get("success").is_none() && insp.sample_rows[0].get("Success").is_none(), "{insp:?}");
 }
 
+/// A REST API that lets a request in only with the right credentials: a
+/// `Bearer good-token` header or an `X-Api-Key: k1` header answers 200, anything
+/// else 401, and `/missing` answers 404 whoever asks. Serves `n` requests.
+fn rest_auth_stub(n: usize) -> (u16, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        for _ in 0..n {
+            let Ok((mut stream, _)) = listener.accept() else { return };
+            stream.set_read_timeout(Some(std::time::Duration::from_millis(500))).ok();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(k) => buf.extend_from_slice(&chunk[..k]),
+                }
+            }
+            let req = String::from_utf8_lossy(&buf).to_lowercase();
+            let status = if req.starts_with("get /missing") {
+                "404 Not Found"
+            } else if req.contains("authorization: bearer good-token") || req.contains("x-api-key: k1") {
+                "200 OK"
+            } else {
+                "401 Unauthorized"
+            };
+            let body = "{}";
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (port, handle)
+}
+
+/// Test connection on a REST connection requests its URL with the headers and
+/// auth a node using it sends. The right token reaches it; a wrong one is
+/// refused and not quoted back; a URL the API does not serve still reached the
+/// server, which a node adding its own path to it expects.
+#[test]
+fn connection_test_reaches_a_rest_api_with_its_auth() {
+    let engine = engine_or_skip!();
+    let (port, handle) = rest_auth_stub(4);
+    let url = format!("http://127.0.0.1:{port}/api");
+
+    let r = engine.test_connection(&json!({ "kind": "rest", "url": url, "authType": "bearer", "authToken": "good-token" }));
+    assert!(r.ok && r.message.contains("200"), "{}", r.message);
+
+    let r = engine.test_connection(&json!({ "kind": "rest", "url": url, "authType": "bearer", "authToken": "wrong-token-xyz" }));
+    assert!(!r.ok && r.message.contains("401"), "{}", r.message);
+    assert!(!r.message.contains("wrong-token-xyz"), "the token leaked: {}", r.message);
+
+    let r = engine.test_connection(&json!({ "kind": "rest", "url": url, "headers": [{ "key": "X-Api-Key", "value": "k1" }] }));
+    assert!(r.ok && r.message.contains("200"), "{}", r.message);
+
+    let r = engine.test_connection(&json!({
+        "kind": "rest", "url": format!("http://127.0.0.1:{port}/missing"), "authType": "bearer", "authToken": "good-token"
+    }));
+    assert!(r.ok && r.message.contains("404"), "{}", r.message);
+    let _ = handle.join();
+
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let r = engine.test_connection(&json!({ "kind": "rest", "url": format!("http://127.0.0.1:{closed}/") }));
+    assert!(!r.ok, "a port nothing listens on: {}", r.message);
+}
+
 /// A host that never answers fails the test within seconds rather than leaving
 /// the editor waiting out the operating system's TCP timeout.
 #[test]

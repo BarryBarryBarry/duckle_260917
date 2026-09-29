@@ -38,6 +38,8 @@ enum Probe {
     Tables { component: &'static str, list: &'static str, ping: &'static str },
     /// An object store: the objects at the top of its bucket.
     Bucket,
+    /// An HTTP API: its URL, requested with the headers and auth a node sends.
+    Http,
 }
 
 /// Tables and views of the catalog an ATTACH source mounts as `duckle_src`,
@@ -65,6 +67,7 @@ fn probe(kind: &str) -> Option<Probe> {
             ping: "SELECT 1 AS ok",
         }),
         "s3" => Some(Probe::Bucket),
+        "rest" => Some(Probe::Http),
         _ => None,
     }
 }
@@ -81,6 +84,7 @@ impl DuckdbEngine {
         let component = match &probe {
             Probe::Tables { component, .. } => *component,
             Probe::Bucket => "src.s3",
+            Probe::Http => "src.rest",
         };
         let mut props = match duckle_secrets::connection_node_props(component, conn) {
             Ok(p) => p,
@@ -141,6 +145,10 @@ impl DuckdbEngine {
                     Err(e) => failed(blank(&e.to_string(), &secrets)),
                 }
             }
+            Probe::Http => match request_url(&props) {
+                Ok(r) => ConnectionTest { message: blank(&r.message, &secrets), ..r },
+                Err(e) => failed(blank(&e.to_string(), &secrets)),
+            },
         }
     }
 
@@ -174,6 +182,51 @@ impl DuckdbEngine {
     }
 }
 
+/// Request a REST connection's URL the way `src.rest` requests it: the node's
+/// headers, its auth, and a token minted from its client credentials when it
+/// has them, through the agent every request uses, so the network policy and
+/// the timeouts apply. What answered decides: 401 and 403 refused the
+/// credentials and 5xx is the server failing, while any other status reached a
+/// server that let the request in - a 404 included, since nodes usually add a
+/// path to a base URL.
+fn request_url(props: &JsonValue) -> Result<ConnectionTest, EngineError> {
+    let Some(url) = props.get("url").and_then(JsonValue::as_str).map(str::trim).filter(|u| !u.is_empty()) else {
+        return Ok(failed("Set a base URL: a REST connection is tested by requesting it.".into()));
+    };
+    let mut headers = plan::headers_from_props(props);
+    plan::push_rest_auth(&mut headers, props);
+    if let Some(o) = plan::rest_oauth_from_props(props, false)? {
+        let (token, _) = crate::connectors::mint_oauth_token(&o)?;
+        headers.retain(|(k, _)| !k.eq_ignore_ascii_case("authorization"));
+        headers.push(("Authorization".into(), format!("Bearer {token}")));
+    }
+    let mut req = crate::tls::http_agent().get(url);
+    for (k, v) in &headers {
+        req = req.set(k, v);
+    }
+    let reached = |code: u16| ConnectionTest {
+        ok: true,
+        message: if code < 400 {
+            format!("Connected. {url} answered HTTP {code}.")
+        } else {
+            format!("Connected to the server, and {url} itself answered HTTP {code}; fine if nodes add a path to it.")
+        },
+        objects: Vec::new(),
+        more: false,
+    };
+    Ok(match req.call() {
+        Ok(r) => reached(r.status()),
+        Err(ureq::Error::Status(code @ (401 | 403), _)) => {
+            failed(format!("{url} refused the credentials: HTTP {code}."))
+        }
+        Err(ureq::Error::Status(code, _)) if code >= 500 => {
+            failed(format!("{url} answered with a server error: HTTP {code}."))
+        }
+        Err(ureq::Error::Status(code, _)) => reached(code),
+        Err(e) => failed(format!("{url} could not be reached: {e}")),
+    })
+}
+
 /// `${ENV:...}` and `${VAULT:...}` in the props, resolved by the passes a run
 /// uses, which work on a pipeline: the props ride a one-node pipeline through.
 fn resolve_placeholders(component: &str, props: &mut JsonValue) {
@@ -204,7 +257,7 @@ fn first_text(row: &JsonValue) -> Option<String> {
 /// The connection's secret values, to blank from anything a test reports. A
 /// driver error can quote the connection string it was given.
 fn secret_values(props: &JsonValue) -> Vec<String> {
-    ["password", "secretKey", "accountKey", "sessionToken"]
+    ["password", "secretKey", "accountKey", "sessionToken", "authToken", "clientSecret"]
         .iter()
         .filter_map(|k| props.get(*k).and_then(JsonValue::as_str))
         .filter(|s| s.len() >= 3)
@@ -256,6 +309,16 @@ mod tests {
         let r = engine.test_connection(&json!({ "kind": "s3", "accessKey": "a", "secretKey": "b" }));
         assert!(!r.ok);
         assert!(r.message.contains("bucket"), "{}", r.message);
+    }
+
+    /// A REST connection is tested by requesting its URL, so one without a URL
+    /// is refused before anything is sent.
+    #[test]
+    fn a_rest_connection_without_a_url_is_refused() {
+        let engine = DuckdbEngine::new("no-duckdb-needed".into());
+        let r = engine.test_connection(&json!({ "kind": "rest", "authType": "bearer", "authToken": "t0ken" }));
+        assert!(!r.ok);
+        assert!(r.message.contains("URL"), "{}", r.message);
     }
 
     #[test]

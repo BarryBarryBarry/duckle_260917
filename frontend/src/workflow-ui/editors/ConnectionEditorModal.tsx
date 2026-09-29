@@ -179,7 +179,7 @@ const FIELD_LABELS: Partial<Record<keyof ConnectionPayload, string>> = {
 
 // The kinds the engine can test (connection_test.rs `probe`): the ones nodes
 // reference whose connection a test reaches the way a run does.
-const TESTABLE_KINDS = new Set<ConnectionKind>(['postgres', 'redshift', 'mysql', 'mariadb', 'sqlserver', 's3']);
+const TESTABLE_KINDS = new Set<ConnectionKind>(['postgres', 'redshift', 'mysql', 'mariadb', 'sqlserver', 's3', 'rest']);
 
 // Yes / No / the node's default, for a boolean the engine reads with as_bool.
 const BOOLEAN_FIELDS = new Set<keyof ConnectionPayload>(['encrypt', 'trustCert']);
