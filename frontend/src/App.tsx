@@ -2957,6 +2957,7 @@ export default function App() {
 
             {scheduleModalPipelineId ? (
                 <ScheduleEditorModal
+                    declared={pipelineRunFields(pipelineData[scheduleModalPipelineId]).parameters ?? {}}
                     pipelineId={scheduleModalPipelineId}
                     pipelineName={
                         repo.find(r => r.id === scheduleModalPipelineId)?.name ??

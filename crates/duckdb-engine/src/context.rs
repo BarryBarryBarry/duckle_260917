@@ -1034,7 +1034,22 @@ pub fn resolve_workspace(
     pipeline_id: &str,
     context: Option<&str>,
 ) -> Result<Resolved, String> {
-    resolve_workspace_impl(workspace, pipeline_id, context, true)
+    resolve_workspace_impl(workspace, pipeline_id, context, true, None)
+}
+
+/// Like [`resolve_workspace`], holding the pipeline to its declared parameter
+/// contract with `supplied` (#317). The values are applied as soon as the file is
+/// read, before any context: a value the caller binds, then the declared default,
+/// then a context - the order the console's run uses - and a value outside the
+/// declaration refuses the run. For the desktop scheduler, whose runs otherwise
+/// never met the contract.
+pub fn resolve_workspace_with_params(
+    workspace: &Path,
+    pipeline_id: &str,
+    context: Option<&str>,
+    supplied: &[crate::params::Supplied],
+) -> Result<Resolved, String> {
+    resolve_workspace_impl(workspace, pipeline_id, context, true, Some(supplied))
 }
 
 /// Like [`resolve_workspace`] but leaves `${workspace}` / `${projectroot}` as
@@ -1047,7 +1062,7 @@ pub fn resolve_workspace_portable(
     pipeline_id: &str,
     context: Option<&str>,
 ) -> Result<Resolved, String> {
-    resolve_workspace_impl(workspace, pipeline_id, context, false)
+    resolve_workspace_impl(workspace, pipeline_id, context, false, None)
 }
 
 fn resolve_workspace_impl(
@@ -1055,6 +1070,7 @@ fn resolve_workspace_impl(
     pipeline_id: &str,
     context: Option<&str>,
     bake_workspace: bool,
+    supplied: Option<&[crate::params::Supplied]>,
 ) -> Result<Resolved, String> {
     let repo = read_repo(workspace)?;
     let (vars, secret_values) = build_context_vars(workspace, &repo, context, bake_workspace)?;
@@ -1068,6 +1084,9 @@ fn resolve_workspace_impl(
         .map_err(|e| format!("read {}: {}", pipe_path.display(), e))?;
     let mut doc: PipelineDoc = serde_json::from_str(strip_bom(&text))
         .map_err(|e| format!("parse {}: {}", pipe_path.display(), e))?;
+    if let Some(supplied) = supplied {
+        apply_params_from(&mut doc, supplied)?;
+    }
 
     // Compile the placeholder regex once and capture vars for the closure.
     let re = regex::Regex::new(r"\$\{([^}]+)\}").map_err(|e| e.to_string())?;
@@ -1276,6 +1295,49 @@ mod tests {
             serde_json::json!("3"),
             "keys the higher layer does not define still come from the base"
         );
+    }
+
+    /// #317: a scheduled run is held to the pipeline's parameter contract, in the
+    /// order every other surface applies it - a value the schedule binds, else the
+    /// declared default, else a context - and a value outside the declaration
+    /// refuses the run rather than reaching a node.
+    #[test]
+    fn a_scheduled_pipeline_resolves_declared_parameters_before_contexts() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        write(&ws.join("repository.json"), r#"[{"id":"env","name":"Prod","type":"context"}]"#);
+        write(
+            &ws.join("contexts/env.json"),
+            r#"{"variables":[{"key":"region","value":"from-context"},{"key":"note","value":"from-context"}]}"#,
+        );
+        write(
+            &ws.join("pipelines/p1.json"),
+            r#"{"parameters":{"region":{"type":"string","enum":["eu","us"],"default":"eu"},"note":{"type":"string"}},
+                "nodes":[{"id":"k","position":{"x":0,"y":0},"data":{"label":"K","componentId":"snk.csv","properties":{"path":"${region}/${note}"}}}],"edges":[]}"#,
+        );
+        let bound = |v: &[(&str, &str)]| -> Vec<crate::params::Supplied> {
+            v.iter()
+                .map(|(k, v)| crate::params::Supplied {
+                    name: k.to_string(),
+                    value: v.to_string(),
+                    source: "schedule".into(),
+                })
+                .collect()
+        };
+        let path = |supplied: &[crate::params::Supplied]| -> String {
+            resolve_workspace_with_params(ws, "p1", None, supplied).unwrap().doc.nodes[0]
+                .data
+                .properties
+                .as_ref()
+                .unwrap()["path"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(path(&bound(&[("region", "us")])), "us/from-context", "the schedule's value wins");
+        assert_eq!(path(&[]), "eu/from-context", "unbound, the declared default beats the context");
+        let refused = resolve_workspace_with_params(ws, "p1", None, &bound(&[("region", "mars")]));
+        assert!(refused.as_ref().is_err_and(|e| e.contains("region")), "{:?}", refused.map(|r| r.doc.nodes.len()));
     }
 
     #[test]

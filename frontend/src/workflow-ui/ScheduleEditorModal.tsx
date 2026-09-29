@@ -15,6 +15,8 @@ import {
 import { isTauri } from '../tauri-dialog';
 import { isWebBackend } from '../web-fs';
 import { scheduleActionError, scheduleForSave } from '../schedule-save';
+import type { ParamSpec } from '../run-resolve';
+import { ParamControl, fromParamInput, toParamInput } from './RunParametersModal';
 import {
     runHistory,
     scheduleDelete,
@@ -30,6 +32,8 @@ type Props = {
     pipelineId: string;
     pipelineName: string;
     workspacePath: string | null;
+    /** #317: the pipeline's declared parameters, which a schedule can bind values to. */
+    declared?: Record<string, ParamSpec>;
     onClose: () => void;
 };
 
@@ -43,6 +47,8 @@ type Draft = {
     intervalValue: number;
     watchPath: string;
     watchRecursive: boolean;
+    /** #317: as each parameter's control shows it. */
+    params: Record<string, string>;
 };
 
 const CRON_PRESETS: { label: string; expr: string }[] = [
@@ -54,6 +60,7 @@ const CRON_PRESETS: { label: string; expr: string }[] = [
 ];
 
 export default function ScheduleEditorModal({
+    declared = {},
     pipelineId,
     pipelineName,
     workspacePath,
@@ -108,6 +115,7 @@ export default function ScheduleEditorModal({
             intervalValue: 1,
             watchPath: '',
             watchRecursive: true,
+            params: {},
         });
         setError(null);
     };
@@ -126,6 +134,9 @@ export default function ScheduleEditorModal({
             intervalValue: value,
             watchPath: s.kind.type === 'file_watch' ? s.kind.path : '',
             watchRecursive: s.kind.type === 'file_watch' ? s.kind.recursive : true,
+            params: Object.fromEntries(
+                Object.entries(s.params ?? {}).map(([k, v]) => [k, declared[k] ? toParamInput(declared[k], v) : v]),
+            ),
         });
         setError(null);
     };
@@ -147,9 +158,19 @@ export default function ScheduleEditorModal({
                         type: 'interval',
                         seconds: joinInterval(editing.intervalValue, editing.intervalUnit),
                     };
+        // #317: values are sent only when the dialog showed the declared parameters,
+        // and a blank one is left out so the pipeline's default applies.
+        const params = Object.keys(declared).length
+            ? Object.fromEntries(
+                  Object.entries(editing.params)
+                      .map(([k, v]) => [k, v.trim()] as const)
+                      .filter(([k, v]) => v && declared[k])
+                      .map(([k, v]) => [k, fromParamInput(declared[k], v)]),
+              )
+            : undefined;
         const draft = scheduleForSave(
             schedules.find(s => s.id === editing.id),
-            { id: editing.id, pipelineId, name: editing.name, enabled: editing.enabled, kind },
+            { id: editing.id, pipelineId, name: editing.name, enabled: editing.enabled, kind, params },
         );
         try {
             await scheduleUpsert(draft);
@@ -223,6 +244,7 @@ export default function ScheduleEditorModal({
                 <div className="modal-body modal-schedule-body">
                     {editing ? (
                         <ScheduleForm
+                            declared={declared}
                             draft={editing}
                             onChange={setEditing}
                             onSave={saveDraft}
@@ -414,6 +436,7 @@ function ScheduleRow({
 }
 
 function ScheduleForm({
+    declared,
     draft,
     onChange,
     onSave,
@@ -421,6 +444,7 @@ function ScheduleForm({
     busy,
     error,
 }: {
+    declared: Record<string, ParamSpec>;
     draft: Draft;
     onChange: (d: Draft) => void;
     onSave: () => void;
@@ -428,6 +452,7 @@ function ScheduleForm({
     busy: boolean;
     error: string | null;
 }) {
+    const declaredNames = Object.keys(declared);
     return (
         <div className="schedule-form">
             <div className="modal-field">
@@ -582,6 +607,31 @@ function ScheduleForm({
                         </div>
                     </div>
                 </>
+            )}
+            {declaredNames.length > 0 && (
+                <div className="modal-field">
+                    <label className="modal-field-label">Parameters</label>
+                    {declaredNames.map(name => (
+                        <label key={name} className="run-param">
+                            <span className="run-param-name">
+                                {name}
+                                {declared[name].required ? <span className="run-param-required"> *</span> : null}
+                            </span>
+                            <ParamControl
+                                spec={declared[name]}
+                                value={draft.params[name] ?? ''}
+                                onChange={v => onChange({ ...draft, params: { ...draft.params, [name]: v } })}
+                                autoFocus={false}
+                            />
+                            {declared[name].description ? (
+                                <span className="run-param-hint">{declared[name].description}</span>
+                            ) : null}
+                        </label>
+                    ))}
+                    <span className="run-param-hint">
+                        Given to every run of this schedule. A blank field uses the pipeline&apos;s default.
+                    </span>
+                </div>
             )}
             <div className="modal-field">
                 <label className="schedule-toggle">

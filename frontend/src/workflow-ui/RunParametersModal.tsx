@@ -50,8 +50,7 @@ export default function RunParametersModal({
         for (const name of declaredNames) {
             const v = (values[name] ?? '').trim();
             if (!v) continue;
-            // A datetime-local control has no offset; the engine wants RFC3339.
-            typed[name] = declared[name].type === 'datetime' ? new Date(v).toISOString() : v;
+            typed[name] = fromParamInput(declared[name], v);
         }
         onSubmit({ undeclared, declared: typed });
     };
@@ -147,8 +146,25 @@ export default function RunParametersModal({
     );
 }
 
+/**
+ * A control's text as the engine takes it. A datetime-local control has no
+ * offset; the engine wants RFC3339, so it is read in local time and sent as UTC.
+ */
+export function fromParamInput(spec: ParamSpec, input: string): string {
+    return spec.type === 'datetime' && input ? new Date(input).toISOString() : input;
+}
+
+/** A stored value as its control shows it: an RFC3339 datetime in local time. */
+export function toParamInput(spec: ParamSpec, stored: string): string {
+    if (spec.type !== 'datetime' || !stored) return stored;
+    const d = new Date(stored);
+    if (Number.isNaN(d.getTime())) return stored;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 /** One declared parameter's control, chosen by its type; the engine validates. */
-function ParamControl({
+export function ParamControl({
     spec,
     value,
     onChange,

@@ -2946,7 +2946,7 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
                 // a panic or a kill releases it too.
                 let _run_lock = run_lock;
                 let outcome = outcome_or_panic_error("the run", || {
-                    execute_one_with(&bg, &file, "manual", &params, Some(engine), Some(&rid))
+                    execute_one_with(&bg, &file, "manual", &params, "run input", Some(engine), Some(&rid))
                 });
                 if let Ok(mut runs) = bg.runs.lock() {
                     let pid = runs.get(&rid).map(|r| r.pipeline_id.clone()).unwrap_or_default();
@@ -3614,6 +3614,9 @@ fn load_schedules(state: &State) -> Result<Value, String> {
                 // policy that does nothing.
                 "misfire": s.misfire,
                 "catchup": s.catchup,
+                // #317: the parameter values the schedule binds, for the same
+                // reason as every field above - absent here, absent to the run.
+                "params": s.params,
             }),
         );
     }
@@ -3681,6 +3684,7 @@ fn migrate_legacy_schedules(workspace: &Path) {
                     .cloned()
                     .and_then(|v| serde_json::from_value(v).ok())
                     .unwrap_or_default(),
+                params: None,
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -3798,6 +3802,17 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
     // #296: a maintenance calendar is checked where it is written. A misspelled
     // weekday excludes nothing, which looks exactly like no exclusion at all
     // until the day it was supposed to cover arrives.
+    // #317: the same three answers again. The console's own form sends no values,
+    // and saving it must not wipe the ones an API client or the editor bound.
+    let params: Option<std::collections::BTreeMap<String, String>> = match body.get("params") {
+        None => None,
+        Some(Value::Object(m)) => Some(
+            m.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect(),
+        ),
+        Some(_) => return Err("params must be an object of name: value".into()),
+    };
     let exclude: Option<duckle_duckdb_engine::cronzone::Exclusions> = match body.get("exclude").cloned() {
         Some(v) => Some(
             serde_json::from_value(v).map_err(|e| format!("Invalid exclude calendar: {e}"))?,
@@ -3830,6 +3845,23 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
         duckle_duckdb_engine::schedules::ScheduleKind::Interval { seconds }
     };
     let pipeline_id = id.to_string();
+    // A plan's pipelines each have their own contract, so a plan schedule cannot
+    // carry one set of values for them yet. Checked against the plan the schedule
+    // will have after this save, not only the one this request names.
+    if params.as_ref().is_some_and(|p| !p.is_empty()) {
+        let current_plan = duckle_duckdb_engine::schedules::load(workspace)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|s| s.pipeline_id == pipeline_id)
+            .and_then(|s| s.plan_id);
+        if plan_id.clone().unwrap_or(current_plan).is_some() {
+            return Err(
+                "A schedule that runs a plan cannot bind parameter values yet; bind them on a \
+                 schedule of the pipeline itself"
+                    .into(),
+            );
+        }
+    }
     duckle_duckdb_engine::schedules::update(workspace, move |list| {
         // Edit the record this pipeline already has rather than adding another,
         // so saving from the console does not quietly double a schedule the
@@ -3854,6 +3886,9 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
                 if let Some(calendar) = exclude.clone() {
                     s.exclude = calendar;
                 }
+                if let Some(values) = params.clone() {
+                    s.params = Some(values);
+                }
                 // A changed trigger invalidates the time this process armed.
                 s.next_run_at = None;
             }
@@ -3871,6 +3906,7 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
                 // behaviour every schedule had before the policy existed.
                 misfire: Default::default(),
                 catchup: Default::default(),
+                params: params.clone(),
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -3941,7 +3977,7 @@ impl Drop for RunningGuard<'_> {
 /// disk. Skipping is the right response to a clash: the next tick comes round
 /// anyway, and two runs of one pipeline race on the sink and on the
 /// `xf.incremental` watermark, which is how a load quietly skips rows.
-fn run_scheduled(state: &State, id: &str, file: &str) {
+fn run_scheduled(state: &State, id: &str, file: &str, params: &HashMap<String, String>) {
     let _lock = match duckle_duckdb_engine::runlock::try_acquire(&state.workspace, id) {
         Some(l) => l,
         None => {
@@ -3949,7 +3985,9 @@ fn run_scheduled(state: &State, id: &str, file: &str) {
             return;
         }
     };
-    match execute_one(state, file, "scheduled", &HashMap::new()) {
+    // #317: named as the schedule's, so a run input that overrides one of them
+    // is recorded as having displaced it.
+    match execute_one_with(state, file, "scheduled", params, "schedule", None, None) {
         Ok(v) => {
             let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("?");
             eprintln!("duckle-runner: scheduled {} -> {}", id, status);
@@ -4249,7 +4287,7 @@ fn execute_one(
     trigger: &str,
     params: &HashMap<String, String>,
 ) -> Result<Value, String> {
-    execute_one_with(state, file, trigger, params, None, None)
+    execute_one_with(state, file, trigger, params, "run input", None, None)
 }
 
 /// #259: the body of `execute_one`, with the engine handle and the run id
@@ -4264,6 +4302,7 @@ fn execute_one_with(
     file: &str,
     trigger: &str,
     params: &HashMap<String, String>,
+    source: &str,
     engine: Option<DuckdbEngine>,
     run_id: Option<&str>,
 ) -> Result<Value, String> {
@@ -4312,7 +4351,7 @@ fn execute_one_with(
         .map(|(name, value)| duckle_duckdb_engine::params::Supplied {
             name: name.clone(),
             value: value.clone(),
-            source: "run input".to_string(),
+            source: source.to_string(),
         })
         .collect();
     let (recorded_params, parameter_sources) =
@@ -4765,10 +4804,15 @@ fn fire_schedule(state: &State, id: &str, cfg: &Value, pipes: &HashMap<String, P
         fire_plan(state, plan_id);
         return;
     }
+    let params: HashMap<String, String> = cfg
+        .get("params")
+        .and_then(Value::as_object)
+        .map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
+        .unwrap_or_default();
     match pipes.get(id) {
         Some(path) => {
             let file = rel(&state.workspace, path);
-            run_scheduled(state, id, &file);
+            run_scheduled(state, id, &file, &params);
         }
         None => report_missing_pipeline(state, id),
     }
@@ -5478,6 +5522,47 @@ mod tests {
         );
     }
 
+    /// #317: the parameter values a pipeline's schedule binds reach its run, and
+    /// they get there through the projection the tick loop reads, where a field
+    /// has gone missing three times before. Saved the console's way, so its save
+    /// route keeps them too.
+    #[test]
+    fn a_schedules_parameter_values_reach_the_run() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| std::path::Path::new(b).exists())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::create_dir_all(ws.join("out")).unwrap();
+        std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
+        std::fs::write(ws.join("pipelines").join("regional.json"), r#"{"parameters":{"region":{"type":"string","enum":["eu","us"],"default":"eu"}},
+ "nodes":[{"id":"s","position":{"x":0,"y":0},"data":{"label":"s","componentId":"src.csv","properties":{"path":"${workspace}/in.csv","hasHeader":true}}},
+          {"id":"k","position":{"x":0,"y":0},"data":{"label":"k","componentId":"snk.csv","properties":{"path":"${workspace}/out/${region}.csv"}}}],
+ "edges":[{"id":"e","source":"s","target":"k"}]}"#).unwrap();
+        save_schedule_at(
+            &ws,
+            &serde_json::json!({ "id": "regional", "enabled": true, "intervalSeconds": 3600, "params": { "region": "us" } }),
+        )
+        .expect("saves");
+        // A later save from a form that knows nothing of parameters keeps them.
+        save_schedule_at(&ws, &serde_json::json!({ "id": "regional", "enabled": true, "intervalSeconds": 7200 }))
+            .expect("saves");
+
+        let state = local_state_using(&ws, std::path::PathBuf::from(bin));
+        let seen = load_schedules(&state).expect("projection reads");
+        let cfg = seen.get("regional").expect("the schedule is there").clone();
+        assert_eq!(cfg["params"]["region"], "us", "the tick loop is never told the values: {cfg}");
+
+        let pipes: std::collections::HashMap<String, std::path::PathBuf> =
+            [("regional".to_string(), ws.join("pipelines").join("regional.json"))].into_iter().collect();
+        super::fire_schedule(&state, "regional", &cfg, &pipes);
+        assert!(ws.join("out").join("us.csv").exists(), "the bound value did not reach the run");
+        assert!(!ws.join("out").join("eu.csv").exists(), "the run fell back to the default");
+    }
+
     #[test]
     fn a_schedule_that_names_a_plan_tells_the_scheduler_so() {
         let tmp = tempfile::tempdir().unwrap();
@@ -5778,9 +5863,22 @@ mod tests {
     }
 
     fn local_state_ticking(ws: &std::path::Path, tick: std::time::Duration) -> std::sync::Arc<State> {
+        local_state_with(ws, tick, std::path::PathBuf::from("duckdb"))
+    }
+
+    /// A local console that runs pipelines with a real DuckDB.
+    fn local_state_using(ws: &std::path::Path, duckdb: std::path::PathBuf) -> std::sync::Arc<State> {
+        local_state_with(ws, std::time::Duration::from_secs(15), duckdb)
+    }
+
+    fn local_state_with(
+        ws: &std::path::Path,
+        tick: std::time::Duration,
+        duckdb: std::path::PathBuf,
+    ) -> std::sync::Arc<State> {
         std::sync::Arc::new(State {
             workspace: ws.to_path_buf(),
-            duckdb: std::path::PathBuf::from("duckdb"),
+            duckdb,
             run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(
                 Default::default(),
             )),
@@ -8334,6 +8432,7 @@ mod serve_honours_the_schedule {
             exclude: serde_json::from_value(serde_json::json!({ "dates": ["2026-12-25"] })).unwrap(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,

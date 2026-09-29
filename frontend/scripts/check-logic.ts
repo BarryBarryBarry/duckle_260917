@@ -1317,6 +1317,29 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     );
 }
 
+// #317: a schedule's parameter values survive a save that does not mention them
+// (the dialog of a pipeline with no declarations sends none), are replaced by one
+// that does, and travel with the schedule when it is deployed to a server.
+{
+    const loaded = {
+        id: 's1', pipeline_id: 'p', name: 'n', enabled: true,
+        kind: { type: 'interval' as const, seconds: 60 }, params: { region: 'us' },
+    };
+    const base = { id: 's1', pipelineId: 'p', name: 'renamed', enabled: true, kind: loaded.kind };
+    const kept = scheduleForSave(loaded, base);
+    check('#317: a save that does not mention parameters keeps them', kept.params?.region === 'us', JSON.stringify(kept));
+    const replaced = scheduleForSave(loaded, { ...base, params: { region: 'eu' } });
+    check('#317: a save that sets parameters replaces them', replaced.params?.region === 'eu', JSON.stringify(replaced));
+    const cleared = scheduleForSave(loaded, { ...base, params: {} });
+    check('#317: an empty set clears them', JSON.stringify(cleared.params) === '{}', JSON.stringify(cleared));
+    const deployed = serverSchedule(loaded, 'p');
+    check(
+        '#317: a deployed schedule carries its parameter values',
+        JSON.stringify((deployed ?? {}).params) === JSON.stringify({ region: 'us' }),
+        JSON.stringify(deployed),
+    );
+}
+
 if (failures.length) {
     console.error(`\ncheck-logic: ${failures.length} check(s) failed:\n`);
     for (const f of failures) console.error(`  - ${f}`);

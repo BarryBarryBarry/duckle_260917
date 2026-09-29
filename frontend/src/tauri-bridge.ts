@@ -1103,6 +1103,12 @@ export type Schedule = {
     exclude?: { weekdays?: string[]; dates?: string[] };
     misfire?: 'skip' | 'latest' | 'all';
     catchup?: { maxCatchupRuns: number; maxCatchupAgeDays: number };
+    /**
+     * #317: the parameter values this schedule's runs are given, checked against the
+     * pipeline's declared contract. Absent means "this save did not say", which the
+     * backend reads as "keep what is there".
+     */
+    params?: Record<string, string>;
     last_run_at?: string;
     last_run_status?: 'ok' | 'error' | 'cancelled';
     last_run_duration_ms?: number;

@@ -171,10 +171,13 @@ fn run_one_blocking(
     // workspace-relative file. `resolve_workspace` takes a bare id and builds the path
     // itself, so an un-normalised step asked it for `pipelines/pipelines/orders.json.json`.
     // A bare id normalises to itself, so an ordinary schedule is unaffected.
-    let mut pipeline = duckle_duckdb_engine::context::resolve_workspace(
+    // #317: held to its declared parameter contract like any other run - with no
+    // values bound here, so its declared defaults apply and a required one refuses.
+    let mut pipeline = duckle_duckdb_engine::context::resolve_workspace_with_params(
         workspace,
         plans::step_pipeline_id(pipeline_id),
         None,
+        &[],
     )?
     .doc;
     duckle_duckdb_engine::context::apply_time_builtins(&mut pipeline);
@@ -517,10 +520,26 @@ impl Scheduler {
         // scheduled run sent the raw ${context.X} placeholder to the driver, so
         // a pipeline that ran fine from the canvas failed under a schedule with
         // auth errors like ORA-01017 (issue #32).
-        let mut pipeline = duckle_duckdb_engine::context::resolve_workspace(
+        //
+        // #317: the schedule's parameter values, checked against the pipeline's
+        // declared contract before any context, as the server's scheduler and
+        // every other surface do. This scheduler applied none of it, so a declared
+        // default stayed a literal placeholder and a required one went unasked.
+        let supplied: Vec<duckle_duckdb_engine::params::Supplied> = sched
+            .params
+            .iter()
+            .flatten()
+            .map(|(name, value)| duckle_duckdb_engine::params::Supplied {
+                name: name.clone(),
+                value: value.clone(),
+                source: "schedule".to_string(),
+            })
+            .collect();
+        let mut pipeline = duckle_duckdb_engine::context::resolve_workspace_with_params(
             &workspace,
             &pipeline_id,
             None,
+            &supplied,
         )?
         .doc;
         // Stamp the dynamic date/time builtins (${date}/${datetime}/...) at fire
@@ -1161,6 +1180,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1191,6 +1211,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1222,6 +1243,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1251,6 +1273,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1279,6 +1302,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1302,6 +1326,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1330,6 +1355,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1367,6 +1393,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1393,6 +1420,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1432,6 +1460,7 @@ mod tests {
                 exclude: Default::default(),
                 misfire: Default::default(),
                 catchup: Default::default(),
+                params: None,
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1529,6 +1558,7 @@ mod tests {
                 exclude: Default::default(),
                 misfire: Default::default(),
                 catchup: Default::default(),
+                params: None,
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1573,6 +1603,7 @@ mod tests {
                 exclude: Default::default(),
                 misfire: Default::default(),
                 catchup: Default::default(),
+                params: None,
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1634,6 +1665,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1704,6 +1736,7 @@ mod tests {
                 exclude: Default::default(),
                 misfire: Default::default(),
                 catchup: Default::default(),
+                params: None,
                 last_run_at: None,
                 last_run_status: None,
                 last_run_duration_ms: None,
@@ -1758,6 +1791,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             last_run_at: None,
             last_run_status: None,
             last_run_duration_ms: None,
@@ -1902,6 +1936,68 @@ mod tests {
     /// file, holding real runs, that nothing in either product ever looks at. The run was
     /// recorded and invisible, which is worse than not recorded at all.
     ///
+    /// #317: a desktop-scheduled run is held to the pipeline's parameter contract,
+    /// as the server's is: the schedule's values reach the run, and with none the
+    /// declared default does. The desktop scheduler applied neither, so a default
+    /// stayed a literal `${region}` in the file it wrote.
+    #[test]
+    fn a_scheduled_run_gets_its_parameter_values_and_the_declared_defaults() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| Path::new(b).exists()) else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::create_dir_all(ws.join("out")).unwrap();
+        std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
+        std::fs::write(ws.join("pipelines").join("regional.json"), r#"{"parameters":{"region":{"type":"string","enum":["eu","us"],"default":"eu"}},
+ "nodes":[{"id":"s","position":{"x":0,"y":0},"data":{"label":"s","componentId":"src.csv","properties":{"path":"${workspace}/in.csv","hasHeader":true}}},
+          {"id":"k","position":{"x":0,"y":0},"data":{"label":"k","componentId":"snk.csv","properties":{"path":"${workspace}/out/${region}.csv"}}}],
+ "edges":[{"id":"e","source":"s","target":"k"}]}"#).unwrap();
+
+        let sched = Scheduler::new(DuckdbEngine::new(PathBuf::from(bin)));
+        sched.set_workspace(Some(ws.clone()));
+        let add = |params: Option<std::collections::BTreeMap<String, String>>| {
+            sched
+                .upsert(Schedule {
+                    id: String::new(),
+                    pipeline_id: "regional".into(),
+                    plan_id: None,
+                    name: "regional".into(),
+                    enabled: true,
+                    kind: ScheduleKind::Interval { seconds: 3600 },
+                    timezone: None,
+                    exclude: Default::default(),
+                    misfire: Default::default(),
+                    catchup: Default::default(),
+                    params,
+                    last_run_at: None,
+                    last_run_status: None,
+                    last_run_duration_ms: None,
+                    last_run_error: None,
+                    next_run_at: None,
+                })
+                .expect("schedule rejected")
+                .id
+        };
+        let bound = add(Some([("region".to_string(), "us".to_string())].into_iter().collect()));
+        let unbound = add(None);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            sched.fire_and_record(&bound, "Test").await;
+            sched.fire_and_record(&unbound, "Test").await;
+        });
+        let out: Vec<String> = std::fs::read_dir(ws.join("out"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(out.contains(&"us.csv".to_string()), "the schedule's value did not reach the run: {out:?}");
+        assert!(out.contains(&"eu.csv".to_string()), "the declared default was not applied: {out:?}");
+        assert!(!out.iter().any(|f| f.contains("${")), "a placeholder reached the file name: {out:?}");
+    }
+
     /// Caught by running a plan in the actual desktop app and looking at the folder, not by
     /// any test: every earlier test either injected the runner or never got as far as
     /// writing history.

@@ -638,6 +638,15 @@ contract like any other, and the pipeline's `maxRunSeconds` and `resourcePool`
 apply to it too. A value a context gives a declared parameter is filled in for
 you to keep or change.
 
+A schedule can bind values too: the Schedules dialog shows the same controls
+under **Parameters**, and every run the schedule starts is given them, checked
+against the contract like any other value, on the desktop scheduler and under
+`duckle-runner serve` alike. A blank field uses the pipeline's default. Through
+the console's API a schedule takes them as `"params": { "region": "us" }`, and a
+save that does not mention `params` keeps the ones the schedule has. A schedule
+that runs a plan cannot bind values yet, since each pipeline in the plan has its
+own contract; that is refused when it is saved.
+
 **Where a value came from is kept.** When two surfaces bind the same parameter -
 a schedule and the run that starts, say - the later one wins, which is a
 documented rule and not a clever one. What is not thrown away is that something
