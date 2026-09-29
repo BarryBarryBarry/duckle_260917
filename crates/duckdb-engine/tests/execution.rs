@@ -3466,17 +3466,31 @@ fn connection_test_reaches_a_rest_api_with_its_auth() {
 /// the editor waiting out the operating system's TCP timeout. One connect timeout
 /// (10 s) and a process start, not two: asking the catalog first and then the ping
 /// waited both out, 37 s on a Windows CI runner.
+///
+/// Measured as the wait beyond what the same test costs against a port that
+/// refuses at once. A loaded CI runner starts processes slowly and may install
+/// the extension on first use; neither is the wait this is about, and on one
+/// run they alone took a wall-clock bound past its limit.
 #[test]
 fn connection_test_gives_up_on_a_host_that_never_answers() {
     let engine = engine_or_skip!();
-    let started = std::time::Instant::now();
-    let r = engine.test_connection(&json!({
-        "kind": "postgres", "host": "10.255.255.1", "port": 5432,
-        "database": "postgres", "username": "u", "password": "p"
-    }));
-    assert!(!r.ok, "{}", r.message);
-    eprintln!("a host that never answers took {:?}", started.elapsed());
-    assert!(started.elapsed() < std::time::Duration::from_secs(25), "took {:?}", started.elapsed());
+    let probe = |host: &str, port: u16| {
+        let started = std::time::Instant::now();
+        let r = engine.test_connection(&json!({
+            "kind": "postgres", "host": host, "port": port,
+            "database": "postgres", "username": "u", "password": "p"
+        }));
+        assert!(!r.ok, "{}", r.message);
+        started.elapsed()
+    };
+    let refused = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    probe("127.0.0.1", refused); // any first-use install happens here
+    let overhead = probe("127.0.0.1", refused);
+    let took = probe("10.255.255.1", 5432);
+    let waited = took.saturating_sub(overhead);
+    eprintln!("a host that never answers took {took:?}, {waited:?} beyond a refused port's {overhead:?}");
+    // One 10 s connect timeout, not two.
+    assert!(waited < std::time::Duration::from_secs(13), "waited {waited:?} beyond {overhead:?}");
 }
 
 #[test]

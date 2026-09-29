@@ -121,14 +121,20 @@ fn a_list_reads_every_page_signed_in_with_ntlm() {
         .map(|c| c["column_name"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(cols, vec!["ID", "Title"]);
+    // This read's own request. The mock is shared by tests running in parallel,
+    // so "the last request to a list" can be another test's write.
     let sent = s.state()["requests"]
         .as_array()
         .unwrap()
         .iter()
         .rev()
-        .find(|q| q["path"].as_str().unwrap_or("").ends_with("/items"))
+        .find(|q| {
+            q["method"] == "GET"
+                && q["path"].as_str().unwrap_or("").ends_with("('Orders')/items")
+                && q["query"].get("$filter").is_some()
+        })
         .cloned()
-        .unwrap();
+        .expect("no read of Orders carried a $filter");
     assert_eq!(sent["query"]["$filter"], json!(["Region eq 'North'"]), "{sent}");
 }
 
