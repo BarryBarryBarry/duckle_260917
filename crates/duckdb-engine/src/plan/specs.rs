@@ -2584,6 +2584,10 @@ pub struct ChangedSourceSpec {
     /// Remember what was processed, so the next run only sees what is new.
     /// Off means every run treats everything as changed.
     pub track_state: bool,
+    /// #324: what a first run - one with no saved state - does with what is
+    /// already there. False emits it, which is a backfill. True records it as
+    /// OBSERVED, not processed, and emits only what is added or replaced later.
+    pub baseline_existing: bool,
     // SFTP auth, ignored for https.
     pub user: Option<String>,
     pub password: Option<String>,

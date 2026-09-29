@@ -5753,27 +5753,49 @@ impl DuckdbEngine {
         } else {
             None
         };
+        if spec.baseline_existing && state_path.is_none() {
+            return Err(EngineError::Config(format!(
+                "changed: firstRun baseline_existing needs a workspace to remember what it \
+                 observed at {}; without one every run would be a first run",
+                spec.uri
+            )));
+        }
         let prior = state_path.as_deref().and_then(crate::read_state_snapshot);
+        let prior_state: Option<JsonValue> =
+            prior.as_deref().and_then(|t| serde_json::from_str(t).ok());
+        let saved_map = |key: &str| -> std::collections::BTreeMap<String, String> {
+            prior_state
+                .as_ref()
+                .and_then(|v| v.get(key).cloned())
+                .and_then(|v| serde_json::from_value(v).ok())
+                .unwrap_or_default()
+        };
         // What has already been processed: uri -> fingerprint.
-        let mut seen: std::collections::BTreeMap<String, String> = prior
-            .as_deref()
-            .and_then(|t| serde_json::from_str::<JsonValue>(t).ok())
-            .and_then(|v| v.get("seen").cloned())
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default();
+        let mut seen = saved_map("seen");
+        // #324: what a baseline recorded as already there. OBSERVED, not
+        // processed, so it is kept apart from `seen` and the state says which
+        // is which. An entry leaves it when a later version is emitted.
+        let mut baseline = saved_map("baseline");
+        // A first run is one with no saved state at all. It lists everything
+        // rather than maxEntries: a capped baseline would leave the rest to be
+        // emitted next run as the very backfill this mode exists to prevent.
+        let baselining = spec.baseline_existing && prior.is_none();
+        let recorded = |uri: &str| seen.get(uri).or_else(|| baseline.get(uri));
+        let limit = if baselining { usize::MAX } else { spec.max_entries };
 
-        // An S3 listing walks past what is already processed rather than
+        // An S3 listing walks past what is already recorded rather than
         // returning it, so those come back as a count, not as entries.
         let (entries, walked_past) = if spec.listing {
-            self.list_remote_entries(spec, &seen)?
+            self.list_remote_entries(spec, &|u: &str, f: &str| recorded(u).is_some_and(|p| p == f), limit)?
         } else {
             (vec![self.probe_remote_entry(spec)?], 0)
         };
 
         let mut rows: Vec<JsonValue> = Vec::new();
         let mut unchanged_count = walked_past;
-        for e in &entries {
-            let status = match seen.get(&e.uri) {
+        // A baseline run emits none of what it lists.
+        for e in entries.iter().filter(|_| !baselining) {
+            let status = match recorded(&e.uri) {
                 Some(prev) if *prev == e.fingerprint => {
                     unchanged_count += 1;
                     continue;
@@ -5785,6 +5807,9 @@ impl DuckdbEngine {
                 "uri": e.uri,
                 "name": e.name,
                 "size": e.size,
+                // #324: the name src.artifact and xf.artifact.copy use. `size`
+                // stays, so no pipeline reading it breaks.
+                "size_bytes": e.size,
                 "modified_at": e.modified_at,
                 "etag": e.etag,
                 "fingerprint": e.fingerprint,
@@ -5804,13 +5829,21 @@ impl DuckdbEngine {
                 r.get("fingerprint").and_then(|v| v.as_str()),
             ) {
                 seen.insert(u.to_string(), f.to_string());
+                baseline.remove(u);
+            }
+        }
+        if baselining {
+            for e in &entries {
+                baseline.insert(e.uri.clone(), e.fingerprint.clone());
             }
         }
 
         // What the run OBSERVED, for the provenance manifest. No sha256: the
         // bytes were deliberately not read, which is the point of the component.
         // The ETag with the size and mtime is what can honestly be claimed.
-        for e in &entries {
+        // None for a baseline run: it consumed none of these, and a baseline
+        // can be the whole collection.
+        for e in entries.iter().filter(|_| !baselining) {
             artifacts.push(crate::ArtifactRef {
                 node: spec.node_id.clone(),
                 role: "input".into(),
@@ -5834,26 +5867,36 @@ impl DuckdbEngine {
         }
 
         if let Some(p) = state_path {
-            pending.push(crate::PendingWrite::state(
-                p,
-                serde_json::json!({ "seen": seen }),
-                prior,
-            ));
+            let mut state = serde_json::json!({ "seen": seen });
+            if !baseline.is_empty() {
+                state["baseline"] = serde_json::json!(baseline);
+            }
+            pending.push(crate::PendingWrite::state(p, state, prior));
         }
 
         let listed = entries.len() + walked_past;
-        let msg = format!(
-            "changed: {} of {} entr{} changed at {}{}",
-            emitted,
-            listed,
-            if listed == 1 { "y" } else { "ies" },
-            spec.uri,
-            if unchanged_count > 0 {
-                format!(" ({} unchanged)", unchanged_count)
-            } else {
-                String::new()
-            }
-        );
+        let msg = if baselining {
+            format!(
+                "changed: recorded {} entr{} already at {} as a baseline and emitted none; \
+                 later runs emit what is added or replaced",
+                listed,
+                if listed == 1 { "y" } else { "ies" },
+                spec.uri
+            )
+        } else {
+            format!(
+                "changed: {} of {} entr{} changed at {}{}",
+                emitted,
+                listed,
+                if listed == 1 { "y" } else { "ies" },
+                spec.uri,
+                if unchanged_count > 0 {
+                    format!(" ({} unchanged)", unchanged_count)
+                } else {
+                    String::new()
+                }
+            )
+        };
         Ok(if emitted == 0 {
             format!("{}{}", crate::UNCHANGED_MARKER, msg)
         } else {
@@ -5867,7 +5910,8 @@ impl DuckdbEngine {
             Some(db),
             &format!(
                 "CREATE OR REPLACE TABLE {} (uri VARCHAR, name VARCHAR, size BIGINT, \
-                 modified_at VARCHAR, etag VARCHAR, fingerprint VARCHAR, status VARCHAR)",
+                 size_bytes BIGINT, modified_at VARCHAR, etag VARCHAR, fingerprint VARCHAR, \
+                 status VARCHAR)",
                 plan::quote_ident(node_id)
             ),
             false,
@@ -5989,11 +6033,13 @@ impl DuckdbEngine {
     }
 
     /// The objects under a prefix this run could emit, and how many already
-    /// processed ones were walked past to find them.
+    /// recorded ones were walked past to find them. `recorded` answers whether
+    /// a uri is recorded at that fingerprint.
     fn s3_list(
         &self,
         spec: &plan::ChangedSourceSpec,
-        seen: &std::collections::BTreeMap<String, String>,
+        recorded: &dyn Fn(&str, &str) -> bool,
+        limit: usize,
     ) -> Result<(Vec<RemoteEntry>, usize), EngineError> {
         let cfg = self.s3_config(spec)?;
         let (bucket, prefix) = crate::s3::parse_s3_uri(&spec.uri)?;
@@ -6003,7 +6049,7 @@ impl DuckdbEngine {
         // first keys every run, so once those were processed nothing after
         // them was ever reached. The suffix filter is applied the same way.
         let mut walked_past = 0usize;
-        let objects = cfg.list_where(&bucket, &prefix, spec.max_entries, |o| {
+        let objects = cfg.list_where(&bucket, &prefix, limit, |o| {
             if let Some(sfx) = &spec.suffix {
                 if !o.key.ends_with(sfx.as_str()) {
                     return false;
@@ -6012,7 +6058,7 @@ impl DuckdbEngine {
             let uri = format!("s3://{}/{}", bucket, o.key);
             let fingerprint =
                 remote_fingerprint(o.etag.as_deref(), o.last_modified.as_deref(), o.size);
-            if seen.get(&uri) == Some(&fingerprint) {
+            if recorded(&uri, &fingerprint) {
                 walked_past += 1;
                 return false;
             }
@@ -6416,6 +6462,7 @@ impl DuckdbEngine {
             suffix: None,
             max_entries: 1,
             track_state: false,
+            baseline_existing: false,
             user: Some(user.clone()),
             password: auth.password.clone(),
             private_key: auth.private_key.clone(),
@@ -7422,10 +7469,11 @@ impl DuckdbEngine {
     fn list_remote_entries(
         &self,
         spec: &plan::ChangedSourceSpec,
-        seen: &std::collections::BTreeMap<String, String>,
+        recorded: &dyn Fn(&str, &str) -> bool,
+        limit: usize,
     ) -> Result<(Vec<RemoteEntry>, usize), EngineError> {
         if spec.uri.starts_with("s3://") || spec.uri.starts_with("s3a://") {
-            return self.s3_list(spec, seen);
+            return self.s3_list(spec, recorded, limit);
         }
         if !spec.uri.starts_with("sftp://") {
             return Err(EngineError::Config(format!(

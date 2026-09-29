@@ -3247,6 +3247,12 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
                       description: 'Bounds the first run against a directory holding years of drops. What is left over is taken by the next run, oldest first - only what was emitted is recorded as processed.' },
                     { key: 'trackState', label: 'Remember what was processed', kind: 'bool', defaultValue: true,
                       description: 'Advances only when the whole run succeeds, so a failure downstream re-offers the same files rather than losing them. Off means every run treats everything as changed.' },
+                    { key: 'firstRun', label: 'On the first run', kind: 'select', defaultValue: 'emit_existing',
+                      options: [
+                          { label: 'Emit what is already there (a backfill)', value: 'emit_existing' },
+                          { label: 'Record what is already there, emit only what arrives later', value: 'baseline_existing' },
+                      ],
+                      description: 'What a first run - one with nothing remembered yet - does with what is already there. Emit treats all of it as new, which is a backfill. Record lists all of it, not just "Max files per run", remembers it as already there without claiming it was processed, and emits nothing; later runs emit what is added, and anything already there that is replaced. Needs "Remember what was processed" on.' },
                 ],
             },
             {

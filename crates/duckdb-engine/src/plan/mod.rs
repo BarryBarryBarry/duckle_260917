@@ -5666,6 +5666,30 @@ fn build_stage(
             .or_else(|| string_prop(&props, "url"))
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: uri required", component_id)))?;
+        let track_state = props
+            .get("trackState")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        // #324: first-run behaviour is chosen, not implied. A misspelt mode is
+        // refused rather than read as the default, because backfilling years of
+        // drops and skipping them are both expensive wrong guesses.
+        let baseline_existing = match string_prop(&props, "firstRun").as_deref().map(str::trim) {
+            None | Some("") | Some("emit_existing") => false,
+            Some("baseline_existing") => true,
+            Some(other) => {
+                return Err(EngineError::Config(format!(
+                    "{}: firstRun must be emit_existing or baseline_existing, not '{}'",
+                    component_id, other
+                )))
+            }
+        };
+        if baseline_existing && !track_state {
+            return Err(EngineError::Config(format!(
+                "{}: firstRun baseline_existing needs trackState on. With nothing \
+                 remembered every run is a first run, so nothing would ever be emitted.",
+                component_id
+            )));
+        }
         changed_source = Some(ChangedSourceSpec {
             node_id: node.id.clone(),
             uri,
@@ -5679,10 +5703,8 @@ fn build_stage(
                 .and_then(|v| v.as_u64())
                 .filter(|n| *n > 0)
                 .unwrap_or(1000) as usize,
-            track_state: props
-                .get("trackState")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
+            track_state,
+            baseline_existing,
             user: string_prop(&props, "user").filter(|s| !s.is_empty()),
             password: string_prop(&props, "password").filter(|s| !s.is_empty()),
             private_key: string_prop(&props, "privateKey").filter(|s| !s.is_empty()),

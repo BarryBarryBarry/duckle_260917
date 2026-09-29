@@ -21110,6 +21110,145 @@ fn s3_changed_reaches_past_processed_keys_when_the_cap_is_smaller_than_the_prefi
     );
 }
 
+/// #324: `firstRun: baseline_existing` records what is already in the prefix as
+/// OBSERVED and emits only what is added or replaced afterwards. Two things it
+/// must not do: cap the baseline at maxEntries (what the cap left out would be
+/// emitted next run as a backfill, the thing the mode exists to prevent), and
+/// record the baseline as processed (it was never processed; a replaced object
+/// has to come out again, and state has to say which is which).
+#[test]
+fn changed_baseline_existing_observes_the_prefix_and_emits_only_what_arrives_later() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let out = out_path(tmp.path(), "list.csv");
+
+    let reply = |objects: &[(&str, &str, i64)]| {
+        let contents: String = objects
+            .iter()
+            .map(|(k, e, n)| {
+                format!("<Contents><Key>in/{k}</Key><Size>{n}</Size><ETag>&quot;{e}&quot;</ETag></Contents>")
+            })
+            .collect();
+        let page = format!(
+            r#"<?xml version="1.0"?><ListBucketResult><IsTruncated>false</IsTruncated>{contents}</ListBucketResult>"#
+        );
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/xml\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{}",
+            page.len(),
+            page
+        )
+    };
+    let before = [("a.csv", "e1", 10), ("b.csv", "e2", 20), ("c.csv", "e3", 30)];
+    // b replaced behind the same key, d added.
+    let after = [("a.csv", "e1", 10), ("b.csv", "e2x", 21), ("c.csv", "e3", 30), ("d.csv", "e4", 40)];
+    let (port, _rx) = stub_s3(vec![reply(&before), reply(&after), reply(&after)]);
+    let mut props = s3_props(port, "s3://raw/in/", true);
+    props["maxEntries"] = json!(2);
+    props["firstRun"] = json!("baseline_existing");
+    let pipeline = doc(
+        json!([
+            node("c", "src.changed", props),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "c", "k")]),
+    );
+    let rows = || -> Vec<std::collections::BTreeMap<String, String>> {
+        let body = std::fs::read_to_string(&out).unwrap_or_default().replace("\r\n", "\n");
+        let mut lines = body.lines();
+        let header: Vec<String> = lines
+            .next()
+            .unwrap_or_default()
+            .split(',')
+            .map(str::to_string)
+            .collect();
+        let mut out: Vec<_> = lines
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| header.iter().cloned().zip(l.split(',').map(str::to_string)).collect())
+            .collect();
+        out.sort_by(|a: &std::collections::BTreeMap<String, String>, b| a["uri"].cmp(&b["uri"]));
+        out
+    };
+    let state = || -> serde_json::Value {
+        let p = tmp.path().join("state").join("s3base").join("c.json");
+        serde_json::from_str(&std::fs::read_to_string(&p).unwrap_or_default()).unwrap_or_default()
+    };
+
+    let r = engine.execute_pipeline_named(&pipeline, "s3base");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert!(rows().is_empty(), "a baseline run emits nothing: {:?}", rows());
+    let baseline = state()["baseline"].as_object().cloned().unwrap_or_default();
+    assert_eq!(baseline.len(), 3, "all three observed, not the capped two: {}", state());
+    assert!(
+        state()["seen"].as_object().map_or(true, |m| m.is_empty()),
+        "observed is not processed: {}",
+        state()
+    );
+
+    let r = engine.execute_pipeline_named(&pipeline, "s3base");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let got = rows();
+    let uris: Vec<&str> = got.iter().map(|r| r["uri"].as_str()).collect();
+    assert_eq!(uris, vec!["s3://raw/in/b.csv", "s3://raw/in/d.csv"], "{got:?}");
+    assert_eq!(got[0]["status"], "changed", "b was observed, then replaced");
+    assert_eq!(got[1]["status"], "new");
+    // The column name src.artifact and xf.artifact.copy already use.
+    assert_eq!(got[0]["size_bytes"], "21", "{got:?}");
+    assert_eq!(got[0]["size"], "21", "the old name keeps working: {got:?}");
+
+    // Processed now, and a third look at the same prefix finds nothing new.
+    let seen = state()["seen"].as_object().cloned().unwrap_or_default();
+    assert!(seen.contains_key("s3://raw/in/b.csv") && seen.contains_key("s3://raw/in/d.csv"));
+    assert!(!state()["baseline"].as_object().unwrap().contains_key("s3://raw/in/b.csv"));
+    let r = engine.execute_pipeline_named(&pipeline, "s3base");
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(r.nodes.get("c").map(|n| n.status.as_str()), Some("unchanged"));
+}
+
+/// With nothing remembered every run is a first run, so a baseline would
+/// swallow every object forever. Refused rather than obeyed.
+#[test]
+fn changed_baseline_existing_without_tracked_state_is_refused() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let mut props = s3_props(1, "s3://raw/in/", true);
+    props["trackState"] = json!(false);
+    props["firstRun"] = json!("baseline_existing");
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("c", "src.changed", props),
+                node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "x.csv") })),
+            ]),
+            json!([main_edge("e1", "c", "k")]),
+        ),
+        "s3notrack",
+    );
+    assert_eq!(r.status, "error");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("trackState"), "{e}");
+
+    let mut props = s3_props(1, "s3://raw/in/", true);
+    props["firstRun"] = json!("baseline");
+    let r = engine.execute_pipeline_named(
+        &doc(
+            json!([
+                node("c", "src.changed", props),
+                node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "x.csv") })),
+            ]),
+            json!([main_edge("e1", "c", "k")]),
+        ),
+        "s3typo",
+    );
+    assert_eq!(r.status, "error", "a misspelt mode is not quietly emit_existing");
+    let e = r.error.unwrap_or_default();
+    assert!(e.contains("emit_existing") && e.contains("baseline_existing"), "{e}");
+}
+
 /// An S3 uri with no credentials must say so. Sending an anonymous request
 /// instead returns 403, which reads as "wrong keys" and sends people to check
 /// credentials they never set.

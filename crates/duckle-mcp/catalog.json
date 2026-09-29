@@ -980,7 +980,7 @@
       "label": "Changed? (remote poll)",
       "kind": "source",
       "availability": "available",
-      "summary": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size / modified_at / etag / fingerprint / status. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
+      "summary": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size_bytes (and size) / modified_at / etag / fingerprint / status. A first run either emits what is already there or records it as a baseline and emits only what arrives later. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
       "ports": {
         "inputs": [],
         "outputs": [
@@ -995,7 +995,7 @@
         "id": "src.changed",
         "kind": "source",
         "label": "Changed? (remote poll)",
-        "description": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size / modified_at / etag / fingerprint / status. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
+        "description": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size_bytes (and size) / modified_at / etag / fingerprint / status. A first run either emits what is already there or records it as a baseline and emits only what arrives later. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -1036,6 +1036,23 @@
                 "kind": "bool",
                 "defaultValue": true,
                 "description": "Advances only when the whole run succeeds, so a failure downstream re-offers the same files rather than losing them. Off means every run treats everything as changed."
+              },
+              {
+                "key": "firstRun",
+                "label": "On the first run",
+                "kind": "select",
+                "defaultValue": "emit_existing",
+                "options": [
+                  {
+                    "label": "Emit what is already there (a backfill)",
+                    "value": "emit_existing"
+                  },
+                  {
+                    "label": "Record what is already there, emit only what arrives later",
+                    "value": "baseline_existing"
+                  }
+                ],
+                "description": "What a first run - one with nothing remembered yet - does with what is already there. Emit treats all of it as new, which is a backfill. Record lists all of it, not just \"Max files per run\", remembers it as already there without claiming it was processed, and emits nothing; later runs emit what is added, and anything already there that is replaced. Needs \"Remember what was processed\" on."
               }
             ]
           },

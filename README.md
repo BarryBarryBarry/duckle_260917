@@ -2189,8 +2189,19 @@ objects:
   follow continuation tokens, so a prefix larger than one page is enumerated
   fully rather than silently truncated at the first thousand.
 
-Rows carry `uri`, `name`, `size`, `modified_at`, `etag`, `fingerprint` and
-`status` (`new` / `changed`).
+Rows carry `uri`, `name`, `size_bytes`, `modified_at`, `etag`, `fingerprint`
+and `status` (`new` / `changed`). `size` carries the same value as
+`size_bytes`, under the name earlier versions used.
+
+**The first run is a choice.** A prefix can already hold years of drops, and
+`firstRun` says what happens to them: `emit_existing` (the default) emits them
+all, which is a backfill; `baseline_existing` lists all of them - not just
+`maxEntries` - records them as already there, and emits nothing. Later runs
+emit what is added, and anything that was already there once it is replaced.
+The baseline is recorded as **observed, not processed**, kept apart from what
+the pipeline has actually processed, so state never claims work that was not
+done. It needs `trackState` on, and a misspelt mode is refused rather than
+read as either one.
 
 **A quiet poll is not a plain success.** When nothing changed the node reports
 `unchanged`, so a working poll and a broken one are told apart - a healthy
