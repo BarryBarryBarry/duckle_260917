@@ -5574,27 +5574,47 @@ impl DuckdbEngine {
         let t_all = plan::quote_ident(&format!("duckle_tumble_all_{}", spec.node_id));
         let t_b = plan::quote_ident(&format!("duckle_tumble_b_{}", spec.node_id));
         let t_late = plan::quote_ident(&format!("duckle_tumble_late_{}", spec.node_id));
+        //
+        // #359: both marks are instants, kept as rendered text with an offset.
+        // They are compared and re-rendered HERE, in SQL, where a literal takes
+        // the time column's type: a mark written in another zone reads as the
+        // moment it was and comes back in this session's zone, which is the zone
+        // the buckets below are cut in. Comparing the TEXT kept a stale mark
+        // written east of this host over a genuinely later batch, and re-reading
+        // it with the offset dropped made its wall clock the threshold here.
+        //
+        // Monotonic: a batch of older data must not drag the watermark back and
+        // re-open windows that already closed. GREATEST skips a NULL, so a run
+        // with no rows keeps the previous mark.
+        let wm_expr = match &prev_watermark {
+            Some(p) => format!("GREATEST(MAX({ts}), {})", lit(p)),
+            None => format!("MAX({ts})"),
+        };
+        let et_expr = match &emitted_through {
+            Some(e) => format!(
+                "CASE WHEN typeof(MAX({ts})) = 'TIMESTAMP WITH TIME ZONE' \
+                 THEN CAST(CAST({e} AS TIMESTAMPTZ) AS VARCHAR) \
+                 ELSE CAST(CAST({e} AS TIMESTAMP) AS VARCHAR) END",
+                e = lit(e)
+            ),
+            None => "CAST(NULL AS VARCHAR)".to_string(),
+        };
         let wm_sql = format!(
             "CREATE OR REPLACE TABLE {t_all} AS {all};
-             SELECT COALESCE(MAX({ts}), NULL)::VARCHAR AS wm FROM {t_all}",
+             SELECT CAST({wm_expr} AS VARCHAR) AS wm, {et_expr} AS et FROM {t_all}",
             t_all = t_all,
             all = all,
-            ts = ts
         );
         let wm_rows = self.run_rows(Some(db), &wm_sql)?;
-        let batch_max = wm_rows
-            .first()
-            .and_then(|r| r.get("wm"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        // Monotonic: a batch of older data must not drag the watermark back and
-        // re-open windows that already closed.
-        let watermark = match (batch_max, prev_watermark.clone()) {
-            (Some(b), Some(p)) => Some(if b > p { b } else { p }),
-            (Some(b), None) => Some(b),
-            (None, p) => p,
+        let marks = wm_rows.first();
+        let text = |key: &str| {
+            marks
+                .and_then(|r| r.get(key))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
         };
-        let watermark = match watermark {
+        let emitted_through = text("et");
+        let watermark = match text("wm") {
             Some(w) => w,
             // Nothing has ever been seen, so nothing can be closed.
             None => {

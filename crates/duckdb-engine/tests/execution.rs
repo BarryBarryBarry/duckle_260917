@@ -20230,6 +20230,74 @@ fn tumble_batch(
     (csv, msg)
 }
 
+/// #359: a watermark left by a run in another time zone is still the instant it
+/// was. It is kept as rendered text with its offset, and it used to be kept by
+/// comparing that TEXT, then re-read with the offset thrown away. So a mark
+/// written east of this host beat a genuinely later batch, and its wall clock
+/// became the threshold here. Seeded as Tokyo's rendering of 03:00Z against a
+/// batch at 03:30Z: the row's hour has to stay open. Before the fix it was
+/// dropped as too late, silently - on a UTC host as much as any other.
+#[test]
+fn tumble_reads_a_watermark_left_in_another_time_zone_as_the_same_instant() {
+    let engine = engine_or_skip!();
+    let _env = env_guard();
+    let tmp = tempfile::tempdir().unwrap();
+    std::env::set_var("DUCKLE_WORKSPACE", tmp.path());
+    let state_dir = tmp.path().join("state").join("tumble_zone");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(
+        state_dir.join("w.json"),
+        json!({
+            "buffer": null,
+            "watermark": "2026-09-23 12:00:00+09",
+            "emitted_through": "2026-09-23 12:00:00+09",
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let (csv, _) = tumble_batch(
+        &engine,
+        tmp.path(),
+        "tumble_zone",
+        "SELECT TIMESTAMPTZ '2026-09-23 03:30:00+00' AS ts, 1 AS v",
+        "0 seconds",
+    );
+    let emitted = csv.lines().skip(1).filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(emitted, 0, "its hour has not ended: {csv}");
+
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(state_dir.join("w.json")).unwrap()).unwrap();
+    let buffer = state_dir.join("w.tumble").join(saved["buffer"].as_str().expect("a buffer"));
+    let open = scalar_string(&format!(
+        "SELECT count(*)::VARCHAR FROM read_parquet('{}')",
+        buffer.display().to_string().replace('\\', "/")
+    ));
+    assert_eq!(open, "1", "the row is still open, not dropped as too late: {saved}");
+    // The later of the two instants, whatever zone either was written in.
+    let mark = saved["watermark"].as_str().unwrap();
+    assert_eq!(
+        scalar_string(&format!("SELECT epoch(CAST('{mark}' AS TIMESTAMPTZ))::BIGINT::VARCHAR")),
+        scalar_string("SELECT epoch(TIMESTAMPTZ '2026-09-23 03:30:00+00')::BIGINT::VARCHAR"),
+        "{saved}"
+    );
+
+    // And when a later batch closes that hour, the row is DELIVERED. The first
+    // run cannot show this half: a row that is not yet closed is buffered
+    // whatever the too-late mark says, and it is judged too late only when its
+    // window closes - against a mark that has to be the same instant too.
+    let (csv, _) = tumble_batch(
+        &engine,
+        tmp.path(),
+        "tumble_zone",
+        "SELECT TIMESTAMPTZ '2026-09-23 05:00:00+00' AS ts, 2 AS v",
+        "0 seconds",
+    );
+    let rows: Vec<&str> = csv.lines().skip(1).filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(rows.len(), 1, "the 03:30Z row's hour has closed and it is delivered: {csv}");
+    assert!(rows[0].split(',').nth(1) == Some("1"), "{csv}");
+}
+
 /// A window must not be emitted until the watermark says no more rows for it
 /// are coming - and the watermark is EVENT time, not the clock. Data from 2019
 /// produces 2019's windows, and the last window stays open because nothing has

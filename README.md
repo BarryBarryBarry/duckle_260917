@@ -3099,7 +3099,9 @@ downstream.
 Closing is decided by a **watermark** - the greatest event time seen so far,
 across runs - not by the wall clock. Replaying last year's data therefore
 produces last year's windows, instead of finding every one of them older than
-"now" and closing the lot at once.
+"now" and closing the lot at once. The watermark is compared as an instant, so
+one saved by a run in another time zone is read as the moment it was rather
+than as its wall-clock text.
 
 `allowedLateness` holds a window open past its end for out-of-order arrivals.
 Anything that arrives after its window was already delivered is **dropped and
