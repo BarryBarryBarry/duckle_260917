@@ -94,6 +94,14 @@ pub struct Schedule {
     /// difference between a catch-up and an outage.
     #[serde(default)]
     pub catchup: crate::occurrences::Bounds,
+    /// #317: the parameter values this schedule's runs are given, checked against
+    /// the pipeline's declared contract like a value from any other surface.
+    ///
+    /// Optional rather than empty-by-default: absent means "this save did not say",
+    /// so an editor that knows nothing of parameters keeps the ones the store has
+    /// instead of wiping them. An empty set, said explicitly, clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default)]
     pub last_run_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
@@ -123,6 +131,16 @@ pub fn validate(schedule: &Schedule) -> Result<(), String> {
     // quietly runs on UTC in a container.
     crate::cronzone::resolve_zone(schedule.timezone.as_deref())?;
     schedule.exclude.validate()?;
+    // #317: each pipeline in a plan has its own contract, so one set of values
+    // for all of them is not something a schedule can say yet. Refused here, in
+    // front of whoever wrote it, rather than ignored when it fires.
+    if schedule.plan_id.is_some() && schedule.params.as_ref().is_some_and(|p| !p.is_empty()) {
+        return Err(
+            "A schedule that runs a plan cannot bind parameter values yet; bind them on a \
+             schedule of the pipeline itself"
+                .into(),
+        );
+    }
     match &schedule.kind {
         ScheduleKind::Cron { expr } => {
             let normalized = crate::cronzone::normalize_cron(expr).ok_or_else(|| {
@@ -165,6 +183,9 @@ pub fn merge_saved(list: &mut Vec<Schedule>, saved: Schedule) {
             next.last_run_duration_ms = prev.last_run_duration_ms;
             next.last_run_error = prev.last_run_error.clone();
             next.plan_id = next.plan_id.or_else(|| prev.plan_id.clone());
+            // The same for parameter values: a save that does not mention them
+            // keeps them.
+            next.params = next.params.or_else(|| prev.params.clone());
             list[idx] = next;
         }
         None => list.push(saved),
@@ -249,6 +270,7 @@ mod tests {
             exclude: Default::default(),
             misfire: Default::default(),
             catchup: Default::default(),
+            params: None,
             id: format!("id-{pipeline}"),
             pipeline_id: pipeline.into(),
             plan_id: None,
@@ -385,5 +407,64 @@ mod tests {
             0,
             "the store was observably absent during a write"
         );
+    }
+}
+
+#[cfg(test)]
+mod schedule_params {
+    use super::*;
+
+    fn schedule(json: serde_json::Value) -> Schedule {
+        serde_json::from_value(json).expect("a schedule")
+    }
+
+    /// #317: a schedule binds parameter values for the pipeline it runs.
+    #[test]
+    fn a_schedule_carries_its_parameter_values() {
+        let s = schedule(serde_json::json!({
+            "id": "s1", "pipeline_id": "orders", "name": "n",
+            "kind": { "type": "interval", "seconds": 60 },
+            "params": { "region": "us" }
+        }));
+        assert_eq!(s.params.as_ref().and_then(|p| p.get("region")).map(String::as_str), Some("us"));
+        assert!(validate(&s).is_ok());
+        let back = serde_json::to_value(&s).unwrap();
+        assert_eq!(back["params"]["region"], "us");
+    }
+
+    /// A plan's pipelines each have their own contract, so one set of values
+    /// for all of them is not something a schedule can say yet; refused at save
+    /// rather than ignored at 3am.
+    #[test]
+    fn a_plan_schedule_with_parameter_values_is_refused() {
+        let s = schedule(serde_json::json!({
+            "id": "s1", "pipeline_id": "nightly", "name": "n", "plan_id": "nightly",
+            "kind": { "type": "interval", "seconds": 60 },
+            "params": { "region": "us" }
+        }));
+        let err = validate(&s).unwrap_err();
+        assert!(err.contains("plan") && err.contains("parameter"), "{err}");
+    }
+
+    /// An editor that knows nothing of parameters - the console's form, an older
+    /// desktop - saves without the field, and that must not wipe the values the
+    /// schedule has. An empty set, said explicitly, does clear them.
+    #[test]
+    fn a_save_that_does_not_mention_parameters_keeps_them() {
+        let mut list = vec![schedule(serde_json::json!({
+            "id": "s1", "pipeline_id": "orders", "name": "n",
+            "kind": { "type": "interval", "seconds": 60 }, "params": { "region": "us" }
+        }))];
+        merge_saved(&mut list, schedule(serde_json::json!({
+            "id": "s1", "pipeline_id": "orders", "name": "renamed",
+            "kind": { "type": "interval", "seconds": 120 }
+        })));
+        assert_eq!(list[0].name, "renamed");
+        assert_eq!(list[0].params.as_ref().and_then(|p| p.get("region")).map(String::as_str), Some("us"));
+        merge_saved(&mut list, schedule(serde_json::json!({
+            "id": "s1", "pipeline_id": "orders", "name": "renamed",
+            "kind": { "type": "interval", "seconds": 120 }, "params": {}
+        })));
+        assert!(list[0].params.as_ref().is_some_and(|p| p.is_empty()), "{:?}", list[0].params);
     }
 }

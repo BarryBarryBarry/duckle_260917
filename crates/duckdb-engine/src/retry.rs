@@ -294,6 +294,8 @@ pub fn begin(
     pipeline_hash: &str,
     parent_run_id: Option<String>,
 ) -> RunReceipt {
+    // A pid alone cannot say who owns this receipt, so remember that we do.
+    crate::runlock::claim_started(run_id);
     let receipt = RunReceipt {
         run_id: run_id.to_string(),
         trigger: trigger.to_string(),
@@ -378,6 +380,7 @@ pub fn finish(
     receipt.state = FINISHED.to_string();
     receipt.status = status.to_string();
     receipt.pid = None;
+    crate::runlock::release_started(&receipt.run_id);
     receipt.nodes = nodes;
     let _ = write(workspace, &receipt);
     // After the receipt is durable, so a crash between the two loses the
@@ -436,7 +439,15 @@ pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<Strin
         if r.state != RUNNING && r.state != QUEUED {
             continue;
         }
-        if r.pid.is_some_and(|pid| live_pids(pid)) {
+        // Alive, and ours: the pid answers the first half only. A receipt
+        // naming THIS process's pid that this process never started was left by
+        // a previous life of that pid, which is every restart of a container
+        // whose entrypoint is PID 1. `process_alive` says pid 1 is alive because
+        // it is, so the run stayed `running` for ever - and prune and retention
+        // both skip `running`, so nothing could ever clear it.
+        if r.pid.is_some_and(|pid| {
+            live_pids(pid) && !crate::runlock::started_by_a_previous_life(pid, &r.run_id)
+        }) {
             continue;
         }
         r.state = INTERRUPTED.to_string();
@@ -450,6 +461,40 @@ pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<Strin
             // place `interrupted` is ever produced; without it here the ABORT
             // mapping is unreachable from anywhere but a unit test.
             export_lineage(workspace, &r, crate::openlineage::EventType::Abort);
+            // And into the run history, which is where monitoring reads.
+            //
+            // `append_run_record` is only called when a run FINISHES, so an
+            // interrupted one left no record at all - and `render_metrics` /
+            // `write_metrics_textfile` are rendered from that history. The
+            // textfile therefore still carried the PREVIOUS successful run:
+            // measured on a workspace whose last run was killed,
+            // `duckle_run_last_status 1` and `duckle_run_last_rows 8000000`
+            // from the run before it. An operator alerting on
+            // `duckle_run_last_status == 0` is never paged, and a pipeline whose
+            // only runs were interrupted emits no series at all, so even an
+            // alert on "status != 1" has nothing to match.
+            //
+            // Best-effort, like the lineage export above it: a run that cannot
+            // record itself is still a run that was interrupted, and failing
+            // here would leave the receipt reconciled but the loop stopped.
+            let record = crate::history::RunRecord {
+                run_id: Some(r.run_id.clone()),
+                at: r.at.clone(),
+                status: INTERRUPTED.to_string(),
+                duration_ms: 0,
+                rows: 0,
+                node_count: 0,
+                trigger: r.trigger.clone(),
+                error: None,
+                unchanged: false,
+                incomplete: false,
+                incomplete_reason: None,
+                category: None,
+                assets: Vec::new(),
+                nodes: Vec::new(),
+            };
+            let _ = crate::history::append_run_record(workspace, &r.pipeline_name, record);
+            let _ = crate::history::write_metrics_textfile(workspace);
             changed.push(r.run_id.clone());
         }
     }
@@ -510,7 +555,21 @@ pub fn write(workspace: &Path, receipt: &RunReceipt) -> std::io::Result<()> {
     let d = dir(workspace);
     std::fs::create_dir_all(&d)?;
     let text = serde_json::to_string_pretty(receipt).unwrap_or_default();
-    std::fs::write(path_for(workspace, &receipt.run_id), text)?;
+    // Temp file then rename, so a reader gets the whole of one version or the
+    // whole of the other. A plain write truncates first, and every reader here
+    // treats an unparseable receipt as a run that is NOT in flight - which is
+    // what lets `prune`, running on this very line, delete the receipt of a run
+    // that is still going. The temp name carries this writer's pid and a
+    // sequence so two writers cannot share it (see `alerts::save_state`).
+    let path = path_for(workspace, &receipt.run_id);
+    static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = path.with_extension(format!("json.{}.{seq}.tmp", std::process::id()));
+    std::fs::write(&tmp, text)?;
+    if let Err(e) = std::fs::rename(&tmp, &path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
     prune(workspace, &d);
     Ok(())
 }
@@ -534,6 +593,28 @@ fn is_running(path: &Path) -> bool {
         .ok()
         .and_then(|t| serde_json::from_str::<RunReceipt>(&t).ok())
         .is_some_and(|r| r.state == RUNNING)
+}
+
+/// Is this receipt one that has positively FINISHED?
+///
+/// [`prune`] deletes what this says yes to, so the burden of proof sits here: a
+/// receipt that cannot be read AT THIS MOMENT is not evidence of a finished run.
+/// It used to be - the question was asked the other way round, "is it running",
+/// with anything unreadable answering no - and that hands an in-flight run's
+/// receipt to the deleter for the duration of any window in which the file
+/// cannot be read. On Windows there is such a window on every write: replacing
+/// the file is a MoveFileEx, and a reader in that instant gets NotFound. Under a
+/// loaded suite this machine measured 884 such reads out of 2776.
+///
+/// The cost is that a genuinely corrupt receipt is now kept rather than pruned.
+/// That is the right way round: a corrupt file is a bounded amount of disk, and
+/// the thing on the other side of the trade is the record of a run that is still
+/// going - which is what this whole file exists to keep.
+fn is_finished(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<RunReceipt>(&t).ok())
+        .is_some_and(|r| r.state != RUNNING)
 }
 
 /// Keep the newest [`MAX_RECEIPTS`] FINISHED receipts, and anything a durable
@@ -566,7 +647,10 @@ fn prune(workspace: &Path, d: &Path) {
             // delete it out from under itself. On a busy workspace that is a
             // multi-hour backfill losing exactly the in-flight record this
             // exists to keep.
-            .filter(|(_, p)| !is_running(p))
+            //
+            // Asked as "is it finished", not "is it not running": only a receipt
+            // this has READ and found finished may be deleted. See `is_finished`.
+            .filter(|(_, p)| is_finished(p))
             // And not one a publication or delivery still names.
             .filter(|(_, p)| {
                 let id = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -991,6 +1075,160 @@ pub fn plan(
 mod tests {
     use super::*;
 
+    /// A receipt is written whole, not over the top of the old one.
+    ///
+    /// `write` truncated the file in place, and `prune` runs on EVERY receipt
+    /// write and asks about every OTHER receipt in the workspace. An unreadable
+    /// receipt counts as not running, on purpose, so a reader that caught a
+    /// write mid-flight concluded a multi-hour backfill had finished and pruned
+    /// it - its mtime being old by definition, which is the case that filter
+    /// exists for. `duckle retry <id>` then reports no receipt for a live run.
+    ///
+    /// Proven through an open handle rather than a racing thread: a handle on
+    /// the old file keeps reading the old file across a rename, and sees the new
+    /// bytes (or a truncated file) across an in-place write. That is the
+    /// difference, stated without a timing window - and without the heavy
+    /// concurrent I/O that a spin-loop version puts on the whole test binary.
+    #[test]
+    fn a_receipt_is_written_whole_rather_than_over_the_old_one() {
+        use std::io::Read;
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        let mut r = begin(&ws, "run-atomic", "scheduled", "orders", "pipelines/orders.json", "h", None);
+        r.pipeline_name = "first".into();
+        write(&ws, &r).unwrap();
+
+        // Opened BEFORE the second write, and held across it.
+        let mut held = std::fs::File::open(path_for(&ws, "run-atomic")).unwrap();
+
+        r.pipeline_name = "second".into();
+        write(&ws, &r).unwrap();
+
+        let mut seen = String::new();
+        held.read_to_string(&mut seen).unwrap();
+        assert!(
+            seen.contains("first"),
+            "the write went over the top of the file a reader already had open, so a \
+             reader mid-write sees a partial receipt: {}",
+            &seen[..seen.len().min(120)]
+        );
+        // And the new version is the one on disk.
+        assert_eq!(load(&ws, "run-atomic").unwrap().pipeline_name, "second");
+        // No temp file left behind.
+        let leftovers: Vec<String> = std::fs::read_dir(dir(&ws))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left behind: {leftovers:?}");
+    }
+
+    /// An interrupted run reaches the run history and the metrics.
+    ///
+    /// `append_run_record` is only called when a run FINISHES, so an interrupted
+    /// one left no record - and the metrics are rendered from that history. The
+    /// textfile therefore kept reporting the PREVIOUS successful run: measured
+    /// on a workspace whose last run was killed, `duckle_run_last_status 1` and
+    /// `duckle_run_last_rows 8000000` from the run before it. An operator
+    /// alerting on `duckle_run_last_status == 0` is never paged, and a pipeline
+    /// whose only runs were interrupted emits no series at all.
+    #[test]
+    fn an_interrupted_run_reaches_the_history_and_the_metrics() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+
+        // A run that finished successfully, which is what monitoring last saw.
+        crate::history::append_run_record(
+            &ws,
+            "orders",
+            crate::history::RunRecord {
+                run_id: Some("run-ok".into()),
+                at: "2026-09-20T10:00:00Z".into(),
+                status: "ok".into(),
+                duration_ms: 1200,
+                rows: 8_000_000,
+                node_count: 3,
+                trigger: "scheduled".into(),
+                error: None,
+                unchanged: false,
+                incomplete: false,
+                incomplete_reason: None,
+                category: None,
+                assets: Vec::new(),
+                nodes: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        // And then one that was killed: still `running`, owned by a pid that is
+        // never alive on either platform.
+        let mut killed = begin(&ws, "run-killed", "scheduled", "orders", "pipelines/orders.json", "h", None);
+        killed.pid = Some(u32::MAX);
+        write(&ws, &killed).unwrap();
+
+        let changed = reconcile(&ws, &|_pid| false);
+        assert_eq!(changed, vec!["run-killed".to_string()]);
+
+        let history = crate::history::load_run_history(&ws, "orders");
+        let last = history.last().expect("the interrupted run is recorded");
+        assert_eq!(
+            last.status, INTERRUPTED,
+            "the newest record must be the interrupted run, not the success before it: {history:?}"
+        );
+        assert_eq!(last.run_id.as_deref(), Some("run-killed"));
+
+        // And the rendered metrics stop claiming the last run succeeded.
+        crate::history::write_metrics_textfile(&ws).unwrap();
+        let rendered = crate::history::render_metrics(&ws).expect("metrics render");
+        let status_line = rendered
+            .lines()
+            .find(|l| l.starts_with("duckle_run_last_status") && l.contains("orders"))
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            !status_line.trim_end().ends_with(" 1"),
+            "the gauge still reports the previous success: {status_line}"
+        );
+    }
+
+    /// Prune deletes only what it has read and found finished.
+    ///
+    /// It used to delete anything that did not READ as running, so a receipt
+    /// that could not be read at that instant - a half-written file before the
+    /// write became atomic, or the Windows rename window that replaces it - was
+    /// handed to the deleter. The run it belonged to was still going.
+    #[test]
+    fn prune_keeps_a_receipt_it_could_not_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+
+        // Oldest first, so under the old rule this is the one deletion made.
+        let unreadable = dir(&ws);
+        std::fs::create_dir_all(&unreadable).unwrap();
+        let corrupt = unreadable.join("run-corrupt.json");
+        std::fs::write(&corrupt, "{ this is not a receipt").unwrap();
+
+        // Exactly MAX_RECEIPTS finished ones, so the corrupt file is the only
+        // thing that can take the count over the limit.
+        for i in 0..MAX_RECEIPTS {
+            let mut r = begin(&ws, &format!("run-{i:04}"), "manual", "p", "p.json", "h", None);
+            r.state = "success".into();
+            r.status = "success".into();
+            write(&ws, &r).unwrap();
+        }
+
+        assert!(
+            corrupt.exists(),
+            "a receipt that could not be read was deleted, and the run it belongs to may still be going"
+        );
+        assert_eq!(
+            load(&ws, "run-0000").map(|r| r.state),
+            Ok("success".to_string()),
+            "and the finished ones are still here, since nothing was over the limit"
+        );
+    }
+
     /// #289: a run waiting for capacity exists, and says why.
     #[test]
     fn a_queued_run_is_durable_and_names_its_reason() {
@@ -1198,6 +1436,60 @@ mod tests {
         assert_eq!(load(tmp.path(), "run-live").unwrap().state, INTERRUPTED);
     }
 
+    /// A receipt from a PREVIOUS life of this pid is not a live run.
+    ///
+    /// A pid is not an identity, and a container entrypoint is PID 1 every time
+    /// it starts: Dockerfile.web has no init shim, so a restarted container
+    /// finds its OWN pid in the receipt the killed process left, and
+    /// `process_alive` answers - correctly - that pid 1 is alive. The run then
+    /// stays `running` for ever rather than for "a bounded delay", because the
+    /// process it is waiting on is this one. `prune` and `retention` both skip
+    /// `running`, so MAX_RECEIPTS never applied to them and the directory grew
+    /// without bound, on the one surface with no console to fix it from.
+    #[test]
+    fn a_receipt_naming_this_pid_that_this_process_never_began_is_reclaimed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(dir(ws)).unwrap();
+
+        // Exactly what the previous life left behind: `running`, owned by a pid
+        // that is alive because it is now OURS.
+        std::fs::write(
+            dir(ws).join("run-previous-life.json"),
+            serde_json::json!({
+                "runId": "run-previous-life",
+                "state": RUNNING,
+                "status": RUNNING,
+                "pid": std::process::id(),
+                "at": "2026-09-20T10:00:00Z",
+                "pipelineName": "orders",
+                "pipelinePath": "/pipelines/orders.json",
+                "pipelineHash": "h",
+                "engineVersion": "0.0.1",
+                "nodes": {},
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // And a run this process really is doing, with the same pid. Without
+        // this half, declaring every self-pid receipt dead would pass.
+        begin(ws, "run-mine", "manual", "orders", "/pipelines/orders.json", "h", None);
+        write(ws, &load(ws, "run-mine").unwrap()).unwrap();
+
+        let changed = reconcile(ws, &crate::runlock::process_alive);
+        assert_eq!(
+            changed,
+            vec!["run-previous-life".to_string()],
+            "a receipt this process never began, naming this process's pid, is stale"
+        );
+        assert_eq!(load(ws, "run-previous-life").unwrap().state, INTERRUPTED);
+        assert_eq!(
+            load(ws, "run-mine").unwrap().state,
+            RUNNING,
+            "this process's own run was declared dead"
+        );
+    }
     /// A receipt written before states existed finished one way or another.
     /// Reading it as `running` would let reconcile rewrite history it knows
     /// nothing about.

@@ -6,6 +6,10 @@
 
 <p><b>Duckle</b> is an open-source ETL platform for teams who want their pipelines running on their own infrastructure. Author on a canvas, in Python or in SQL, then ship the same file to your own server or cloud account: <code>duckle-runner serve</code> runs it headless on a schedule, in Docker or on a box you own, with a web console, roles and an audit trail. Every pipeline is one file in git, so it outlives whoever wrote it. It compiles to SQL on DuckDB and uses every core you give the box, so a bigger instance is a faster pipeline: <b>96 million rows out of Postgres to Parquet in 39.9s</b>. <b>No vendor cloud. No per-row billing. No lock-in.</b></p>
 
+<p><b>Duckle in 49 seconds.</b> The real app on real data, sound on.</p>
+
+https://github.com/user-attachments/assets/8bfac3fa-3f91-4b43-b5d8-a526716c8ef1
+
 <a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 190 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
 
 <p><sub><i>Duckle is an independent open-source project by SlothFlowLabs. It builds on the DuckDB engine but is not part of, affiliated with, or endorsed by DuckDB Labs or MotherDuck.</i></sub></p>
@@ -46,6 +50,7 @@
 
 - [Where Duckle runs](#where-duckle-runs)
 - [What is Duckle?](#what-is-duckle)
+- [What's new in v0.7.4](#whats-new-in-v074)
 - [What's new in v0.7.3](#whats-new-in-v073)
 - [What's new in v0.7.2](#whats-new-in-v072)
 - [What's new in v0.7.1](#whats-new-in-v071)
@@ -207,13 +212,13 @@ That's a real, native ETL pipeline built and run in under a minute. CSV is just 
 
 ## Download / Install
 
-Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.7.3):
+Pick the binary for your OS from the [latest release](https://github.com/slothflowlabs/duckle/releases/tag/v0.7.4):
 
 | OS | Asset | How to run |
 |---|---|---|
 | **Windows** | `Duckle-windows-x64.exe` | Double-click. Unsigned binary - Windows SmartScreen will warn the first time; click "More info" -> "Run anyway". |
 | **macOS** (Apple Silicon) | `Duckle-macos-arm64` | `chmod +x Duckle-macos-arm64 && ./Duckle-macos-arm64`. Right-click -> Open the first time to bypass Gatekeeper. |
-| **Linux** (x86_64) | `Duckle-linux-x64` | `chmod +x Duckle-linux-x64 && ./Duckle-linux-x64`. Requires WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian / Ubuntu). |
+| **Linux** (x86_64) | `Duckle-linux-x64` | `chmod +x Duckle-linux-x64 && ./Duckle-linux-x64`. Requires WebKitGTK 4.1 (`libwebkit2gtk-4.1-0` on Debian / Ubuntu) and a desktop session, X11 or Wayland with or without XWayland. On a server with no display, `./Duckle-linux-x64 serve` runs the scheduler and web console without a window. |
 
 The single-file binary above is all you need for **Build Pipeline** too: the headless runner is embedded into the app at build time, and exporting a pipeline produces ONE self-contained executable (the engine, the DuckDB CLI, any needed extensions, and the resolved pipeline are all inside that one file). Copy that single file to your server and run or schedule it - no separate runner download required.
 
@@ -329,6 +334,16 @@ A worked example using the bundled `samples/orders.csv` data.
 - Add a **Group By** before the sink to aggregate. Re-run. Sub-second on small data.
 - Cancel mid-run with the **Stop** button - the DuckDB process is killed cleanly.
 - Save your work: **Cmd/Ctrl-S** writes a JSON pipeline file to your workspace folder.
+
+### Or start from a query you already have
+
+**New pipeline -> From SQL**, then paste a `SELECT`. Each CTE becomes a SQL step
+named after it, the final `SELECT` becomes the last one, and each table the
+query reads becomes a source node to point at your data. The steps still read
+each other by name, so the pipeline computes exactly what the query did (a test
+runs both and compares the rows). Files named in the query (`FROM
+'orders.csv'`) stay in the SQL. A `WITH RECURSIVE` query is kept as one step,
+and the node says why.
 
 ---
 
@@ -604,6 +619,38 @@ Types: `string`, `integer`, `number`, `boolean`, `date`, `datetime`, `secret`.
 Constraints: `required`, `default`, `enum`, `minimum`, `maximum`, `pattern`,
 `description`.
 
+From the command line, one `--param` per value:
+
+```bash
+duckle-runner nightly.json --param jurisdiction=BE --param effective_date=2026-01-31
+```
+
+They go through the same check as every other surface, so `--param
+jurisdiction=FR` stops before anything runs (`jurisdiction is "FR", which is not
+one of the accepted values`). A `--param` without `=`, or the same name twice, is
+a usage error rather than a guess at which was meant, and the run record gives
+their source as `--param`.
+
+In the editor, desktop or web, **Run** opens a form with a control for each
+declared parameter: a list for an `enum`, true / false for a `boolean`, a date
+or date-time picker, a number field that knows its `minimum` and `maximum`, and a
+masked field for a `secret`, each with its `description`. A blank field sends
+nothing, so the declared `default` applies and a `required` one is refused
+(`run_date is required`). The values go to the engine rather than being
+substituted in the browser, so a run started from the editor is held to the
+contract like any other, and the pipeline's `maxRunSeconds` and `resourcePool`
+apply to it too. A value a context gives a declared parameter is filled in for
+you to keep or change.
+
+A schedule can bind values too: the Schedules dialog shows the same controls
+under **Parameters**, and every run the schedule starts is given them, checked
+against the contract like any other value, on the desktop scheduler and under
+`duckle-runner serve` alike. A blank field uses the pipeline's default. Through
+the console's API a schedule takes them as `"params": { "region": "us" }`, and a
+save that does not mention `params` keeps the ones the schedule has. A schedule
+that runs a plan binds none itself: each pipeline in a plan has its own contract,
+so its values live on the plan's steps (see [Plans](#plans-several-pipelines-in-an-order-you-chose)).
+
 **Where a value came from is kept.** When two surfaces bind the same parameter -
 a schedule and the run that starts, say - the later one wins, which is a
 documented rule and not a clever one. What is not thrown away is that something
@@ -789,24 +836,34 @@ curl http://console:8080/readyz      # no credential; so does /healthz
 ```text
 duckle_run_last_status{pipeline="nightly"} 0
 duckle_run_last_duration_seconds{pipeline="nightly"} 12.4
+duckle_node_last_duration_seconds{pipeline="nightly",node="extract",component="src.rest"} 9.1
+duckle_node_last_rows{pipeline="nightly",node="load",component="snk.parquet"} 4200
 duckle_runs_window{pipeline="nightly",status="error"} 3
 duckle_run_permits_total 4
 duckle_run_permits_free 0
 duckle_runs_in_flight 4
+duckle_scheduler_seconds_since_tick 9
 ```
 
 The run-history half is rendered by the engine, the same function that writes
 `logs/duckle_metrics.prom` for a node_exporter textfile collector - so the
 endpoint and the file cannot come to disagree about what a series means. What
 the endpoint adds is what a file cannot carry: what this process is doing right
-now. `duckle_run_permits_free` at zero for any length of time is runs queueing.
+now. `duckle_run_permits_free` at zero for any length of time is runs queueing,
+and `duckle_scheduler_seconds_since_tick` growing past a few tick intervals is a
+scheduler that has stopped: no schedule is firing.
 
 **Liveness and readiness are separate**, because they fail differently and an
 orchestrator acts differently on each: a process that is alive but not ready
 should stop receiving traffic, not be restarted. `/readyz` writes and deletes a
 probe file under `.duckle/`, so it catches a read-only mount or a full disk - the
 states that stop runs being recorded while every read still succeeds. It checks
-nothing external: a source being down is not this server being unready.
+nothing external: a source being down is not this server being unready. On
+`serve` it also checks the scheduler: a scheduler thread that has died or hung
+leaves the console answering every request while no schedule fires, which from
+outside looks exactly like a quiet night. Five missed ticks, and never under a
+minute, answer 503 naming it. The web editor schedules nothing and is not held
+to it.
 
 **Both probes are unauthenticated; `/metrics` is not.** A probe says the process
 is up and tells an anonymous caller nothing else. Pipeline names are the shape of
@@ -1232,6 +1289,24 @@ half busy.
 **A separate `duckle-runner` invocation is a separate process** and an in-process
 semaphore cannot bound it. That path records the pool it belongs to and no queue
 time, because it never queued.
+
+### A time limit per run (`maxRunSeconds`)
+
+```json
+{ "name": "nightly-load", "maxRunSeconds": 3600, "nodes": [ ... ] }
+```
+
+A run still going after that many seconds is stopped and reported as a
+**failure** - `the run exceeded its time limit of 3600s` - so failure alerts
+fire and its schedule is free for the next occurrence, instead of a hung query
+holding it for as long as it hangs. Stopping kills the running DuckDB process,
+so it works mid-query, and a Wait node now sleeps in short slices, so a limit
+or a person pressing Cancel stops a wait too rather than queueing behind it.
+
+The limit is on the run that was started, on every surface - desktop, CLI,
+scheduler, API, MCP - because the engine enforces it where they all meet. A
+child pipeline it calls runs under the caller's limit and does not arm its
+own.
 
 ### Which tested version is running? (`release`)
 
@@ -1880,15 +1955,20 @@ whether the deletion runs, so the two cannot disagree about what would go.
 
 ### Reports CI already understands (`--format`)
 
-`validate` emits the shapes CI systems and agents actually consume, so nothing
-has to scrape console text:
+`validate`, `test` and `review` emit the shapes CI systems and agents actually
+consume, so nothing has to scrape console text:
 
 ```bash
 duckle-runner validate --format json    # versioned envelope
 duckle-runner validate --format junit   # every CI renders this as a test report
 duckle-runner validate --format sarif   # GitHub Code Scanning, and most editors
 duckle-runner test     --format junit   # the same three, from the same module
+duckle-runner review --before old.json --after new.json --format junit
 ```
+
+For `review` the gate is the after side: a `--before` version that does not
+compile or run is reported as an informational finding, not a failure, because
+a broken old version is the ordinary shape of a fix.
 
 `duckle test` names each case by its assertion and the node it asserts on, so a
 JUnit report is navigable rather than a list of file names:
@@ -1917,9 +1997,11 @@ told from one where only two things ran.
 on `2`, because `2` means the gate never actually ran, and treating that as a
 pass is how a broken gate goes unnoticed for a month.
 
-`--json` is unchanged and is the same document as `--format json`: the versioned
-envelope carries the old `results` array alongside the new `findings`, so an
-existing consumer keeps working and a new one gets `schemaVersion`.
+For `validate` and `test`, `--json` is unchanged and is the same document as
+`--format json`: the versioned envelope carries the old `results` array
+alongside the new `findings`, so an existing consumer keeps working and a new
+one gets `schemaVersion`. `review` is the exception: its `--json` is the older
+review document, while `--format json` emits the shared findings envelope.
 
 ### Retry a failed run (`retry`)
 
@@ -1960,6 +2042,43 @@ the plan says so on every line. And only runs started by `duckle-runner
 --pipeline` write a receipt today, so a run from the API, the scheduler or the
 desktop app answers `retry:no-receipt` rather than guessing.
 
+### PostgreSQL change data capture (`src.postgres.cdc`)
+
+Every insert, update and delete from one table, in commit order, read from a
+replication slot through PostgreSQL's built-in `pgoutput` plugin. There is no
+JVM, no Kafka and nothing to install on the server: `pgoutput` ships with
+PostgreSQL 10 and later and with every managed service.
+
+Each change is one row: `_op` (`insert` / `update` / `delete`), `_lsn` (the
+transaction's commit LSN), `_xid`, `_commit_ts`, then the row itself, typed as
+the table declares it. A delete carries the replica identity (the key, or the
+whole old row under `REPLICA IDENTITY FULL`). Wire it into a Merge / Upsert sink
+with delete propagation to keep a copy in step.
+
+**Nothing is lost when a run fails.** Changes are peeked, never consumed by the
+read. The last commit delivered is saved only when the whole run succeeds, and
+the slot is advanced to it at the start of the next run, so a run that fails
+after reading hands the same changes to the next one.
+
+**What the server needs.** `wal_level = logical`, and a role allowed to create
+publications and replication slots (or create them yourself and turn off
+*Create the publication and slot if missing*). A new slot captures changes from
+the moment it is made, so load the existing rows once with the PostgreSQL
+source first.
+
+**A slot keeps WAL until it is consumed.** The node reports how much on every
+run and warns past *maxLagMb*. A pipeline that stops running leaves its slot
+holding WAL until the server's disk fills, so drop a slot nothing reads any
+more with `SELECT pg_drop_replication_slot('name')`, and consider
+`max_slot_wal_keep_size` on the server as a hard cap.
+
+**Large values on updates.** PostgreSQL does not resend a large value an
+UPDATE did not touch. Rather than emit it as NULL, which would let a
+downstream upsert erase it, the node takes it from the old row image, and
+without one it stops with an error asking for `REPLICA IDENTITY FULL` on the
+table. Changes recorded before that setting still lack the value, so reload
+the table and recreate the slot in that case.
+
 ### Backfill without the desktop app (`backfill`)
 
 Production deployments are headless, so replaying from an earlier point should
@@ -1972,11 +2091,13 @@ duckle-runner backfill clear --pipeline ./pipelines/daily.json --node inc
 duckle-runner backfill list  --pipeline ./pipelines/daily.json --json      # for CI and agents
 ```
 
-**Five node kinds keep state in that folder, and only two resume from a value a
+**Six node kinds keep state in that folder, and only two resume from a value a
 person can write down.** `xf.incremental` (a watermark) and
 `src.ducklake.changes` (a snapshot id) can be set; a `src.kafka` resume offset,
-a `src.spool` byte position and an `xf.tumble` buffer pointer are listed and can
-be cleared, but `set` on them is **refused**. Writing `{value,type}` over a
+a `src.spool` byte position, an `xf.tumble` buffer pointer and a
+`src.postgres.cdc` slot position are listed and can be cleared, but `set` on
+them is **refused**. A replication slot cannot be moved back, and moving one
+forward by hand would skip changes nobody received. Writing `{value,type}` over a
 tumbling window's state would drop the pointer to the rows it is holding and
 delete them on the next run, with nothing to report it.
 
@@ -2072,8 +2193,19 @@ objects:
   follow continuation tokens, so a prefix larger than one page is enumerated
   fully rather than silently truncated at the first thousand.
 
-Rows carry `uri`, `name`, `size`, `modified_at`, `etag`, `fingerprint` and
-`status` (`new` / `changed`).
+Rows carry `uri`, `name`, `size_bytes`, `modified_at`, `etag`, `fingerprint`
+and `status` (`new` / `changed`). `size` carries the same value as
+`size_bytes`, under the name earlier versions used.
+
+**The first run is a choice.** A prefix can already hold years of drops, and
+`firstRun` says what happens to them: `emit_existing` (the default) emits them
+all, which is a backfill; `baseline_existing` lists all of them - not just
+`maxEntries` - records them as already there, and emits nothing. Later runs
+emit what is added, and anything that was already there once it is replaced.
+The baseline is recorded as **observed, not processed**, kept apart from what
+the pipeline has actually processed, so state never claims work that was not
+done. It needs `trackState` on, and a misspelt mode is refused rather than
+read as either one.
 
 **A quiet poll is not a plain success.** When nothing changed the node reports
 `unchanged`, so a working poll and a broken one are told apart - a healthy
@@ -2091,6 +2223,15 @@ reports nothing.
 What was processed advances only when the whole run succeeds, and only for
 rows that were actually emitted - so a failure downstream re-offers the same
 files, and a run capped by `maxEntries` does not mark the remainder as done.
+`maxEntries` caps what a run emits, not how far it looks: an S3 listing walks
+past what is already processed to reach the rest of the prefix. `include`
+and `exclude` take comma-separated globs matched against the path below the
+directory or prefix (`*.zip`, `archive/*`), with exclude applied last. `modifiedSince` (inclusive) and `modifiedBefore`
+(exclusive) bound it by modification time, in UTC - a bare date is midnight
+UTC - and keep a file whose time the server does not report. `orderBy`
+decides which files a capped run takes first: `name` (the default) is oldest
+first only when the names carry the date, and `modified` goes by each file's
+modification time, the name breaking ties.
 
 ### Maintain a DuckLake through the same pipelines (`src.ducklake.maintain`)
 
@@ -2300,8 +2441,8 @@ without order, which is why it exists.
 | `Send it to the reject output` | carry on, and keep the failure as a row |
 
 ```
-parent_key | url                                  | error         | failed_at
-2          | http://.../companies/2/officers      | REST HTTP 500 | 2026-08-28T...
+parent_key | url                             | error         | failed_at     | __node_id | __error_code   | __rejected_at
+2          | http://.../companies/2/officers | REST HTTP 500 | 2026-08-28... | officers  | request_failed | 2026-08-28 ...
 ```
 
 One failure in a million requests should not discard the 999,999 that worked,
@@ -2726,7 +2867,7 @@ also holds where it is actually exercised:
 | rule | also enforced at |
 |---|---|
 | `network.allowedDomains` | every connection, every redirect hop, and DuckDB itself |
-| `state.allowMutation` | every component that advances saved state - incremental watermarks, DuckLake CDC snapshots, Kafka offsets, the `src.changed` seen-map, spool and REST positions, tumble windows and stored baselines - so `duckle-runner backfill`, the API, MCP and the panel all meet the same refusal |
+| `state.allowMutation` | every component that advances saved state - incremental watermarks, DuckLake CDC snapshots, PostgreSQL CDC slot positions, Kafka offsets, the `src.changed` seen-map, spool and REST positions, tumble windows and stored baselines - so `duckle-runner backfill`, the API, MCP and the panel all meet the same refusal |
 | `extensions.allowUnsigned` | the DuckDB launch, which can withhold `-unsigned` but never grant it |
 
 DuckDB is the reason that last one names two enforcers. Duckle's own HTTP
@@ -2962,7 +3103,9 @@ downstream.
 Closing is decided by a **watermark** - the greatest event time seen so far,
 across runs - not by the wall clock. Replaying last year's data therefore
 produces last year's windows, instead of finding every one of them older than
-"now" and closing the lot at once.
+"now" and closing the lot at once. The watermark is compared as an instant, so
+one saved by a run in another time zone is read as the moment it was rather
+than as its wall-clock text.
 
 `allowedLateness` holds a window open past its end for out-of-order arrivals.
 Anything that arrives after its window was already delivered is **dropped and
@@ -3009,11 +3152,12 @@ orders.json      -->       export.json
 customers.json
 ```
 
-Two things worth knowing:
+Worth knowing:
 
 - **Every pipeline keeps its own run history.** A plan does not collapse into one opaque run, because at three in the morning the question is which step broke, not that the nightly load did.
 - **A plan can be scheduled like anything else**, from its own card. The same plan runs whether the schedule is fired by `serve` on your server or by the desktop app on a shared workspace - both read `plans.json` and `schedules.json`, and both decide it the same way.
 - **It is one file, so it travels.** A plan written in the desktop app opens in the console and the other way round, and it goes to your server with everything else in the workspace.
+- **Each pipeline in a step can be given its own parameter values.** The desktop editor shows the controls a pipeline declares under it in the step, and every run of the plan, scheduled or started with Run now, hands that pipeline those values, checked by its own contract - so two pipelines with different parameters can share a step, and a misspelt name is refused rather than dropped. A value the contract refuses is refused when the plan is saved, not at three in the morning. In `plans.json` they sit on the step as `"params": { "pipelines/orders.json": { "region": "us" } }`. The console's form does not show them yet, and keeps them when it saves.
 
 Plans live in `<workspace>/plans.json`, so they are a file in git alongside the pipelines they order.
 
@@ -3275,7 +3419,8 @@ available over MCP as `workspace_impact`.
   "rules": [
     { "match": "nightly-*", "channel": "webhook", "url": "${ENV:SLACK_WEBHOOK}", "cooldownMinutes": 15 },
     { "match": "*", "channel": "email", "smtpHost": "smtp.example.com",
-      "from": "duckle@example.com", "to": ["oncall@example.com"] }
+      "from": "duckle@example.com", "to": ["oncall@example.com"] },
+    { "match": "prod-*", "channel": "pagerduty", "routingKey": "${ENV:PAGERDUTY_ROUTING_KEY}" }
   ]
 }
 ```
@@ -3287,6 +3432,8 @@ The webhook payload carries a `text` field as well as structured fields, so Slac
 - **It never breaks a run.** Delivery happens after the run is recorded, is time-bounded, and an unreachable channel is logged rather than raised.
 
 A schedule whose pipeline file has been renamed or deleted also raises an alert, instead of silently doing nothing.
+
+**PagerDuty** (Events API v2) holds incidents rather than messages, so a failure opens one and its `recovery` resolves the **same** incident, matched by a dedup key naming the pipeline: a recovered outage closes itself instead of waiting for someone to close it by hand. A stale asset opens its own incident at warning severity, resolved when the asset is written again. The routing key is a credential, so it takes `${ENV:...}` and never appears in the saved cooldown state or in a logged error. `endpoint` points elsewhere, for the EU service region (`https://events.eu.pagerduty.com/v2/enqueue`). A PagerDuty rule that asks for `success` is refused when the rules load, because a page for every success is never what anyone wants and quietly dropping it would be a rule that says one thing and does another.
 
 ---
 
@@ -3390,7 +3537,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 
 ### Sources
 
-**121 sources available today.**
+**124 sources available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
@@ -3399,9 +3546,11 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **File Geodatabase** | Esri File Geodatabase (`.gdb`) feature classes via `ST_Read` with a per-layer selector | Available (lazy-loaded) |
 | **Hugging Face** | Hugging Face Hub datasets over `hf://` (Parquet / CSV / JSON, globs, revisions); token for private or gated datasets | Available |
 | **Geospatial** | Read GeoJSON / Shapefile / GeoPackage / KML / GPX / Esri File Geodatabase; write those plus **GeoParquet**; CRS-aware measurement, reprojection, spatial joins and predicates | Available |
-| **Lakehouse table formats** | Apache Iceberg, Delta Lake, DuckLake (catalog in a local file or a `postgres:` / `mysql:` / `sqlite:` DSN, with the catalog schema and `META_*` parameters - including `META_SECRET` - settable on the node) | Available |
+| **Lakehouse table formats** | Apache Iceberg (a table directory, or a table in an **Iceberg REST catalog** - Polaris, Lakekeeper, Nessie, Gravitino - with OAuth2 client credentials or a bearer token, and S3 credentials for the data files when the catalog does not vend them), Delta Lake, DuckLake (catalog in a local file or a `postgres:` / `mysql:` / `sqlite:` DSN, with the catalog schema and `META_*` parameters - including `META_SECRET` - settable on the node) | Available |
 | **Embedded databases** | SQLite (read tables), DuckDB (read tables or run a query) | Available |
+| **Microsoft Access** | `.accdb` / `.mdb`: a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver (Office, or the free Access Database Engine) with each column's own type and a database password if set; Linux and macOS read a table through mdbtools, which reads a zero-length text as NULL | Available |
 | **Network relational DBs** | PostgreSQL, MySQL, MariaDB, CockroachDB | Available (live CI for PG + MySQL) |
+| **Change data capture** | PostgreSQL log-based CDC (`src.postgres.cdc`): inserts, updates and deletes from a replication slot through the built-in `pgoutput` plugin, no JVM or Kafka; the position is saved only on a successful run, and the slot's WAL retention is reported on every run | Available |
 | **Network relational DBs** | SQL Server (TDS), Oracle (Instant Client at runtime), ClickHouse (HTTP API), **IBM DB2** (IBM Data Server ODBC driver), **Turso / libSQL** (HTTP pipeline API - no driver install; `libsql://` URLs accepted) | Available |
 | **Network relational DBs** | generic JDBC | Planned |
 | **Object storage** | Amazon S3, Google Cloud Storage, Azure Blob, HTTP(S), MinIO, Cloudflare R2, Backblaze B2 | Available (live CI for MinIO) |
@@ -3409,6 +3558,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **Streaming** | Apache Kafka / Redpanda (pure-Rust `rskafka`), NATS JetStream, GCP Pub/Sub (REST + auto-ack), RabbitMQ (`lapin` AMQP), AWS Kinesis (HTTP + SigV4 - no AWS SDK), WebSocket (`ws://` / `wss://`, optional subscribe frame) | Available |
 | **Streaming** | Pulsar, Event Hubs, multi-shard Kinesis | Planned |
 | **APIs and SaaS (REST)** | Salesforce, HubSpot, Pipedrive, Zendesk, Intercom, Stripe, QuickBooks, Xero, Shopify, Notion, Airtable, Asana, Trello, ClickUp, Monday.com, GitHub, GitLab, Linear, Jira, Slack, Discord, Telegram, Twilio, Mailchimp, SendGrid, Segment - thin pre-configured wrappers over `src.rest` / `src.graphql`. `src.rest` takes a configurable API-key auth header name and offset pagination that stops on a body `total_count`. **Salesforce Bulk** (`src.salesforce.bulk`) - Bulk API 2.0 query source for migration-scale reads: SOQL as an async query job (query / queryAll), paged CSV result sets streamed to disk via `Sforce-Locator`, typed empty relations on 0 records | Available |
+| **SharePoint Server** | On premises (2016 / 2019 / Subscription Edition), signed in with Windows authentication (NTLM, as `DOMAIN\user` or `user@domain`): a list's items as rows, every page followed, with optional `$select` / `$filter` done by SharePoint; or a file in a document library read by its format (CSV, TSV, Parquet, JSON, Excel). Not supported: Kerberos-only farms and IIS Extended Protection (channel binding) set to Required | Available |
 | **APIs (protocols)** | OData v4 (follows `@odata.nextLink`), SOAP / generic XML APIs (XML response parsing with namespace local-name match) | Available |
 | **Health data (DHIS2)** | `src.dhis2` reads the DHIS2 Web API: aggregate `dataValueSets`, paged metadata lists, tracker exports, and `analytics/dataValueSet.json`. `snk.dhis2` imports back: chunked requests, `importStrategy` (CREATE_AND_UPDATE is DHIS2's upsert), `dryRun`, and real import-summary parsing, so conflicts and a non-zero `ignored` count fail the run instead of passing as a green HTTP 200. Auth via personal access token or HTTP Basic. Raw `/api/analytics` (columnar `headers[]` + `rows[][]`) is not supported | Available |
 | **NoSQL and search** | **Neo4j** (Cypher over the HTTP Query API - self-hosted or Aura, no Bolt driver; optional `$parameters`), MongoDB (official driver), Cassandra / ScyllaDB (CQL), Elasticsearch / OpenSearch (from+size + search_after), **Manticore Search** (HTTP JSON `/search`; `table` + limit/offset, and a window past the default 1000 best-ranked matches raises `max_matches` to suit), Redis (SCAN + GET), CouchDB (`_all_docs`), DynamoDB (HTTP + SigV4 - no AWS SDK; auto-unwraps typed attributes) | Available |
@@ -3442,7 +3592,7 @@ For JSON sources, a **Format** selector picks how the file is read (auto / array
 | **JSON / nested** | Parse, Stringify, Flatten, JSONPath Extract, Merge Objects, Array Aggregate, jq Filter (a jq program per row over a JSON column, run in-process by the pure-Rust jaq engine - no external jq, no subprocess) |
 | **Array** | Explode / Unnest, Collect List, Element At, Contains, Distinct, Length, Zip Arrays to Table (headings + row-arrays -> one column per heading) |
 | **Pivot / shape** | Pivot, Unpivot, Denormalize, Normalize, Transpose |
-| **Quality gate** | Every check offers On failure: **reject** (route the bad rows to the reject port, the default), **warn**, or **fail** (stop the run). `fail` raises where the rows are counted, so a gate asked to stop a load stops it |
+| **Quality gate** | Every check offers On failure: **reject** (route the bad rows to the reject port, the default), **warn**, or **fail** (stop the run). `fail` raises where the rows are counted, so a gate asked to stop a load stops it. A rejected row keeps its own columns and gains `__node_id`, `__error_code` and `__rejected_at`, so rejects can be grouped, routed or retried by code with ordinary components. The codes: `not_null`, `missing_value`, `out_of_range`, `pattern_mismatch`, `duplicate_key`, `orphan_key`, `outlier`, `parse_error` (a CSV/TSV row that does not fit its declared types) and `request_failed` (a REST-family parent request). A filter's or a join's reject is the data taking the other branch, not an error, and stays the bare row. Every check also says on its node how many rows it rejected, and when nothing is connected to its reject port it says those rows were dropped, as a warning - they used to vanish from a run that reported ok |
 | **CDC / SCD** | Incremental Load (watermark column; saves the high-water mark to workspace state and advances only on a fully successful run), Diff Detect, SCD Type 1, SCD Type 2 (valid_from / valid_to / is_current), Merge / Upsert (universal across embedded, network, warehouse and Mongo sinks, with optional delete propagation driven by a CDC change-type column), DuckLake CDC change-feed reader, Row Hash (md5 / sha1 / sha256 fingerprint), Audit Stamp (`_loaded_at` / `_loaded_date` / `_source` / `_batch_id`) |
 | **AI / Search** | **Vector Similarity Search** (cosine / L2 / inner product over FLOAT[N] via `vss`), **Full-Text Search** (BM25 via `fts`), **Embeddings** (OpenAI-compatible `/v1/embeddings`), **LLM Transform** (per-row chat completion with `{column}` templates), **Classify** (LLM-backed, normalizes to UNKNOWN), **Text Chunker** (RAG-ready, pure local), **PII Redact** (regex - emails / phones / SSNs / cards), **Semantic Dedupe** (cosine over precomputed embeddings) |
 | **Geospatial** | Spatial Distance, Length, Perimeter, Area (each auto-picks the planar or spheroidal function from the geometry CRS, and rejects geometry with no CRS), Spatial Buffer (ST_Buffer), Spatial Intersects (ST_Intersects), Flip Coordinates (ST_FlipCoordinates - fix lat,lon vs lon,lat order), Define Projection (ST_SetCRS - stamp a CRS without moving coordinates), Reproject Geometry (ST_Transform between CRS, target CRS preserved on the output), Create Geometry (from X/Y, WKT, or WKB), Clip Geometry and Erase Geometry (two-layer overlays; the second layer is dissolved with ST_Union_Agg so a feature spanning several polygons is not duplicated, and both refuse to run when the two layers carry different CRS) |
@@ -3504,13 +3654,15 @@ Validators split their input: passing rows continue on the main port, failures r
 
 ### Sinks
 
-**73 sinks available today.**
+**76 sinks available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
-| **Files** | CSV, TSV, Parquet (ZSTD), JSON, JSONL / NDJSON, Excel (.xlsx), YAML, TOML, XML (configurable wrappers), Avro (schema inferred from first row). Parquet + CSV support Hive-partitioned writes | Available |
+| **Files** | CSV, TSV, Parquet (ZSTD), JSON, JSONL / NDJSON, Excel (.xlsx), YAML, TOML, XML (configurable wrappers), Avro (schema inferred from first row). Parquet + CSV support Hive-partitioned writes. TSV and JSON write gzip or zstd when **Compression** says so, whatever the file is called; with None, a name ending `.gz` or `.zst` still compresses it. CSV, TSV, JSON Lines and JSON (not the array format) can **append**: the run's rows are written to a staging file, then added to the end of the destination, so a failed run leaves it as it was. The header is written only when the append makes the file, and rows whose header is not the file's are refused rather than added under the wrong columns. A compressed, partitioned or remote path cannot be appended to, and neither can Parquet, whose files cannot be added to in place: write one file per run and read the directory with a glob | Available |
 | **Geospatial files** | GeoJSON, GeoPackage, Shapefile, KML, GPX via GDAL | Available (lazy-loaded) |
-| **Lakehouse** | Apache Iceberg (full table layout), DuckLake - modes: **overwrite**, **append**, **truncate**, **upsert** (set-based delete-by-key + re-insert), **merge** (partial-column `MERGE INTO` that preserves columns the source omits) with optional CDC delete propagation, plus **publish groups** - several DuckLake sinks sharing a group name commit as one snapshot, so readers see all of their tables update together or none of them, and a run that cannot honour the group is refused rather than publishing part of it | Available |
+| **Lakehouse** | Apache Iceberg (full table layout, or into an **Iceberg REST catalog**: the namespace and table are created when missing, **append** matches columns by name and **overwrite** drops and recreates, as two catalog commits because the catalog cannot replace a table in one; DuckDB 1.5.5's iceberg extension leaves an empty `data` folder in the working directory after such a write, which is harmless and upstream), DuckLake - modes: **overwrite**, **append**, **truncate**, **upsert** (set-based delete-by-key + re-insert), **merge** (partial-column `MERGE INTO` that preserves columns the source omits) with optional CDC delete propagation, plus **publish groups** - several DuckLake sinks sharing a group name commit as one snapshot, so readers see all of their tables update together or none of them, and a run that cannot honour the group is refused rather than publishing part of it | Available |
+| **Delta Lake** | Append to a local Delta table (`snk.delta`), creating it from the input's columns and types on the first run (naive timestamps under the `timestampNtz` feature). Columns are matched by name, and a column missing on either side is refused by name rather than dropped or written as NULL. Append only: the DuckDB extension cannot replace a table. Object-storage paths are refused until writing there has been tested | Available (local) |
+| **Microsoft Access** | `.accdb` / `.mdb`, Windows only (Microsoft Access ODBC driver): the file and the table are created when missing; **append** or **overwrite** in one transaction, so a failed load leaves the table as it was; an upstream that produced no rows leaves the table alone; values are bound as typed parameters, so accents, quotes and the machine's decimal separator cannot change what lands | Available |
 | **Embedded databases** | SQLite, DuckDB - modes: **overwrite**, **append**, **upsert** (set-based delete-by-key + re-insert, no PK required), **merge** (partial-column `MERGE INTO` that preserves columns the source omits) with optional CDC delete propagation | Available |
 | **Network relational DBs** | PostgreSQL, MySQL, MariaDB, CockroachDB - modes: **overwrite**, **append**, **truncate**, **upsert** (ON CONFLICT / ON DUPLICATE KEY) with optional CDC delete propagation | Available (live CI for PG + MySQL) |
 | **Network relational DBs** | SQL Server / Azure Synapse (TDS, multi-row VALUES batched; auto-creates the table if absent; **upsert** via MERGE), Oracle (Instant Client; INSERT ALL, batched per statement; auto-creates the table if absent; **upsert** via MERGE), ClickHouse (HTTP JSONEachRow; upsert by pointing at a ReplacingMergeTree target table), **IBM DB2** (ODBC; auto-creates the table, booleans as SMALLINT 1/0 so DB2 for z/OS also accepts them), **Turso / libSQL** (HTTP pipeline API; auto-creates the table, values sent as bound parameters) - every MERGE sink supports **CDC delete propagation** (a delete-flag column removes matched rows) | Available (SQL Server + Oracle + MySQL upsert and delete propagation verified live in Docker) |
@@ -3519,6 +3671,7 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Hugging Face** | Push to a Hugging Face Hub dataset repo (`snk.huggingface`): the upstream is materialized to Parquet and committed over the Hub API (create-repo → preupload → git-LFS → commit); write token required, repo auto-created (public or private) | Available |
 | **Cloud warehouses** | MotherDuck, Snowflake (PAT or JWT RS256; **upsert** + delete propagation via MERGE), BigQuery, Redshift, Databricks SQL (**upsert** + delete propagation via MERGE), Azure Synapse, **Teradata** (ODBC), **DuckDB Quack** (concurrent writers to remote DuckDB via the May 2026 protocol) | Available (Snowflake MERGE verified live against the SQL-API emulator) |
 | **HTTP APIs** | REST (POST/PUT/PATCH batched JSON-array; configurable API-key auth header name), Webhook (one POST per row), GraphQL mutations | Available |
+| **SharePoint Server** | On premises, NTLM sign-in: each row added as a list item (numbers as numbers, date/times as ISO 8601), or the output uploaded as a document library file (CSV, TSV, Parquet, JSON, Excel), replacing an existing one or refusing to. An upstream with no rows changes nothing | Available |
 | **SaaS / CRM** | Salesforce (`snk.salesforce`) - sObject Collections API: **insert / update / upsert (by external Id) / delete**, ≤200 records/request, Bearer token or OAuth 2.0 client-credentials (fresh token minted per run, same auth as `src.salesforce`). **Salesforce Bulk** (`snk.salesforce.bulk`) - Bulk API 2.0 for migration-scale loads: **insert / update / upsert / delete / hardDelete**, DuckDB streams to CSV and each ≤90 MB part runs as an async job | Available |
 | **Email (SMTP)** | Per-row SMTP send via pure-Rust `lettre` + rustls. Plain text v1; HTML + attachments follow. | Available |
 | **NoSQL** | **Neo4j** (rows as nodes over the HTTP Query API; one `UNWIND $rows` round trip per batch, `mergeKeys` switches CREATE to MERGE so re-runs update rather than duplicate), MongoDB (insert_many batched; **upsert** via replace_one on a key, plus delete propagation via delete_one), Cassandra / ScyllaDB (CQL), Elasticsearch / OpenSearch (`_bulk` NDJSON), **Manticore Search** (HTTP JSON `/bulk`; the doc rides inside the action line, insert or replace, and a batch the server rejects at HTTP 200 fails the run), Redis (pipelined SET) | Available |
@@ -3545,7 +3698,7 @@ Database sinks support an optional **dead-letter (validate-before-insert)** step
 | **Checkpoint** | Pass rows through and also write a parquet snapshot to a path |
 | **Dead Letter Queue** | Terminal sink for rejected rows (JSON / CSV / Parquet) |
 | **Run Pipeline** | Inline-execute another pipeline file (`ctl.runpipeline`) |
-| **Run Job** | Call a child pipeline (picked from the workspace) passing parent context variables; chain several to build a Master Job (`ctl.runjob`). The child runs for its side effects: it gets its own temporary database and its output is not composed back into the parent, so a child cannot yet return rows to its caller |
+| **Run Job** | Call a child pipeline (picked from the workspace) passing parent context variables; chain several to build a Master Job (`ctl.runjob`). The child runs in its own temporary database. It can take the caller's input rows (**Pass this node's input rows**, read in the child as `${DUCKLE_INPUT}`, for example by a Parquet source) and hand rows back (**Take the rows the child returns**, written by the child to `${DUCKLE_RETURN}`). With both on, a child is a reusable block that several pipelines call |
 | **Parallelize** | Run the downstream branches wired to its outputs concurrently; branches are unlimited (`ctl.parallelize`) |
 | **Iterate** | Run a sub-pipeline N times with `${ITER_INDEX}` substitution |
 | **For Each** | Run a sub-pipeline once per input row with `${ITER_ITEM_<FIELD>}` substitution; an optional item key column names each run so per-row watermarks stay separate |
@@ -3554,7 +3707,7 @@ Database sinks support an optional **dead-letter (validate-before-insert)** step
 | **Retry** | Per-stage retry policy (configure on Advanced tab) |
 | **Log Message** | Emit an info log line (`{rows}` = upstream count), pass rows through (`ctl.log`) |
 | **Warn** | Emit a warning log line, pass rows through (`ctl.warn`) |
-| **Die / Fail** | Stop the run with a message: always, only when the input has rows, or only when empty (`ctl.die`) |
+| **Die / Fail** | Stop the run with a message: always, only when the input has rows, or only when empty (`ctl.die`). The message takes `{rows}` for the input's row count and `{column}` for that column of the first input row, so it can say why the run stopped (`identity check failed: {reason}`); a name that is not a column stays as typed |
 | **Schedule** | Cron / interval / file-watch triggers via the orchestration crate |
 
 A run variable is read as a value wherever the SQL of a later step names it: on its
@@ -3685,7 +3838,7 @@ Every node has an **Advanced** tab with fields the engine honours at run time:
 | **Retry attempts** | Total tries on failure (1 = no retry). Sleeps `backoff * attempt` ms between attempts. |
 | **Retry backoff (ms)** | Inter-attempt sleep, linearly scaled by attempt index. |
 | **Memory limit (MB)** | `PRAGMA memory_limit` applied to this stage only. |
-| **Log row count** | Print the post-stage rowcount to the run output. |
+| **Log row count** | When the run finishes, add a line with this node's final row count to the run's messages and its NDJSON log, on either execution path. |
 
 ### Orchestration and workspace
 
@@ -3704,13 +3857,14 @@ Every node has an **Advanced** tab with fields the engine honours at run time:
 | **Runs that outlive the request** | A backfill can run for hours, and a synchronous HTTP call is the wrong place to keep it: clients, proxies and load balancers all time out while the pipeline is still legitimately working. `POST /api/run/async` answers `202` with a `runId` straight away; `GET /api/run/status?runId=` reports `queued`, `running` or `finished` with the pipeline's own status; `DELETE /api/run?runId=` cancels, which is polled at every stage boundary and kills the active DuckDB child so even a long query stops promptly. Every run record now carries the id it was accepted under, so a console that restarted mid-run can still answer for it. `POST /api/run` is unchanged for anything that wants to wait |
 | **HTML as a source** | A great deal of public data is published only as HTML: registries, filing pages, results tables. `src.html` reads a local file or an http(s) URL and turns it into rows by CSS selector. Name a column per sub-selector (`a@href` reads an attribute), or leave the columns empty and let a table be a table: the `th` cells name the columns and each `tr` is a row. Parsed with a tolerant HTML parser, so the unclosed tags and unquoted attributes real pages carry - and that the strict XML reader rejects outright - are fine. A selector that does not parse fails the run naming it, rather than quietly producing a table of nulls |
 | **HTTP transport, set once** | Proxies, timeouts and a User-Agent are transport, not credentials, and every HTTP-backed component wants the same ones. A saved **HTTP transport** connection carries a proxy, a read timeout, a connect timeout and a User-Agent, and `src.rest` and `src.html` reference it alongside their auth connection, so a corporate proxy is one edit rather than one per node. What a node sets itself still wins. Every request in the engine also now has deadlines: a connect timeout of 30s and a read timeout of 300s, both overridable with `DUCKLE_HTTP_CONNECT_TIMEOUT` and `DUCKLE_HTTP_READ_TIMEOUT`. They are per-read, not per-transfer, so streaming a large file is unaffected while a dead socket can no longer park a stage indefinitely - which matters more now that AI stages keep several requests in flight |
+| **Server-sent events** | An endpoint that answers with `text/event-stream` - a JSON-RPC or MCP-style API, or a feed of records - is read by `src.rest` as events: each event's `data:` lines are one JSON document, and **Response path** is walked in each, so a feed gives a row per event and a JSON-RPC call gives the event that carries its `result`. A response the server labels `text/event-stream` is read this way without being asked; **Response format: Server-sent events** reads a server that labels it otherwise. An event whose data is not JSON (such as `[DONE]`) fails the run and names the event rather than being dropped. The response has to end: a stream that stays open for ever is a streaming source, not a request |
 | **PDF pages as rows** | A great deal of data engineering starts from documents, not tables: filings, annual accounts, invoices, regulatory publications. `src.pdf` gives one row per page - `document_id`, `page_number`, `text`, `has_text_layer`, `width`, `height` and the document's own metadata - from a file or a whole folder, using the text layer the PDF already carries. `document_id` is the same value `src.artifact` puts in `uri`, so a file listing and its pages join without translation. **Wire an artifact relation into it** and the documents are whatever those rows name rather than a configured path, so `src.changed -> Copy Artifact -> PDF pages` is one pipeline: each page carries `document_uri` and the `source_sha256` carried from the row, which is what makes the raw bytes and the parsed rows the same provenance chain. A remote document is fetched to a temporary file because a PDF reader seeks - its cross-reference table is at the end - one document at a time, removed as soon as it has been parsed, so the bound is one document rather than the corpus. With nothing wired in it reads its path exactly as before. There is no OCR, deliberately: rasterising a scanned page needs a native rendering engine and per-language trained data, which would end the self-contained cross-OS build. A scanned page arrives with `has_text_layer` false instead, which is what lets you filter those pages out and route them to whatever OCR you already run |
 | **Model cards, not a model store** | Once a pipeline can train a model it needs to answer which model produced this output, and where it lives. `snk.model` records a card - the artifact URI your training script wrote, plus whatever metrics, framework and hashes it reported - to `<folder>/<name>/<version>.json`, with a `latest.json` pointer beside it; `src.model` reads one back as a row, addressed as `name@version` or `name@latest`. The engine never touches the model bytes and never loads a model: the row carries the URI and your Python stage does the rest. What it does add is the part a convention cannot - the card is written only if the whole run succeeded, so a training pipeline that fails afterwards never registers a model and a failed retrain never moves the pointer off the model that still works |
 | **Kafka security that is actually applied** | The Kafka form has offered a security protocol, a SASL mechanism, a username and a password since the connector shipped, and the engine read none of them: a node configured for SASL_SSL connected in plaintext, unauthenticated, and said nothing about it. All four are now honoured - TLS reuses the same merged OS-plus-bundled trust store every other connection uses, and PLAIN, SCRAM-SHA-256 and SCRAM-SHA-512 are supported. A mechanism outside that set fails the run naming what is available, rather than quietly downgrading to an unauthenticated connection. *Consumer group* has been removed: the Kafka client Duckle uses implements no consumer groups, so it could never have done anything - use *Resume where the last run stopped* instead, which is the job it looked like it was doing |
 | **Kafka that resumes** | Tick *Resume where the last run stopped* on a Kafka source and it remembers the offset it reached, carrying on from there next run. That is what turns a schedule into a stream: without it, *Earliest* re-reads the whole backlog every run and *Latest* skips everything that arrived in between, so repeated runs could never be stitched together. The position is written only when the **whole run succeeded**, so a failure after the read re-delivers those records rather than losing them - at-least-once, deliberately, since the alternative is committing an offset for rows no sink ever wrote. A saved position records the topic and partition it belongs to and is ignored if either changes |
 | **Response provenance** | Tick *Add response metadata* on a REST source and every row carries `_http_url` (the exact URL fetched, per page), `_http_status` and `_fetched_at`, so you can tell whether a result changed because the source changed or because the parser did |
 | **Reuse a stage's output** | Tick *Reuse this stage's output* on an expensive deterministic stage and it writes its rows once, then reads them back while its SQL, everything above it, and the size/modified time of any local file it reads are unchanged. Off by default and per stage: a cache that guesses when it is still valid serves stale rows silently. `rm -r .duckle/duckle_cache` clears it |
-| **Pipeline tests** | `duckle test` runs a pipeline against a fixed input and asserts the rows out of one node. `validate` catches what will not compile; this catches a transform that compiles and computes the wrong thing. The node's WHOLE output is compared, not a sample of it. Comparison is strict: `5` and `"5"` are different, and so are `null`, a missing field and `""` - a case can opt back into text with `"compareAs": "text"`. An expectation can also assert column TYPES with `"schema": {"day": "DATE", "n": "BIGINT"}` - a rendered-value comparison cannot see DATE becoming VARCHAR or BIGINT becoming DECIMAL, since both render identically, and precision is not compared. A type name it does not recognise fails the case rather than quietly meaning VARCHAR. Spell out the precision - `"DECIMAL(18,2)"` - and precision is compared too, because `DECIMAL(18,3)` becoming `DECIMAL(10,2)` rounds and eventually overflows while still reading as the same broad type; a bare `"DECIMAL"` still means the family. SQL without an ORDER BY has no guaranteed order, so `"orderBy": ["id"]` sorts both sides before comparing and `"unordered": true` compares as a bag - neither is on by default, so a case asserting the pipeline own ORDER BY still does. Beyond rows, an expectation takes `rowCount`, `unique`, `notNull`, `tolerance` for float noise, and `sql` for anything else (`SELECT max(amt) < 100 FROM {rows}`) - and with one of those present it need not list rows at all. A source that reads no file (S3 behind a connection, REST, DuckLake) is replaced by a reader for the fixture, so a pipeline can be tested without production credentials. `--json` for CI and agents, and the MCP server exposes the same thing as `run_tests` so a coding agent can run the suite without shell access. Exit 1 on a failed assertion |
+| **Pipeline tests** | `duckle test` runs a pipeline against a fixed input and asserts the rows out of one node. `validate` catches what will not compile; this catches a transform that compiles and computes the wrong thing. The node's WHOLE output is compared, not a sample of it. Comparison is strict: `5` and `"5"` are different, and so are `null`, a missing field and `""` - a case can opt back into text with `"compareAs": "text"`. An expectation can also assert column TYPES with `"schema": {"day": "DATE", "n": "BIGINT"}` - a rendered-value comparison cannot see DATE becoming VARCHAR or BIGINT becoming DECIMAL, since both render identically, and precision is not compared. A type name it does not recognise fails the case rather than quietly meaning VARCHAR. Spell out the precision - `"DECIMAL(18,2)"` - and precision is compared too, because `DECIMAL(18,3)` becoming `DECIMAL(10,2)` rounds and eventually overflows while still reading as the same broad type; a bare `"DECIMAL"` still means the family. SQL without an ORDER BY has no guaranteed order, so `"orderBy": ["id"]` sorts both sides before comparing and `"unordered": true` compares as a bag - neither is on by default, so a case asserting the pipeline own ORDER BY still does. Beyond rows, an expectation takes `rowCount`, `unique`, `notNull`, `tolerance` for float noise, and `sql` for anything else (`SELECT max(amt) < 100 FROM {rows}`) - and with one of those present it need not list rows at all. A source that reads no file (S3 behind a connection, REST, DuckLake) is replaced by a reader for the fixture, so a pipeline can be tested without production credentials. `--json` for CI and agents, and the MCP server exposes the same thing as `run_tests` so a coding agent can run the suite without shell access. Exit 1 on a failed assertion. `--update-golden` rewrites each case's `rows` with what the node actually produced, typed, so a deliberate change is recorded by reviewing a diff rather than retyping rows; it is the only way `test` ever writes, it touches only cases that list rows and leaves every other key in place, and a case whose run fails keeps what it had and still fails |
 | **Run to a node** | `duckle-runner --target <node>` stops at that node and prints its rows; the MCP `run_pipeline` tool takes the same `target`. Nothing downstream runs, so no sink past it writes - the run-from-here the desktop preview uses, for checking one step without executing the rest |
 | **Run logs** | Every run writes component-level NDJSON to `<workspace>/logs/<pipeline name>/runtime.log` (start/finish per stage, row counts, durations, `ctl.log` / `ctl.warn` / `ctl.die` messages). Tail it straight into Splunk or Dynatrace. |
 | **Schedules** | Cron, fixed-interval, and file-watch triggers, driven by an in-process scheduler. |
@@ -3745,7 +3899,7 @@ Duckle ships a thin shell and installs its engines on first launch.
 
 | Engine | Role | Status |
 |---|---|---|
-| **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. Tracking **v1.5.3** (latest stable). A lock-free single-SELECT read (`Engine::query`) powers dives. | Working |
+| **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. Tracking **v1.5.5** (latest stable). A lock-free single-SELECT read (`Engine::query`) powers dives. | Working |
 | **Duckie AI Assistant** | Local chat assistant via **llama.cpp** + **Qwen 2.5 Coder 1.5B GGUF**. Downloads ~1.1 GB and needs no network once installed, or point it at your own OpenAI-compatible endpoint and skip the download entirely. Managed as a `llama-server` subprocess exposing an OpenAI-compatible API on `127.0.0.1`. | Installable |
 | **SlothDB** | Alternate embedded analytical engine ([SouravRoy-ETL/slothdb](https://github.com/SouravRoy-ETL/slothdb)), installed the same way and selectable per pipeline. | Installable |
 | **Native** | In-process Rust streaming / incremental engine. | Planned |
@@ -3855,7 +4009,7 @@ src.git (mode=log, maxRows=10000)
   -> snk.csv (path=author-stats.csv)
 ```
 
-More examples live in [`samples/`](samples) - drop the pipeline files into a workspace and open them.
+More examples live in [`samples/`](samples) - drop the pipeline files into a workspace and open them. Runnable example workspaces exercised in CI live in [`examples/`](examples) - `starter-workspace` covers the basics (its input data is generated by `gen_samples.sql`, not committed) and `flow-control` covers the `ctl.*` components against the committed `data/orders.csv`.
 
 ---
 
@@ -4045,7 +4199,29 @@ To use a connection in a pipeline, the Properties panel of any compatible source
 
 A **REST** connection is the exception to auto-fill, because it exists to be shared by many nodes that each send a different request: put the vendor's headers and token on the connection once, and rotating a key is a single edit. Headers are merged per key at run time, and the node wins on a key it sets itself; the node's own `url` and request body are never overwritten. A node with no URL of its own inherits the connection's.
 
+### Test connection
+
+**Test connection** in the connection editor connects with the settings on screen, saved or not, and says whether they work and what they can see: the tables and views a database login can read, or the objects at the top of an S3 bucket (MinIO, R2 and B2 included). It runs what a node using the connection runs - the same merge onto the node, the same `${ENV:...}` and `${VAULT:...}` resolution, the same reader or driver - so a connection that passes is one a run can use. A login that may connect but not read the catalog still tests as connected, and says the list could not be read. A wrong password fails with the server's reason, with the password blanked out of it; a host that never answers gives up after 10 seconds unless the connection sets its own connect timeout. A REST connection is tested by requesting its base URL with the headers and auth a node sends, a token minted from its client credentials included: 401 or 403 means the credentials were refused and a 5xx is the server failing, while any other answer, a 404 included, reached a server that let the request in. Available for PostgreSQL, Redshift, MySQL, MariaDB, SQL Server, S3 and REST; other kinds show the button disabled. In `duckle serve`'s web editor it needs the admin role, like every other connection command. A SQL Server connection can also carry **Encrypt connection** and **Trust server certificate**, so a server with a self-signed certificate works through its connection rather than through a setting on every node.
+
 The **Copy SQL** / **Export SQL** output is display-only and never executed. Secret values (passwords, tokens, keys, connection strings) are replaced with named placeholders such as `${DUCKLE_PASSWORD}`, so the exported script stays valid and is safe to share - substitute the real value at run time. To emit the real credentials instead (so the script runs unchanged), set the environment variable `DUCKLE_EXPORT_INCLUDE_SECRETS=1`; the output then contains live secrets and should be handled accordingly.
+
+### Cloud storage with no key at all
+
+The safest credential is the one that is not in the pipeline. On S3, MinIO, R2,
+B2 and Azure Blob, set **Sign in with** to the environment and the run uses the
+identity it already has where it runs:
+
+- **S3 family:** an instance or container role, IRSA on Kubernetes, SSO, an AWS
+  profile or `AWS_*` variables (DuckDB's AWS credential chain). A run with no
+  identity stops before it reads anything, not with a 403 halfway through.
+- **Azure Blob:** a managed or workload identity, an Azure CLI login or
+  `AZURE_*` variables. Name the storage account; there is no key to give.
+
+GCS stays on HMAC keys: DuckDB 1.5.5 has no Google credential chain.
+
+The S3 path is tested live: the same node fails with no identity in the
+environment and reads the object once one is there. The Azure path is checked
+as far as the secret DuckDB accepts; signing in needs a real Azure identity.
 
 ---
 
@@ -4366,6 +4542,58 @@ gh release edit vX.Y.Z --draft=false --latest
 ```
 
 ---
+
+## What's new in v0.7.4
+
+152 commits. **It carries the fix for a published advisory**: the serve console
+built its buttons' click handlers with HTML escaping alone, and the browser
+decodes that before the handler runs, so a pipeline id containing a quote ran as
+script when its row was clicked (GHSA-6xvv-58mg-4gxx, medium). Upgrade before
+running a console whose pipeline files someone else can name.
+
+- **New connectors.** Microsoft Access as a source and a sink: ODBC on Windows,
+  read-only through mdbtools on Linux and macOS. SharePoint Server lists and
+  document libraries as a source and a sink, signing in with NTLM.
+  Log-based change data capture from PostgreSQL through its built-in pgoutput
+  plugin, with nothing to install on the server. A Delta Lake sink that appends
+  to a local table and creates it on first use. The Iceberg source and sink
+  attach a REST catalog (Polaris, Lakekeeper, Nessie, Gravitino) by URI and
+  warehouse.
+- **New ways to build and run.** Paste a SELECT and get a pipeline, one step per
+  CTE. `duckle-runner nightly.json --param name=value` supplies a pipeline's
+  typed parameters from the command line, through the same check as every other
+  surface. A child job can take its caller's rows as well as hand rows back, so
+  a child pipeline is a reusable rows-in, rows-out block. `maxRunSeconds` stops a
+  hung run and reports it as a failure. `duckle-runner test --update-golden`
+  records what a node produced as its new expected rows. S3 and Azure can read
+  with the identity the run already has, no key (`cloudAuth: environment`).
+- **Operations.** A PagerDuty alert rule triggers an incident on a failure and
+  resolves the same incident on the all-clear. `/readyz` and `/metrics` report a
+  stalled scheduler, which used to look exactly like a night with nothing due.
+  Run history records each node's duration and rows. Every error-type reject
+  carries a machine-readable envelope naming the node and the reason, and a
+  quality check says how many rows it rejected even when its reject port is not
+  wired. `duckle-runner review` speaks json, junit and sarif like the other
+  gates.
+- **Green runs that lost data.** A truncate-mode database sink emptied its
+  target when nothing arrived, and a MongoDB replace dropped the collection and
+  its indexes; an empty input now leaves the target alone. A single-file sink
+  publishes by rename, so a glob downstream no longer reads a killed run's
+  half-written staging file (measured at 10.5M rows where 8M existed). Two runs
+  of one pipeline finishing together could replace its whole history with one
+  record; the append is locked now.
+- **SQL Server.** Date and time columns keep the type SQL Server reports (#362).
+  A saved connection reaches every surface, Plan and Autodetect included (#363).
+  An upsert goes through MERGE instead of failing with "requires a table with a
+  primary key" on the default bulk path.
+- **Also fixed.** ClickHouse through ADBC shows dates, UUIDs, enums and wide
+  integers as what they are rather than numbers and bytes (#364). The desktop
+  window opens on Wayland without XWayland (#361). A `passphrase` typed on a node
+  is now redacted from a `duckle-runner build` bundle, which had shipped it as
+  typed. DuckDB moves to 1.5.5, which fixes an intermittent "Overflow in
+  timestamp subtraction" on HTTP sources. "Log row count" does what it says. In
+  the web editor, Stop, Schedules, History, Backfill and the Data Catalog work
+  against the server.
 
 ## What's new in v0.7.3
 

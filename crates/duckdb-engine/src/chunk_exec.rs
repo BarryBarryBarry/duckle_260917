@@ -31,6 +31,7 @@
 use crate::backfill::{self, Backfill, Kind, PartitionRun, State};
 use crate::backfill_exec::{Done, SliceOutcome, SliceWork};
 use crate::chunking::{self, Bounds, Strategy};
+use crate::format::strip_bom;
 use serde_json::{json, Value as JsonValue};
 use std::path::{Path, PathBuf};
 
@@ -94,8 +95,8 @@ pub fn plan_for(
 ) -> Result<Backfill, String> {
     let text = std::fs::read_to_string(pipeline_path)
         .map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
-    let doc: JsonValue =
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
+    let doc: JsonValue = serde_json::from_str(strip_bom(&text))
+        .map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
     let t = target_of(&doc, node_id)?;
     let plan = chunking::plan(
         &t.strategy,
@@ -115,6 +116,7 @@ pub fn plan_for(
         &std::env::var("DUCKLE_ENVIRONMENT").unwrap_or_else(|_| "default".into()),
     );
     let id = backfill::new_id(&format!("{name}-{node_id}"));
+    let pid = backfill::this_process_owns(&id);
     let staging = staging_dir(workspace, &id);
     Ok(Backfill {
         pipeline: name.clone(),
@@ -122,7 +124,7 @@ pub fn plan_for(
         created_at: chrono::Utc::now().to_rfc3339(),
         release_id: release.clone(),
         max_concurrent: plan.concurrency,
-        pid: Some(std::process::id()),
+        pid,
         kind: Kind::Chunk,
         chunk_node: Some(node_id.to_string()),
         staging: Some(staging.display().to_string()),
@@ -178,8 +180,8 @@ pub fn probe(
 ) -> Result<(Bounds, u64), String> {
     let text = std::fs::read_to_string(pipeline_path)
         .map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
-    let doc: JsonValue =
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
+    let doc: JsonValue = serde_json::from_str(strip_bom(&text))
+        .map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
     let t = target_of(&doc, node_id)?;
     let node = node_of(&doc, node_id)?;
     let props = node

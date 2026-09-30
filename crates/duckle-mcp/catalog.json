@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 411,
+  "componentCount": 417,
   "components": [
     {
       "id": "src.csv",
@@ -221,10 +221,6 @@
                     "value": "EUC_KR"
                   },
                   {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
-                  },
-                  {
                     "label": "GB18030  Simplified Chinese",
                     "value": "GB18030"
                   },
@@ -441,10 +437,6 @@
                   {
                     "label": "EUC-KR  Korean",
                     "value": "EUC_KR"
-                  },
-                  {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
                   },
                   {
                     "label": "GB18030  Simplified Chinese",
@@ -883,10 +875,6 @@
                     "value": "EUC_KR"
                   },
                   {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
-                  },
-                  {
                     "label": "GB18030  Simplified Chinese",
                     "value": "GB18030"
                   },
@@ -992,7 +980,7 @@
       "label": "Changed? (remote poll)",
       "kind": "source",
       "availability": "available",
-      "summary": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size / modified_at / etag / fingerprint / status. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
+      "summary": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size_bytes (and size) / modified_at / etag / fingerprint / status. A first run either emits what is already there or records it as a baseline and emits only what arrives later. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
       "ports": {
         "inputs": [],
         "outputs": [
@@ -1007,7 +995,7 @@
         "id": "src.changed",
         "kind": "source",
         "label": "Changed? (remote poll)",
-        "description": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size / modified_at / etag / fingerprint / status. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
+        "description": "Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size_bytes (and size) / modified_at / etag / fingerprint / status. A first run either emits what is already there or records it as a baseline and emits only what arrives later. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -1036,11 +1024,56 @@
                 "description": "Listing mode. Skips anything else in the directory."
               },
               {
+                "key": "include",
+                "label": "Only paths matching",
+                "kind": "text",
+                "placeholder": "*.zip, 2026/*/part-*.csv",
+                "description": "Listing mode. Comma-separated globs, matched against the path below the directory or prefix: * matches any run of characters, including /, and ? one character. Blank takes everything."
+              },
+              {
+                "key": "exclude",
+                "label": "Never paths matching",
+                "kind": "text",
+                "placeholder": "*.tmp, archive/*",
+                "description": "Listing mode. Applied after the include filter, so a partial upload or an archive folder never comes out. A filtered file is not part of the collection at all."
+              },
+              {
+                "key": "modifiedSince",
+                "label": "Modified since",
+                "kind": "text",
+                "placeholder": "2026-09-01  or  2026-09-01T06:00:00Z",
+                "description": "Listing mode. Only files modified at or after this time, in UTC: a bare date is midnight UTC. A file whose time the server does not report is kept, since nothing says it is outside the window."
+              },
+              {
+                "key": "modifiedBefore",
+                "label": "Modified before",
+                "kind": "text",
+                "placeholder": "2026-10-01",
+                "description": "Listing mode. Only files modified before this time, in UTC. With \"Modified since\" it makes a window that includes its start and excludes its end."
+              },
+              {
                 "key": "maxEntries",
                 "label": "Max files per run",
                 "kind": "number",
                 "defaultValue": 1000,
-                "description": "Bounds the first run against a directory holding years of drops. What is left over is taken by the next run, oldest first - only what was emitted is recorded as processed."
+                "description": "Bounds the first run against a directory holding years of drops. What is left over is taken by the next run, in the order below - only what was emitted is recorded as processed."
+              },
+              {
+                "key": "orderBy",
+                "label": "Take files in",
+                "kind": "select",
+                "defaultValue": "name",
+                "options": [
+                  {
+                    "label": "Name order",
+                    "value": "name"
+                  },
+                  {
+                    "label": "Oldest first (modification time)",
+                    "value": "modified"
+                  }
+                ],
+                "description": "The order a capped run works through a backlog in. Name order is oldest first only when the names carry the date, like D20260901.zip. Oldest first goes by each file's modification time, the name breaking ties; on S3 it reads the whole prefix to find them, holding only \"Max files per run\" of them at a time."
               },
               {
                 "key": "trackState",
@@ -1048,6 +1081,23 @@
                 "kind": "bool",
                 "defaultValue": true,
                 "description": "Advances only when the whole run succeeds, so a failure downstream re-offers the same files rather than losing them. Off means every run treats everything as changed."
+              },
+              {
+                "key": "firstRun",
+                "label": "On the first run",
+                "kind": "select",
+                "defaultValue": "emit_existing",
+                "options": [
+                  {
+                    "label": "Emit what is already there (a backfill)",
+                    "value": "emit_existing"
+                  },
+                  {
+                    "label": "Record what is already there, emit only what arrives later",
+                    "value": "baseline_existing"
+                  }
+                ],
+                "description": "What a first run - one with nothing remembered yet - does with what is already there. Emit treats all of it as new, which is a backfill. Record lists all of it, not just \"Max files per run\", remembers it as already there without claiming it was processed, and emits nothing; later runs emit what is added, and anything already there that is replaced. Needs \"Remember what was processed\" on."
               }
             ]
           },
@@ -2270,10 +2320,6 @@
                     "value": "EUC_KR"
                   },
                   {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
-                  },
-                  {
                     "label": "GB18030  Simplified Chinese",
                     "value": "GB18030"
                   },
@@ -2723,10 +2769,6 @@
                     "value": "EUC_KR"
                   },
                   {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
-                  },
-                  {
                     "label": "GB18030  Simplified Chinese",
                     "value": "GB18030"
                   },
@@ -2950,10 +2992,6 @@
                     "value": "EUC_KR"
                   },
                   {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
-                  },
-                  {
                     "label": "GB18030  Simplified Chinese",
                     "value": "GB18030"
                   },
@@ -3127,10 +3165,6 @@
                   {
                     "label": "EUC-KR  Korean",
                     "value": "EUC_KR"
-                  },
-                  {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
                   },
                   {
                     "label": "GB18030  Simplified Chinese",
@@ -3438,10 +3472,6 @@
                     "value": "EUC_KR"
                   },
                   {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
-                  },
-                  {
                     "label": "GB18030  Simplified Chinese",
                     "value": "GB18030"
                   },
@@ -3615,10 +3645,6 @@
                   {
                     "label": "EUC-KR  Korean",
                     "value": "EUC_KR"
-                  },
-                  {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
                   },
                   {
                     "label": "GB18030  Simplified Chinese",
@@ -3815,10 +3841,6 @@
                     "value": "EUC_KR"
                   },
                   {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
-                  },
-                  {
                     "label": "GB18030  Simplified Chinese",
                     "value": "GB18030"
                   },
@@ -3992,10 +4014,6 @@
                   {
                     "label": "EUC-KR  Korean",
                     "value": "EUC_KR"
-                  },
-                  {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
                   },
                   {
                     "label": "GB18030  Simplified Chinese",
@@ -4179,10 +4197,6 @@
                   {
                     "label": "EUC-KR  Korean",
                     "value": "EUC_KR"
-                  },
-                  {
-                    "label": "Big5  Traditional Chinese",
-                    "value": "BIG5"
                   },
                   {
                     "label": "GB18030  Simplified Chinese",
@@ -4395,12 +4409,304 @@
             "label": "Table",
             "fields": [
               {
+                "key": "catalog",
+                "label": "Where the table lives",
+                "kind": "select",
+                "defaultValue": "path",
+                "options": [
+                  {
+                    "label": "A table directory",
+                    "value": "path"
+                  },
+                  {
+                    "label": "A REST catalog",
+                    "value": "rest"
+                  }
+                ]
+              },
+              {
                 "key": "path",
-                "label": "Table path",
+                "label": "Table directory",
                 "kind": "text",
-                "required": true,
-                "placeholder": "s3://lake/orders/  or  /var/lakes/orders",
-                "description": "The Iceberg / Delta table root: a local directory or an s3:// URL."
+                "placeholder": "/data/lake/orders",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "path"
+                },
+                "description": "The table directory, holding metadata/."
+              },
+              {
+                "key": "catalogUri",
+                "label": "Catalog URI",
+                "kind": "text",
+                "placeholder": "https://catalog.example.com/api/catalog",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "description": "The REST catalog endpoint."
+              },
+              {
+                "key": "warehouse",
+                "label": "Warehouse",
+                "kind": "text",
+                "placeholder": "warehouse",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "description": "The warehouse the catalog serves, as it names it."
+              },
+              {
+                "key": "namespace",
+                "label": "Namespace",
+                "kind": "text",
+                "placeholder": "sales",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                }
+              },
+              {
+                "key": "table",
+                "label": "Table",
+                "kind": "text",
+                "placeholder": "orders",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                }
+              }
+            ]
+          },
+          {
+            "label": "Catalog sign-in",
+            "fields": [
+              {
+                "key": "authType",
+                "label": "Authentication",
+                "kind": "select",
+                "defaultValue": "none",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "options": [
+                  {
+                    "label": "None",
+                    "value": "none"
+                  },
+                  {
+                    "label": "OAuth2 client credentials",
+                    "value": "oauth2"
+                  },
+                  {
+                    "label": "Bearer token",
+                    "value": "token"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "catalog",
+                    "equals": "rest"
+                  },
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "placeholder": "secret",
+                "visibleWhen": [
+                  {
+                    "key": "catalog",
+                    "equals": "rest"
+                  },
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ],
+                "secret": true
+              },
+              {
+                "key": "oauth2ServerUri",
+                "label": "Token endpoint",
+                "kind": "text",
+                "placeholder": "<catalog URI>/v1/oauth/tokens",
+                "visibleWhen": [
+                  {
+                    "key": "catalog",
+                    "equals": "rest"
+                  },
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ],
+                "description": "Leave blank for the catalog default."
+              },
+              {
+                "key": "oauth2Scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "PRINCIPAL_ROLE:ALL",
+                "visibleWhen": [
+                  {
+                    "key": "catalog",
+                    "equals": "rest"
+                  },
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ]
+              },
+              {
+                "key": "token",
+                "label": "Token",
+                "kind": "text",
+                "placeholder": "token",
+                "visibleWhen": [
+                  {
+                    "key": "catalog",
+                    "equals": "rest"
+                  },
+                  {
+                    "key": "authType",
+                    "equals": "token"
+                  }
+                ],
+                "secret": true
+              }
+            ]
+          },
+          {
+            "label": "Object storage (for the data files)",
+            "fields": [
+              {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "s3"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below.",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                }
+              },
+              {
+                "key": "accessKey",
+                "label": "S3 access key",
+                "kind": "text",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "description": "Only when the catalog does not hand out storage credentials itself.",
+                "secret": true
+              },
+              {
+                "key": "secretKey",
+                "label": "S3 secret key",
+                "kind": "text",
+                "placeholder": "secret",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "secret": true
+              },
+              {
+                "key": "sessionToken",
+                "label": "S3 session token",
+                "kind": "text",
+                "placeholder": "token",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "secret": true
+              },
+              {
+                "key": "region",
+                "label": "S3 region",
+                "kind": "text",
+                "placeholder": "us-east-1",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                }
+              },
+              {
+                "key": "endpoint",
+                "label": "S3 endpoint",
+                "kind": "text",
+                "placeholder": "minio.internal:9000",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "description": "For MinIO and other S3-compatible stores."
+              },
+              {
+                "key": "urlStyle",
+                "label": "S3 URL style",
+                "kind": "select",
+                "defaultValue": "",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "options": [
+                  {
+                    "label": "Default",
+                    "value": ""
+                  },
+                  {
+                    "label": "Path (host/bucket/key)",
+                    "value": "path"
+                  },
+                  {
+                    "label": "Virtual host (bucket.host/key)",
+                    "value": "vhost"
+                  }
+                ]
+              },
+              {
+                "key": "useSsl",
+                "label": "S3 use TLS",
+                "kind": "select",
+                "defaultValue": "",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "options": [
+                  {
+                    "label": "Default (from the endpoint scheme)",
+                    "value": ""
+                  },
+                  {
+                    "label": "Yes",
+                    "value": "true"
+                  },
+                  {
+                    "label": "No (local MinIO)",
+                    "value": "false"
+                  }
+                ]
               }
             ]
           }
@@ -5014,6 +5320,231 @@
                 "kind": "text",
                 "placeholder": "mysql://user:p%40ss@host:3306/db  or  host=... dbname=... user=... password=...",
                 "description": "Optional. When set, this exact string is used for the ATTACH and the host/port/user/password above are ignored. Use it to encode special characters yourself or supply a full connection URL."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.postgres.cdc",
+      "label": "PostgreSQL CDC",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Log-based change data capture: every insert, update and delete from a table, in commit order, read from a replication slot through the built-in pgoutput plugin. No JVM, no Kafka, nothing to install on the server. The position is saved only when the run succeeds, so a failed run re-delivers instead of losing changes.",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.postgres.cdc",
+        "kind": "source",
+        "label": "PostgreSQL CDC",
+        "description": "Log-based change data capture: every insert, update and delete from a table, in commit order, read from a replication slot through the built-in pgoutput plugin. No JVM, no Kafka, nothing to install on the server. The position is saved only when the run succeeds, so a failed run re-delivers instead of losing changes.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Connection",
+            "fields": [
+              {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "postgres"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+              },
+              {
+                "key": "host",
+                "label": "Host",
+                "kind": "text",
+                "required": true,
+                "placeholder": "localhost"
+              },
+              {
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
+                "defaultValue": 5432
+              },
+              {
+                "key": "database",
+                "label": "Database",
+                "kind": "text",
+                "required": true,
+                "placeholder": "mydb"
+              },
+              {
+                "key": "username",
+                "label": "Username",
+                "kind": "text"
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••",
+                "secret": true
+              }
+            ]
+          },
+          {
+            "label": "Advanced connection (SSL)",
+            "fields": [
+              {
+                "key": "sslmode",
+                "label": "SSL mode",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "Default (driver negotiates)",
+                    "value": ""
+                  },
+                  {
+                    "label": "disable",
+                    "value": "disable"
+                  },
+                  {
+                    "label": "allow",
+                    "value": "allow"
+                  },
+                  {
+                    "label": "prefer",
+                    "value": "prefer"
+                  },
+                  {
+                    "label": "require",
+                    "value": "require"
+                  },
+                  {
+                    "label": "verify-ca",
+                    "value": "verify-ca"
+                  },
+                  {
+                    "label": "verify-full",
+                    "value": "verify-full"
+                  }
+                ],
+                "description": "libpq sslmode. Use require (or verify-ca / verify-full) for servers that enforce TLS."
+              },
+              {
+                "key": "sslrootcert",
+                "label": "SSL root cert",
+                "kind": "file-path",
+                "description": "CA certificate file (libpq sslrootcert). Required for verify-ca / verify-full."
+              },
+              {
+                "key": "sslcert",
+                "label": "SSL client cert",
+                "kind": "file-path",
+                "description": "Client certificate file for certificate-based auth (libpq sslcert)."
+              },
+              {
+                "key": "sslkey",
+                "label": "SSL client key",
+                "kind": "file-path",
+                "description": "Client private-key file (libpq sslkey)."
+              },
+              {
+                "key": "connectTimeout",
+                "label": "Connect timeout (s)",
+                "kind": "integer",
+                "description": "Maximum seconds to wait for a connection (libpq connect_timeout)."
+              },
+              {
+                "key": "options",
+                "label": "Session options",
+                "kind": "text",
+                "placeholder": "-c search_path=myschema",
+                "description": "Command-line options sent to the server on connect (libpq options), e.g. set the search_path."
+              },
+              {
+                "key": "connParams",
+                "label": "Extra parameters",
+                "kind": "text",
+                "placeholder": "key=value key2=value2",
+                "description": "Any additional libpq parameters, appended verbatim to the connection string."
+              }
+            ],
+            "collapsible": true,
+            "defaultCollapsed": true
+          },
+          {
+            "label": "Change feed",
+            "fields": [
+              {
+                "key": "table",
+                "label": "Table",
+                "kind": "text",
+                "required": true,
+                "placeholder": "public.orders",
+                "description": "The table to capture, as schema.table (public when no schema is given). Each change arrives as one row: _op (insert / update / delete), _lsn, _xid and _commit_ts, then the row itself, typed as the table declares it."
+              },
+              {
+                "key": "slotName",
+                "label": "Replication slot",
+                "kind": "text",
+                "required": true,
+                "placeholder": "duckle_orders",
+                "description": "One slot per pipeline that reads this table. PostgreSQL keeps WAL until the slot is consumed, so a slot nothing reads any more should be dropped: SELECT pg_drop_replication_slot('name'). Lowercase letters, digits and underscores."
+              },
+              {
+                "key": "publication",
+                "label": "Publication",
+                "kind": "text",
+                "placeholder": "<slot>_pub",
+                "description": "Defaults to the slot name with _pub. The one Duckle creates publishes insert, update and delete for this table only."
+              },
+              {
+                "key": "createIfMissing",
+                "label": "Create the publication and slot if missing",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "Needs a role allowed to create publications and replication slots, and wal_level = logical on the server. A new slot captures changes from the moment it is made: load the existing rows once with the PostgreSQL source."
+              },
+              {
+                "key": "connString",
+                "label": "Connection string (optional)",
+                "kind": "text",
+                "placeholder": "host=... port=5432 dbname=... user=...",
+                "description": "A libpq key-value string or postgresql:// URL. When set it replaces the host, port and credentials above."
+              }
+            ]
+          },
+          {
+            "label": "Limits",
+            "fields": [
+              {
+                "key": "batchSize",
+                "label": "Changes per run",
+                "kind": "integer",
+                "defaultValue": 100000,
+                "description": "Reading stops at the first transaction boundary past this, so a transaction is never split across runs. The rest arrive on the next run."
+              },
+              {
+                "key": "maxLagMb",
+                "label": "Warn when the slot holds more than (MB)",
+                "kind": "integer",
+                "defaultValue": 1024,
+                "description": "How much WAL the slot keeps on the server is reported on every run, with a warning past this. Consider max_slot_wal_keep_size on the server as a hard cap."
               }
             ]
           }
@@ -5758,6 +6289,101 @@
                 "kind": "expression",
                 "rows": 5,
                 "placeholder": "SELECT * FROM users WHERE created_at > ?"
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.access",
+      "label": "Microsoft Access",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types.",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.access",
+        "kind": "source",
+        "label": "Microsoft Access",
+        "description": "Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Access database",
+            "fields": [
+              {
+                "key": "path",
+                "label": "Database file",
+                "kind": "file-path",
+                "required": true,
+                "filters": [
+                  {
+                    "name": "Access database",
+                    "extensions": [
+                      "accdb",
+                      "mdb"
+                    ]
+                  },
+                  {
+                    "name": "All files",
+                    "extensions": [
+                      "*"
+                    ]
+                  }
+                ],
+                "description": "An .accdb or .mdb file. On Windows it is read through the Microsoft Access ODBC driver (installed with Office, or the free Access Database Engine). On Linux and macOS it is read through mdbtools, one table at a time."
+              },
+              {
+                "key": "password",
+                "label": "Database password",
+                "kind": "text",
+                "placeholder": "••••••••",
+                "secret": true
+              }
+            ]
+          },
+          {
+            "label": "Read",
+            "fields": [
+              {
+                "key": "tableName",
+                "label": "Table",
+                "kind": "text",
+                "placeholder": "Customers"
+              },
+              {
+                "key": "query",
+                "label": "Or a query in Access SQL",
+                "kind": "expression",
+                "rows": 4,
+                "placeholder": "SELECT * FROM [Customers] WHERE [Country] = 'UK'",
+                "description": "Windows only: a query needs the Access ODBC driver. Elsewhere name a table."
+              },
+              {
+                "key": "batchSize",
+                "label": "Fetch batch rows",
+                "kind": "number",
+                "defaultValue": 5000
               }
             ]
           }
@@ -7589,9 +8215,30 @@
             "label": "Credentials",
             "fields": [
               {
+                "key": "cloudAuth",
+                "label": "Sign in with",
+                "kind": "select",
+                "defaultValue": "keys",
+                "options": [
+                  {
+                    "label": "Access keys",
+                    "value": "keys"
+                  },
+                  {
+                    "label": "IAM role / environment",
+                    "value": "environment"
+                  }
+                ],
+                "description": "The environment uses the AWS identity the run has where it runs - an instance or container role, IRSA, SSO, a profile or AWS_* variables - with no key in the pipeline. A run with none stops before it reads anything."
+              },
+              {
                 "key": "accessKey",
                 "label": "Access key",
                 "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -7599,6 +8246,10 @@
                 "label": "Secret key",
                 "kind": "text",
                 "placeholder": "••••••••",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -8138,22 +8789,37 @@
             "label": "Credentials",
             "fields": [
               {
-                "key": "accessKey",
-                "label": "Access key",
+                "key": "accountName",
+                "label": "Storage account",
                 "kind": "text",
-                "secret": true
+                "placeholder": "mystorageaccount"
               },
               {
-                "key": "secretKey",
-                "label": "Secret key",
+                "key": "cloudAuth",
+                "label": "Sign in with",
+                "kind": "select",
+                "defaultValue": "keys",
+                "options": [
+                  {
+                    "label": "Account key",
+                    "value": "keys"
+                  },
+                  {
+                    "label": "Managed identity / Azure CLI",
+                    "value": "environment"
+                  }
+                ],
+                "description": "The environment signs in as the identity the run has where it runs - a managed or workload identity, an Azure CLI login, or AZURE_* variables - with no key in the pipeline."
+              },
+              {
+                "key": "accountKey",
+                "label": "Account key",
                 "kind": "text",
                 "placeholder": "••••••••",
-                "secret": true
-              },
-              {
-                "key": "sessionToken",
-                "label": "Session token",
-                "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -8458,9 +9124,30 @@
             "label": "Credentials",
             "fields": [
               {
+                "key": "cloudAuth",
+                "label": "Sign in with",
+                "kind": "select",
+                "defaultValue": "keys",
+                "options": [
+                  {
+                    "label": "Access keys",
+                    "value": "keys"
+                  },
+                  {
+                    "label": "IAM role / environment",
+                    "value": "environment"
+                  }
+                ],
+                "description": "The environment uses the AWS identity the run has where it runs - an instance or container role, IRSA, SSO, a profile or AWS_* variables - with no key in the pipeline. A run with none stops before it reads anything."
+              },
+              {
                 "key": "accessKey",
                 "label": "Access key",
                 "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -8468,12 +9155,20 @@
                 "label": "Secret key",
                 "kind": "text",
                 "placeholder": "••••••••",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
                 "key": "sessionToken",
                 "label": "Session token",
                 "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -8778,9 +9473,30 @@
             "label": "Credentials",
             "fields": [
               {
+                "key": "cloudAuth",
+                "label": "Sign in with",
+                "kind": "select",
+                "defaultValue": "keys",
+                "options": [
+                  {
+                    "label": "Access keys",
+                    "value": "keys"
+                  },
+                  {
+                    "label": "IAM role / environment",
+                    "value": "environment"
+                  }
+                ],
+                "description": "The environment uses the AWS identity the run has where it runs - an instance or container role, IRSA, SSO, a profile or AWS_* variables - with no key in the pipeline. A run with none stops before it reads anything."
+              },
+              {
                 "key": "accessKey",
                 "label": "Access key",
                 "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -8788,12 +9504,20 @@
                 "label": "Secret key",
                 "kind": "text",
                 "placeholder": "••••••••",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
                 "key": "sessionToken",
                 "label": "Session token",
                 "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -9098,9 +9822,30 @@
             "label": "Credentials",
             "fields": [
               {
+                "key": "cloudAuth",
+                "label": "Sign in with",
+                "kind": "select",
+                "defaultValue": "keys",
+                "options": [
+                  {
+                    "label": "Access keys",
+                    "value": "keys"
+                  },
+                  {
+                    "label": "IAM role / environment",
+                    "value": "environment"
+                  }
+                ],
+                "description": "The environment uses the AWS identity the run has where it runs - an instance or container role, IRSA, SSO, a profile or AWS_* variables - with no key in the pipeline. A run with none stops before it reads anything."
+              },
+              {
                 "key": "accessKey",
                 "label": "Access key",
                 "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -9108,12 +9853,20 @@
                 "label": "Secret key",
                 "kind": "text",
                 "placeholder": "••••••••",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
                 "key": "sessionToken",
                 "label": "Session token",
                 "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -10732,9 +11485,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -11210,9 +11967,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -11536,9 +12297,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -12419,9 +13184,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -12880,9 +13649,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -13312,9 +14085,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -13744,9 +14521,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -14982,9 +15763,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -27958,15 +28743,16 @@
               },
               {
                 "key": "chunkSize",
-                "label": "Chunk size (tokens)",
+                "label": "Chunk size (characters)",
                 "kind": "integer",
-                "defaultValue": 512
+                "defaultValue": 1000,
+                "description": "Characters, not tokens - the splitter is a plain character window. English runs about 4 characters per token, so 1000 characters is roughly 250 tokens."
               },
               {
                 "key": "chunkOverlap",
-                "label": "Overlap (tokens)",
+                "label": "Overlap (characters)",
                 "kind": "integer",
-                "defaultValue": 64
+                "defaultValue": 100
               },
               {
                 "key": "outputColumn",
@@ -28119,6 +28905,23 @@
             "label": "Classify",
             "fields": [
               {
+                "key": "provider",
+                "label": "Decision engine",
+                "kind": "select",
+                "defaultValue": "openai",
+                "options": [
+                  {
+                    "label": "Chat model (OpenAI-compatible)",
+                    "value": "openai"
+                  },
+                  {
+                    "label": "Jev evaluation model (Vercel AI Gateway)",
+                    "value": "jev"
+                  }
+                ],
+                "description": "A chat model is asked for the label and its prose is matched back to your list, so an off-list reply becomes UNKNOWN. Jev is asked a typed choice question whose options ARE your labels, so it cannot answer off-list, and it also writes <output column>_confidence with the probability it gave the label it picked."
+              },
+              {
                 "key": "inputColumn",
                 "label": "Text column",
                 "kind": "column",
@@ -28136,13 +28939,15 @@
                 "key": "model",
                 "label": "Model",
                 "kind": "text",
-                "defaultValue": "gpt-4o-mini"
+                "defaultValue": "gpt-4o-mini",
+                "description": "Left empty, a chat provider uses gpt-4o-mini and Jev uses typesafe-ai/jev."
               },
               {
                 "key": "apiKey",
                 "label": "API key",
                 "kind": "text",
                 "placeholder": "••••••••",
+                "description": "For Jev this is a Vercel AI Gateway API key, sent as a bearer token.",
                 "secret": true
               },
               {
@@ -29681,8 +30486,13 @@
                   {
                     "label": "Overwrite (replace)",
                     "value": "overwrite"
+                  },
+                  {
+                    "label": "Append (add rows to the end)",
+                    "value": "append"
                   }
-                ]
+                ],
+                "description": "Append adds this run's rows to the end of the file, and writes the header only when it makes the file; rows whose columns are not the file's are refused. A compressed, partitioned or remote path cannot be appended to."
               },
               {
                 "key": "delimiter",
@@ -29802,8 +30612,13 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
+                  },
+                  {
+                    "label": "Append (add rows to the end)",
+                    "value": "append"
                   }
-                ]
+                ],
+                "description": "Append adds this run's rows to the end of the file, and writes the header only when it makes the file; rows whose columns are not the file's are refused. A compressed, partitioned or remote path cannot be appended to."
               },
               {
                 "key": "compression",
@@ -29822,12 +30637,9 @@
                   {
                     "label": "Zstd",
                     "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
-                ]
+                ],
+                "description": "Gzip or Zstd compresses the file whatever it is called. None leaves it to the name: a path ending .gz or .zst is still compressed. A compressed file cannot be appended to."
               }
             ]
           },
@@ -29998,8 +30810,13 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
+                  },
+                  {
+                    "label": "Append (add rows to the end)",
+                    "value": "append"
                   }
-                ]
+                ],
+                "description": "Append adds this run's rows to the end of the file, and writes the header only when it makes the file; rows whose columns are not the file's are refused. A compressed, partitioned or remote path cannot be appended to."
               },
               {
                 "key": "compression",
@@ -30018,12 +30835,9 @@
                   {
                     "label": "Zstd",
                     "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
-                ]
+                ],
+                "description": "Gzip or Zstd compresses the file whatever it is called. None leaves it to the name: a path ending .gz or .zst is still compressed. A compressed file cannot be appended to."
               }
             ]
           },
@@ -30152,8 +30966,13 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
+                  },
+                  {
+                    "label": "Append (add rows to the end)",
+                    "value": "append"
                   }
-                ]
+                ],
+                "description": "Append adds this run's rows to the end of the file, and writes the header only when it makes the file; rows whose columns are not the file's are refused. A compressed, partitioned or remote path cannot be appended to."
               },
               {
                 "key": "compression",
@@ -30172,12 +30991,9 @@
                   {
                     "label": "Zstd",
                     "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
-                ]
+                ],
+                "description": "Gzip or Zstd compresses the file whatever it is called. None leaves it to the name: a path ending .gz or .zst is still compressed. A compressed file cannot be appended to."
               }
             ]
           },
@@ -30368,30 +31184,6 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
-                  }
-                ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
                 ]
               }
@@ -30758,30 +31550,6 @@
                     "value": "overwrite"
                   }
                 ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
-                  }
-                ]
               }
             ]
           }
@@ -30853,30 +31621,6 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
-                  }
-                ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
                 ]
               }
@@ -31008,30 +31752,6 @@
                     "value": "overwrite"
                   }
                 ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
-                  }
-                ]
               }
             ]
           }
@@ -31103,30 +31823,6 @@
                   {
                     "label": "Overwrite",
                     "value": "overwrite"
-                  }
-                ]
-              },
-              {
-                "key": "compression",
-                "label": "Compression",
-                "kind": "select",
-                "defaultValue": "none",
-                "options": [
-                  {
-                    "label": "None",
-                    "value": "none"
-                  },
-                  {
-                    "label": "Gzip",
-                    "value": "gzip"
-                  },
-                  {
-                    "label": "Zstd",
-                    "value": "zstd"
-                  },
-                  {
-                    "label": "Snappy",
-                    "value": "snappy"
                   }
                 ]
               }
@@ -31566,18 +32262,332 @@
         "kind": "sink",
         "label": "Apache Iceberg",
         "description": "Write a full Iceberg table (data/ + metadata/) via DuckDB v1.5",
-        "schemaSource": "upstream",
+        "schemaSource": "autodetect",
         "sections": [
           {
             "label": "Table",
             "fields": [
               {
+                "key": "catalog",
+                "label": "Where the table lives",
+                "kind": "select",
+                "defaultValue": "path",
+                "options": [
+                  {
+                    "label": "A table directory",
+                    "value": "path"
+                  },
+                  {
+                    "label": "A REST catalog",
+                    "value": "rest"
+                  }
+                ]
+              },
+              {
                 "key": "path",
-                "label": "Table path",
+                "label": "Table directory",
                 "kind": "text",
-                "required": true,
-                "placeholder": "s3://lake/orders/  or  /var/lakes/orders",
-                "description": "The Iceberg table root: a local directory or an s3:// URL backed by a Connection."
+                "placeholder": "/data/lake/orders",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "path"
+                },
+                "description": "The directory the table is written to (data/ and metadata/)."
+              },
+              {
+                "key": "catalogUri",
+                "label": "Catalog URI",
+                "kind": "text",
+                "placeholder": "https://catalog.example.com/api/catalog",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "description": "The REST catalog endpoint."
+              },
+              {
+                "key": "warehouse",
+                "label": "Warehouse",
+                "kind": "text",
+                "placeholder": "warehouse",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "description": "The warehouse the catalog serves, as it names it."
+              },
+              {
+                "key": "namespace",
+                "label": "Namespace",
+                "kind": "text",
+                "placeholder": "sales",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "description": "Created when it does not exist."
+              },
+              {
+                "key": "table",
+                "label": "Table",
+                "kind": "text",
+                "placeholder": "orders",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                }
+              },
+              {
+                "key": "mode",
+                "label": "Write mode",
+                "kind": "select",
+                "defaultValue": "append",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "options": [
+                  {
+                    "label": "Append (create the table if missing)",
+                    "value": "append"
+                  },
+                  {
+                    "label": "Overwrite (drop and recreate)",
+                    "value": "overwrite"
+                  }
+                ],
+                "description": "Append matches columns by name. Overwrite drops the table and creates it again from this run's rows, as two catalog commits: the catalog cannot replace a table in one."
+              }
+            ]
+          },
+          {
+            "label": "Catalog sign-in",
+            "fields": [
+              {
+                "key": "authType",
+                "label": "Authentication",
+                "kind": "select",
+                "defaultValue": "none",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "options": [
+                  {
+                    "label": "None",
+                    "value": "none"
+                  },
+                  {
+                    "label": "OAuth2 client credentials",
+                    "value": "oauth2"
+                  },
+                  {
+                    "label": "Bearer token",
+                    "value": "token"
+                  }
+                ]
+              },
+              {
+                "key": "clientId",
+                "label": "Client ID",
+                "kind": "text",
+                "visibleWhen": [
+                  {
+                    "key": "catalog",
+                    "equals": "rest"
+                  },
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ]
+              },
+              {
+                "key": "clientSecret",
+                "label": "Client secret",
+                "kind": "text",
+                "placeholder": "secret",
+                "visibleWhen": [
+                  {
+                    "key": "catalog",
+                    "equals": "rest"
+                  },
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ],
+                "secret": true
+              },
+              {
+                "key": "oauth2ServerUri",
+                "label": "Token endpoint",
+                "kind": "text",
+                "placeholder": "<catalog URI>/v1/oauth/tokens",
+                "visibleWhen": [
+                  {
+                    "key": "catalog",
+                    "equals": "rest"
+                  },
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ],
+                "description": "Leave blank for the catalog default."
+              },
+              {
+                "key": "oauth2Scope",
+                "label": "Scope",
+                "kind": "text",
+                "placeholder": "PRINCIPAL_ROLE:ALL",
+                "visibleWhen": [
+                  {
+                    "key": "catalog",
+                    "equals": "rest"
+                  },
+                  {
+                    "key": "authType",
+                    "equals": "oauth2"
+                  }
+                ]
+              },
+              {
+                "key": "token",
+                "label": "Token",
+                "kind": "text",
+                "placeholder": "token",
+                "visibleWhen": [
+                  {
+                    "key": "catalog",
+                    "equals": "rest"
+                  },
+                  {
+                    "key": "authType",
+                    "equals": "token"
+                  }
+                ],
+                "secret": true
+              }
+            ]
+          },
+          {
+            "label": "Object storage (for the data files)",
+            "fields": [
+              {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "s3"
+                ],
+                "description": "Pick a connection from the Connections folder to auto-fill the fields below.",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                }
+              },
+              {
+                "key": "accessKey",
+                "label": "S3 access key",
+                "kind": "text",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "description": "Only when the catalog does not hand out storage credentials itself.",
+                "secret": true
+              },
+              {
+                "key": "secretKey",
+                "label": "S3 secret key",
+                "kind": "text",
+                "placeholder": "secret",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "secret": true
+              },
+              {
+                "key": "sessionToken",
+                "label": "S3 session token",
+                "kind": "text",
+                "placeholder": "token",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "secret": true
+              },
+              {
+                "key": "region",
+                "label": "S3 region",
+                "kind": "text",
+                "placeholder": "us-east-1",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                }
+              },
+              {
+                "key": "endpoint",
+                "label": "S3 endpoint",
+                "kind": "text",
+                "placeholder": "minio.internal:9000",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "description": "For MinIO and other S3-compatible stores."
+              },
+              {
+                "key": "urlStyle",
+                "label": "S3 URL style",
+                "kind": "select",
+                "defaultValue": "",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "options": [
+                  {
+                    "label": "Default",
+                    "value": ""
+                  },
+                  {
+                    "label": "Path (host/bucket/key)",
+                    "value": "path"
+                  },
+                  {
+                    "label": "Virtual host (bucket.host/key)",
+                    "value": "vhost"
+                  }
+                ]
+              },
+              {
+                "key": "useSsl",
+                "label": "S3 use TLS",
+                "kind": "select",
+                "defaultValue": "",
+                "visibleWhen": {
+                  "key": "catalog",
+                  "equals": "rest"
+                },
+                "options": [
+                  {
+                    "label": "Default (from the endpoint scheme)",
+                    "value": ""
+                  },
+                  {
+                    "label": "Yes",
+                    "value": "true"
+                  },
+                  {
+                    "label": "No (local MinIO)",
+                    "value": "false"
+                  }
+                ]
               }
             ]
           }
@@ -31745,6 +32755,62 @@
                     "value": "json"
                   }
                 ]
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.delta",
+      "label": "Delta Lake",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Append to a local Delta Lake table, creating it from the input columns on first use. Columns are matched by name and a mismatch is refused, never dropped or filled with NULL.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.delta",
+        "kind": "sink",
+        "label": "Delta Lake",
+        "description": "Append to a local Delta Lake table, creating it from the input columns on first use. Columns are matched by name and a mismatch is refused, never dropped or filled with NULL.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "Table",
+            "fields": [
+              {
+                "key": "path",
+                "label": "Table directory",
+                "kind": "text",
+                "required": true,
+                "placeholder": "/data/lake/orders",
+                "description": "The Delta table directory, the one holding _delta_log. Local paths for now: a table on object storage is refused until writing there has been tested."
+              },
+              {
+                "key": "createIfMissing",
+                "label": "Create the table if missing",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "Creates the table from the input columns and their types on the first run. Off, a missing table is an error, so a mistyped path cannot quietly start a new table."
               }
             ]
           }
@@ -32736,7 +33802,7 @@
                 "label": "Bulk write (fast)",
                 "kind": "bool",
                 "defaultValue": true,
-                "description": "Fast bulk load via the DuckDB mssql extension (TDS COPY, ~1.2M rows/s). Turn off to use the row-by-row driver (works fully offline; no extension fetch)."
+                "description": "Fast bulk load via the DuckDB mssql extension (TDS COPY, ~1.2M rows/s) for append and overwrite. An upsert always goes through the driver as one MERGE, because the extension cannot update a table that has no primary key. Turn off to use the row-by-row driver for every write (works fully offline; no extension fetch)."
               }
             ]
           },
@@ -33389,6 +34455,105 @@
                     "value": "json"
                   }
                 ]
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.access",
+      "label": "Microsoft Access",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.access",
+        "kind": "sink",
+        "label": "Microsoft Access",
+        "description": "Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Access database",
+            "fields": [
+              {
+                "key": "path",
+                "label": "Database file",
+                "kind": "save-path",
+                "required": true,
+                "filters": [
+                  {
+                    "name": "Access database",
+                    "extensions": [
+                      "accdb",
+                      "mdb"
+                    ]
+                  },
+                  {
+                    "name": "All files",
+                    "extensions": [
+                      "*"
+                    ]
+                  }
+                ],
+                "description": "An .accdb or .mdb file; one that is not there is created. Writing needs Windows and the Microsoft Access ODBC driver (installed with Office, or the free Access Database Engine)."
+              },
+              {
+                "key": "password",
+                "label": "Database password",
+                "kind": "text",
+                "placeholder": "••••••••",
+                "secret": true
+              }
+            ]
+          },
+          {
+            "label": "Write",
+            "fields": [
+              {
+                "key": "tableName",
+                "label": "Table",
+                "kind": "text",
+                "required": true,
+                "placeholder": "Customers"
+              },
+              {
+                "key": "mode",
+                "label": "Write mode",
+                "kind": "select",
+                "defaultValue": "append",
+                "options": [
+                  {
+                    "value": "append",
+                    "label": "Append (create if missing)"
+                  },
+                  {
+                    "value": "overwrite",
+                    "label": "Overwrite (clear first)"
+                  }
+                ],
+                "description": "A run whose upstream produced no rows leaves the table as it was, in either mode."
               }
             ]
           }
@@ -35235,7 +36400,7 @@
                 "label": "Bulk write (fast)",
                 "kind": "bool",
                 "defaultValue": true,
-                "description": "Fast bulk load via the DuckDB mssql extension (TDS COPY, ~1.2M rows/s). Turn off to use the row-by-row driver (works fully offline; no extension fetch)."
+                "description": "Fast bulk load via the DuckDB mssql extension (TDS COPY, ~1.2M rows/s) for append and overwrite. An upsert always goes through the driver as one MERGE, because the extension cannot update a table that has no primary key. Turn off to use the row-by-row driver for every write (works fully offline; no extension fetch)."
               }
             ]
           },
@@ -35605,6 +36770,169 @@
       }
     },
     {
+      "id": "snk.sharepoint",
+      "label": "SharePoint Server",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "SharePoint Server on premises over REST, signed in with Windows authentication (NTLM). Rows become list items, or the output uploads as a document library file (CSV, TSV, Parquet, JSON, Excel). An upstream with no rows changes nothing.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.sharepoint",
+        "kind": "sink",
+        "label": "SharePoint Server",
+        "description": "SharePoint Server on premises over REST, signed in with Windows authentication (NTLM). Rows become list items, or the output uploads as a document library file (CSV, TSV, Parquet, JSON, Excel). An upstream with no rows changes nothing.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "SharePoint site",
+            "fields": [
+              {
+                "key": "siteUrl",
+                "label": "Site URL",
+                "kind": "text",
+                "required": true,
+                "placeholder": "https://sharepoint.contoso.local/sites/team",
+                "description": "SharePoint Server on premises (2016, 2019, Subscription Edition), over its REST API."
+              },
+              {
+                "key": "username",
+                "label": "User",
+                "kind": "text",
+                "required": true,
+                "placeholder": "CONTOSO\\alice",
+                "description": "Windows authentication (NTLM): DOMAIN\\user or user@domain."
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••",
+                "secret": true
+              }
+            ]
+          },
+          {
+            "label": "Write",
+            "fields": [
+              {
+                "key": "mode",
+                "label": "Write to",
+                "kind": "select",
+                "defaultValue": "list",
+                "options": [
+                  {
+                    "label": "A list (each row a new item)",
+                    "value": "list"
+                  },
+                  {
+                    "label": "A file in a document library",
+                    "value": "file"
+                  }
+                ]
+              },
+              {
+                "key": "listName",
+                "label": "List",
+                "kind": "text",
+                "placeholder": "Orders",
+                "visibleWhen": {
+                  "key": "mode",
+                  "equals": "list"
+                }
+              },
+              {
+                "key": "folderUrl",
+                "label": "Folder",
+                "kind": "text",
+                "placeholder": "/sites/team/Shared Documents",
+                "description": "Server-relative path of the library folder.",
+                "visibleWhen": {
+                  "key": "mode",
+                  "equals": "file"
+                }
+              },
+              {
+                "key": "fileName",
+                "label": "File name",
+                "kind": "text",
+                "placeholder": "orders.csv",
+                "visibleWhen": {
+                  "key": "mode",
+                  "equals": "file"
+                }
+              },
+              {
+                "key": "format",
+                "label": "Format",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "From the file name",
+                    "value": ""
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "TSV",
+                    "value": "tsv"
+                  },
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "Excel (.xlsx)",
+                    "value": "xlsx"
+                  }
+                ],
+                "visibleWhen": {
+                  "key": "mode",
+                  "equals": "file"
+                }
+              },
+              {
+                "key": "overwrite",
+                "label": "Replace a file that is already there",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "Off, the run fails rather than replace it. A run whose upstream produced no rows leaves the file as it was.",
+                "visibleWhen": {
+                  "key": "mode",
+                  "equals": "file"
+                }
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
       "id": "snk.salesforce.bulk",
       "label": "Salesforce Bulk",
       "kind": "sink",
@@ -35936,9 +37264,30 @@
             "label": "Credentials",
             "fields": [
               {
+                "key": "cloudAuth",
+                "label": "Sign in with",
+                "kind": "select",
+                "defaultValue": "keys",
+                "options": [
+                  {
+                    "label": "Access keys",
+                    "value": "keys"
+                  },
+                  {
+                    "label": "IAM role / environment",
+                    "value": "environment"
+                  }
+                ],
+                "description": "The environment uses the AWS identity the run has where it runs - an instance or container role, IRSA, SSO, a profile or AWS_* variables - with no key in the pipeline. A run with none stops before it reads anything."
+              },
+              {
                 "key": "accessKey",
                 "label": "Access key",
                 "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -35946,6 +37295,10 @@
                 "label": "Secret key",
                 "kind": "text",
                 "placeholder": "••••••••",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -36289,7 +37642,7 @@
               },
               {
                 "key": "compression",
-                "label": "Compression",
+                "label": "Compression (Parquet)",
                 "kind": "select",
                 "defaultValue": "none",
                 "options": [
@@ -36309,7 +37662,11 @@
                     "label": "Snappy",
                     "value": "snappy"
                   }
-                ]
+                ],
+                "visibleWhen": {
+                  "key": "format",
+                  "equals": "parquet"
+                }
               },
               {
                 "key": "partitionBy",
@@ -36381,16 +37738,37 @@
             "label": "Credentials",
             "fields": [
               {
-                "key": "accessKey",
-                "label": "Access key",
+                "key": "accountName",
+                "label": "Storage account",
                 "kind": "text",
-                "secret": true
+                "placeholder": "mystorageaccount"
               },
               {
-                "key": "secretKey",
-                "label": "Secret key",
+                "key": "cloudAuth",
+                "label": "Sign in with",
+                "kind": "select",
+                "defaultValue": "keys",
+                "options": [
+                  {
+                    "label": "Account key",
+                    "value": "keys"
+                  },
+                  {
+                    "label": "Managed identity / Azure CLI",
+                    "value": "environment"
+                  }
+                ],
+                "description": "The environment signs in as the identity the run has where it runs - a managed or workload identity, an Azure CLI login, or AZURE_* variables - with no key in the pipeline."
+              },
+              {
+                "key": "accountKey",
+                "label": "Account key",
                 "kind": "text",
                 "placeholder": "••••••••",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -36498,7 +37876,7 @@
               },
               {
                 "key": "compression",
-                "label": "Compression",
+                "label": "Compression (Parquet)",
                 "kind": "select",
                 "defaultValue": "none",
                 "options": [
@@ -36518,7 +37896,11 @@
                     "label": "Snappy",
                     "value": "snappy"
                   }
-                ]
+                ],
+                "visibleWhen": {
+                  "key": "format",
+                  "equals": "parquet"
+                }
               },
               {
                 "key": "partitionBy",
@@ -36590,9 +37972,30 @@
             "label": "Credentials",
             "fields": [
               {
+                "key": "cloudAuth",
+                "label": "Sign in with",
+                "kind": "select",
+                "defaultValue": "keys",
+                "options": [
+                  {
+                    "label": "Access keys",
+                    "value": "keys"
+                  },
+                  {
+                    "label": "IAM role / environment",
+                    "value": "environment"
+                  }
+                ],
+                "description": "The environment uses the AWS identity the run has where it runs - an instance or container role, IRSA, SSO, a profile or AWS_* variables - with no key in the pipeline. A run with none stops before it reads anything."
+              },
+              {
                 "key": "accessKey",
                 "label": "Access key",
                 "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -36600,6 +38003,10 @@
                 "label": "Secret key",
                 "kind": "text",
                 "placeholder": "••••••••",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -36707,7 +38114,7 @@
               },
               {
                 "key": "compression",
-                "label": "Compression",
+                "label": "Compression (Parquet)",
                 "kind": "select",
                 "defaultValue": "none",
                 "options": [
@@ -36727,7 +38134,11 @@
                     "label": "Snappy",
                     "value": "snappy"
                   }
-                ]
+                ],
+                "visibleWhen": {
+                  "key": "format",
+                  "equals": "parquet"
+                }
               },
               {
                 "key": "partitionBy",
@@ -36799,9 +38210,30 @@
             "label": "Credentials",
             "fields": [
               {
+                "key": "cloudAuth",
+                "label": "Sign in with",
+                "kind": "select",
+                "defaultValue": "keys",
+                "options": [
+                  {
+                    "label": "Access keys",
+                    "value": "keys"
+                  },
+                  {
+                    "label": "IAM role / environment",
+                    "value": "environment"
+                  }
+                ],
+                "description": "The environment uses the AWS identity the run has where it runs - an instance or container role, IRSA, SSO, a profile or AWS_* variables - with no key in the pipeline. A run with none stops before it reads anything."
+              },
+              {
                 "key": "accessKey",
                 "label": "Access key",
                 "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -36809,6 +38241,10 @@
                 "label": "Secret key",
                 "kind": "text",
                 "placeholder": "••••••••",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -36916,7 +38352,7 @@
               },
               {
                 "key": "compression",
-                "label": "Compression",
+                "label": "Compression (Parquet)",
                 "kind": "select",
                 "defaultValue": "none",
                 "options": [
@@ -36936,7 +38372,11 @@
                     "label": "Snappy",
                     "value": "snappy"
                   }
-                ]
+                ],
+                "visibleWhen": {
+                  "key": "format",
+                  "equals": "parquet"
+                }
               },
               {
                 "key": "partitionBy",
@@ -37008,9 +38448,30 @@
             "label": "Credentials",
             "fields": [
               {
+                "key": "cloudAuth",
+                "label": "Sign in with",
+                "kind": "select",
+                "defaultValue": "keys",
+                "options": [
+                  {
+                    "label": "Access keys",
+                    "value": "keys"
+                  },
+                  {
+                    "label": "IAM role / environment",
+                    "value": "environment"
+                  }
+                ],
+                "description": "The environment uses the AWS identity the run has where it runs - an instance or container role, IRSA, SSO, a profile or AWS_* variables - with no key in the pipeline. A run with none stops before it reads anything."
+              },
+              {
                 "key": "accessKey",
                 "label": "Access key",
                 "kind": "text",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -37018,6 +38479,10 @@
                 "label": "Secret key",
                 "kind": "text",
                 "placeholder": "••••••••",
+                "visibleWhen": {
+                  "key": "cloudAuth",
+                  "equals": "keys"
+                },
                 "secret": true
               },
               {
@@ -37125,7 +38590,7 @@
               },
               {
                 "key": "compression",
-                "label": "Compression",
+                "label": "Compression (Parquet)",
                 "kind": "select",
                 "defaultValue": "none",
                 "options": [
@@ -37145,7 +38610,11 @@
                     "label": "Snappy",
                     "value": "snappy"
                   }
-                ]
+                ],
+                "visibleWhen": {
+                  "key": "format",
+                  "equals": "parquet"
+                }
               },
               {
                 "key": "partitionBy",
@@ -40839,6 +42308,13 @@
                 "description": "Off, a child runs for its side effects and hands nothing back. On, the parent passes it a handoff file as ${DUCKLE_RETURN} and reads the rows the child writes there. The child always runs to completion either way."
               },
               {
+                "key": "passesRows",
+                "label": "Pass this node's input rows to the child",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "On, the rows arriving at this node are written to a handoff file the child reads as ${DUCKLE_INPUT} (for example a Parquet source with path ${DUCKLE_INPUT}). Needs an input connected. With \"Take the rows the child returns\" as well, the child works as a reusable transform."
+              },
+              {
                 "key": "parameters",
                 "label": "Parameters",
                 "kind": "key-value"
@@ -40909,6 +42385,13 @@
                 "kind": "bool",
                 "defaultValue": false,
                 "description": "Off, a child runs for its side effects and hands nothing back. On, the parent passes it a handoff file as ${DUCKLE_RETURN} and reads the rows the child writes there. The child always runs to completion either way."
+              },
+              {
+                "key": "passesRows",
+                "label": "Pass this node's input rows to the child",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "On, the rows arriving at this node are written to a handoff file the child reads as ${DUCKLE_INPUT} (for example a Parquet source with path ${DUCKLE_INPUT}). Needs an input connected. With \"Take the rows the child returns\" as well, the child works as a reusable transform."
               },
               {
                 "key": "parameters",
@@ -40982,6 +42465,13 @@
                 "kind": "bool",
                 "defaultValue": false,
                 "description": "Off, a child runs for its side effects and hands nothing back. On, the parent passes it a handoff file as ${DUCKLE_RETURN} and reads the rows the child writes there. The child always runs to completion either way."
+              },
+              {
+                "key": "passesRows",
+                "label": "Pass this node's input rows to the child",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "On, the rows arriving at this node are written to a handoff file the child reads as ${DUCKLE_INPUT} (for example a Parquet source with path ${DUCKLE_INPUT}). Needs an input connected. With \"Take the rows the child returns\" as well, the child works as a reusable transform."
               },
               {
                 "key": "contextVariables",
@@ -41988,7 +43478,7 @@
                 "kind": "text",
                 "required": true,
                 "placeholder": "Rejected rows present - failing the run",
-                "description": "Use {rows} for the upstream row count."
+                "description": "Use {rows} for the upstream row count, and {column} for that column of the first input row, e.g. {reason}. A name that is not a column stays as typed."
               },
               {
                 "key": "condition",
@@ -45640,9 +47130,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -46293,9 +47787,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -46725,9 +48223,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -47157,9 +48659,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -47589,9 +49095,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -48021,9 +49531,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -48453,9 +49967,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -48885,9 +50403,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -49317,9 +50839,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -49749,9 +51275,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -50181,9 +51711,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -50613,9 +52147,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -51045,9 +52583,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -51477,9 +53019,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -51672,6 +53218,180 @@
               "label": "reject",
               "type": "reject",
               "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.sharepoint",
+      "label": "SharePoint Server",
+      "kind": "source",
+      "availability": "available",
+      "summary": "SharePoint Server on premises (2016 / 2019 / Subscription Edition) over REST, signed in with Windows authentication (NTLM). A list reads as rows, every page followed; a document library file reads by its format (CSV, TSV, Parquet, JSON, Excel).",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.sharepoint",
+        "kind": "source",
+        "label": "SharePoint Server",
+        "description": "SharePoint Server on premises (2016 / 2019 / Subscription Edition) over REST, signed in with Windows authentication (NTLM). A list reads as rows, every page followed; a document library file reads by its format (CSV, TSV, Parquet, JSON, Excel).",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "SharePoint site",
+            "fields": [
+              {
+                "key": "siteUrl",
+                "label": "Site URL",
+                "kind": "text",
+                "required": true,
+                "placeholder": "https://sharepoint.contoso.local/sites/team",
+                "description": "SharePoint Server on premises (2016, 2019, Subscription Edition), over its REST API."
+              },
+              {
+                "key": "username",
+                "label": "User",
+                "kind": "text",
+                "required": true,
+                "placeholder": "CONTOSO\\alice",
+                "description": "Windows authentication (NTLM): DOMAIN\\user or user@domain."
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••",
+                "secret": true
+              }
+            ]
+          },
+          {
+            "label": "Read",
+            "fields": [
+              {
+                "key": "mode",
+                "label": "Read from",
+                "kind": "select",
+                "defaultValue": "list",
+                "options": [
+                  {
+                    "label": "A list (its items as rows)",
+                    "value": "list"
+                  },
+                  {
+                    "label": "A file in a document library",
+                    "value": "file"
+                  }
+                ]
+              },
+              {
+                "key": "listName",
+                "label": "List",
+                "kind": "text",
+                "placeholder": "Orders",
+                "visibleWhen": {
+                  "key": "mode",
+                  "equals": "list"
+                }
+              },
+              {
+                "key": "select",
+                "label": "Columns ($select)",
+                "kind": "text",
+                "placeholder": "ID,Title,Amount",
+                "description": "Internal column names, comma separated. Empty reads every column.",
+                "visibleWhen": {
+                  "key": "mode",
+                  "equals": "list"
+                }
+              },
+              {
+                "key": "filter",
+                "label": "Filter ($filter)",
+                "kind": "text",
+                "placeholder": "Region eq 'North'",
+                "description": "An OData filter, applied by SharePoint before anything is sent.",
+                "visibleWhen": {
+                  "key": "mode",
+                  "equals": "list"
+                }
+              },
+              {
+                "key": "pageSize",
+                "label": "Items per page",
+                "kind": "number",
+                "defaultValue": 1000,
+                "visibleWhen": {
+                  "key": "mode",
+                  "equals": "list"
+                }
+              },
+              {
+                "key": "fileUrl",
+                "label": "File",
+                "kind": "text",
+                "placeholder": "/sites/team/Shared Documents/orders.csv",
+                "description": "Server-relative path of the file.",
+                "visibleWhen": {
+                  "key": "mode",
+                  "equals": "file"
+                }
+              },
+              {
+                "key": "format",
+                "label": "Format",
+                "kind": "select",
+                "defaultValue": "",
+                "options": [
+                  {
+                    "label": "From the file name",
+                    "value": ""
+                  },
+                  {
+                    "label": "CSV",
+                    "value": "csv"
+                  },
+                  {
+                    "label": "TSV",
+                    "value": "tsv"
+                  },
+                  {
+                    "label": "Parquet",
+                    "value": "parquet"
+                  },
+                  {
+                    "label": "JSON",
+                    "value": "json"
+                  },
+                  {
+                    "label": "Excel (.xlsx)",
+                    "value": "xlsx"
+                  }
+                ],
+                "visibleWhen": {
+                  "key": "mode",
+                  "equals": "file"
+                }
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
             }
           ]
         }
@@ -51892,9 +53612,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -52218,9 +53942,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -52603,9 +54331,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -52994,9 +54726,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -53426,9 +55162,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -53841,9 +55581,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -54173,9 +55917,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -54605,9 +56353,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -55037,9 +56789,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -55469,9 +57225,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -55901,9 +57661,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -56333,9 +58097,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -56765,9 +58533,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",
@@ -57197,9 +58969,13 @@
                   {
                     "label": "XML",
                     "value": "xml"
+                  },
+                  {
+                    "label": "Server-sent events",
+                    "value": "sse"
                   }
                 ],
-                "description": "Pick XML for an API that answers in XML rather than JSON."
+                "description": "Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event's data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too."
               },
               {
                 "key": "responsePath",

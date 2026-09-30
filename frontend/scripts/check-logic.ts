@@ -11,7 +11,7 @@ import type { Edge, Node } from '@xyflow/react';
 import type { DuckleNodeData } from '../src/pipeline-types';
 import type { RepoItem } from '../src/repo-types';
 import { livePreviewable } from '../src/live-preview';
-import { buildContextVars, discoverParams, resolveForRun, resolveTimeBuiltin } from '../src/run-resolve';
+import { buildContextVars, discoverParams, pipelineRunFields, resolveForRun, resolveTimeBuiltin } from '../src/run-resolve';
 import { conditionToSql, type FilterOp } from '../src/workflow-ui/fields/FilterBuilderField';
 import { scheduleActionError, scheduleForSave, serverSchedule } from '../src/schedule-save';
 import { pickNamesNodeConnection } from '../src/workflow-ui/fields/ConnectionRefField';
@@ -530,6 +530,29 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'git: the editor reloads the workspace when the panel says files changed',
         element.includes('onFilesChanged={handleReloadWorkspace}'),
         `App renders ${element.trim()}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #363: a SQL Server node that takes everything from a saved connection is
+// complete. Its form names the login `user`; the connection stores `username`,
+// and the engine now maps one to the other, so asking for User here refused a
+// run that would work.
+// ---------------------------------------------------------------------------
+{
+    const asked = (props: Record<string, unknown>) =>
+        validatePipeline([node('s', 'src.sqlserver', props)], [])
+            .issues.filter(i => i.code === 'missing-required-field')
+            .map(i => i.message);
+    check(
+        'connection: a SQL Server node on a saved connection is not asked for its user',
+        asked({ connectionRef: 'prod', tableName: 'orders' }).length === 0,
+        `issues: ${JSON.stringify(asked({ connectionRef: 'prod', tableName: 'orders' }))}`,
+    );
+    check(
+        'connection: without a connection, the user is still asked for',
+        asked({ host: 'db', database: 'sales', tableName: 'orders' }).some(m => m.includes("'User'")),
+        `issues: ${JSON.stringify(asked({ host: 'db', database: 'sales', tableName: 'orders' }))}`,
     );
 }
 
@@ -1265,6 +1288,63 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'schedule action: the list view renders the error',
         list.includes('{error ?'),
         'the error is set but only the edit form shows it',
+    );
+}
+
+// #317: a declared parameter is the engine's to fill - it checks the value against
+// the declaration, applies the default and treats it as a value. So the editor
+// must not prompt for one as a bare placeholder, nor substitute a context of the
+// same name, and a run carries the pipeline's own top-level fields.
+{
+    const nodes = [node('k', 'snk.csv', { path: 'out/${region}-${batch}.csv' })];
+    const declared = ['region'];
+    const params = discoverParams(nodes, {}, declared);
+    check(
+        '#317: a declared parameter is not prompted for as a bare placeholder',
+        !params.includes('region') && params.includes('batch'),
+        `prompted ${JSON.stringify(params)}`,
+    );
+    const path = String(
+        resolveForRun(nodes, [context('dev', { region: 'us', batch: '7' })], undefined, undefined, undefined, declared)[0]
+            .data.properties?.path,
+    );
+    check(
+        '#317: a context does not pre-empt a declared parameter',
+        path === 'out/${region}-7.csv',
+        `the browser substituted it, bypassing the contract: ${path}`,
+    );
+    const fields = pipelineRunFields({
+        formatVersion: 1, nodes: [], edges: [], viewport: { x: 1 },
+        parameters: { region: { type: 'string' } }, maxRunSeconds: 60, resourcePool: 'etl',
+    });
+    check(
+        '#317: a run carries the parameter contract, time limit and pool, and nothing else',
+        JSON.stringify(fields) ===
+            JSON.stringify({ formatVersion: 1, parameters: { region: { type: 'string' } }, maxRunSeconds: 60, resourcePool: 'etl' }),
+        JSON.stringify(fields),
+    );
+}
+
+// #317: a schedule's parameter values survive a save that does not mention them
+// (the dialog of a pipeline with no declarations sends none), are replaced by one
+// that does, and travel with the schedule when it is deployed to a server.
+{
+    const loaded = {
+        id: 's1', pipeline_id: 'p', name: 'n', enabled: true,
+        kind: { type: 'interval' as const, seconds: 60 }, params: { region: 'us' },
+    };
+    const base = { id: 's1', pipelineId: 'p', name: 'renamed', enabled: true, kind: loaded.kind };
+    const kept = scheduleForSave(loaded, base);
+    check('#317: a save that does not mention parameters keeps them', kept.params?.region === 'us', JSON.stringify(kept));
+    const replaced = scheduleForSave(loaded, { ...base, params: { region: 'eu' } });
+    check('#317: a save that sets parameters replaces them', replaced.params?.region === 'eu', JSON.stringify(replaced));
+    const cleared = scheduleForSave(loaded, { ...base, params: {} });
+    check('#317: an empty set clears them', JSON.stringify(cleared.params) === '{}', JSON.stringify(cleared));
+    const deployed = serverSchedule(loaded, 'p');
+    check(
+        '#317: a deployed schedule carries its parameter values',
+        JSON.stringify((deployed ?? {}).params) === JSON.stringify({ region: 'us' }),
+        JSON.stringify(deployed),
     );
 }
 

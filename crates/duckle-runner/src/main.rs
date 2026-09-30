@@ -15,6 +15,7 @@
 //!
 //! Exit code: 0 on success, 1 on pipeline error, 2 on usage/IO error.
 
+use duckle_duckdb_engine::format::strip_bom;
 use duckle_duckdb_engine::{DuckdbEngine, PipelineDoc};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -125,6 +126,8 @@ OPTIONS:
                          `cache`). Nothing is read from or written to it, so a
                          run taken to check the cache does not overwrite it.
     --name <label>       Run-log + state folder name (default: pipeline file stem)
+    --param NAME=VALUE   A run parameter, repeatable. Checked against the types
+                         the pipeline declares, as on every other surface.
     --target <node>      Run only as far as this node, then stop and print its rows
                          (tab-separated, header first). Nothing downstream runs, so
                          no sink past it writes. The same run-from-here the desktop
@@ -179,6 +182,8 @@ struct Args {
     /// the issue asks for, and the reason this had to reach the run rather than
     /// only the planner.
     params: std::collections::BTreeMap<String, String>,
+    /// Where `params` came from, as a validation error or the run record says it.
+    param_source: String,
 }
 
 impl Args {
@@ -225,6 +230,9 @@ fn parse_args() -> Result<Args, String> {
     let mut clear_watermarks = Vec::new();
     let mut manifest = false;
     let mut verify_manifest = None;
+    // #317: --param NAME=VALUE, validated by the same typed boundary as every
+    // other surface once the run starts.
+    let mut params = std::collections::BTreeMap::new();
     // SQL type applied to the NEXT --set-watermark (so it can precede it).
     let mut pending_type = String::from("VARCHAR");
     let mut it = std::env::args().skip(1);
@@ -280,6 +288,19 @@ fn parse_args() -> Result<Args, String> {
             }
             "--clear-watermark" => clear_watermarks.push(take("--clear-watermark")?),
             "--manifest" => manifest = true,
+            "--param" => {
+                let spec = take("--param")?;
+                let (name, value) = spec
+                    .split_once('=')
+                    .map(|(n, v)| (n.trim().to_string(), v.to_string()))
+                    .filter(|(n, _)| !n.is_empty())
+                    .ok_or_else(|| format!("--param takes NAME=VALUE, got '{spec}'"))?;
+                // Two values for one name is a mistake to report, not a
+                // last-one-wins to guess at.
+                if params.insert(name.clone(), value).is_some() {
+                    return Err(format!("--param {name} is given more than once"));
+                }
+            }
             "--verify-manifest" => {
                 verify_manifest = Some(PathBuf::from(take("--verify-manifest")?))
             }
@@ -298,7 +319,8 @@ fn parse_args() -> Result<Args, String> {
         retry_of: None,
         output_bindings: Default::default(),
         skip_nodes: Default::default(),
-        params: Default::default(),
+        params,
+        param_source: "--param".to_string(),
         target,
         pipeline,
         workspace,
@@ -444,7 +466,7 @@ fn run_with(args: Args) -> Result<bool, String> {
     }
     let text = std::fs::read_to_string(&pipeline)
         .map_err(|e| format!("read {}: {}", pipeline.display(), e))?;
-    let mut doc: PipelineDoc = serde_json::from_str(&text)
+    let mut doc: PipelineDoc = serde_json::from_str(strip_bom(&text))
         .map_err(|e| format!("parse {}: {}", pipeline.display(), e))?;
     // #305: taken HERE, before the resolution passes below. apply_time_builtins
     // stamps a fresh date into the document on every run, so a hash taken after
@@ -480,7 +502,7 @@ fn run_with(args: Args) -> Result<bool, String> {
             .map(|(name, value)| duckle_duckdb_engine::params::Supplied {
                 name: name.clone(),
                 value: value.clone(),
-                source: "retry of the original run".to_string(),
+                source: args.param_source.clone(),
             })
             .collect();
         context::apply_params_from(&mut doc, &supplied)?.0
@@ -525,6 +547,22 @@ fn run_with(args: Args) -> Result<bool, String> {
         true => DuckdbEngine::new(duckdb),
         false => DuckdbEngine::new(duckdb).without_previews(),
     };
+    // Clear what an earlier run left behind, before adding to it.
+    //
+    // The documented headless deployment is cron calling `--pipeline`, and this
+    // path was the one surface that never reconciled: `retry`, `serve`, `web`,
+    // the desktop and the backfill paths all do. So on a box where CI cancels
+    // jobs or the machine reboots, every killed run left a receipt claiming to
+    // be in flight and no later run of any pipeline cleared it - measured by
+    // running `--pipeline` to completion after a kill and re-reading the
+    // receipt: still `running`, still naming a pid that no longer existed.
+    //
+    // It compounds: `prune` and `retention` both exclude running receipts from
+    // their candidates, so the MAX_RECEIPTS cap never applied to them, the
+    // directory grew without bound, and `prune` re-scans all of it on every
+    // receipt write. This is also the surface with no console to fix it from.
+    duckle_duckdb_engine::recovery::reclaim_abandoned(&workspace);
+
     // #259: identity before work. A run killed here still exists to be found,
     // and `reconcile` can later tell it apart from one that finished.
     let trigger = if args.retry_of.is_some() { "retry" } else { "manual" };
@@ -1041,6 +1079,10 @@ USAGE:
 
 OPTIONS:
     --json                 Emit the full report as JSON.
+    --format <fmt>         Machine-readable report: json, junit or sarif.
+                           json is the --json document plus a versioned
+                           findings envelope; junit/sarif are what CI systems
+                           and Code Scanning read directly.
     --data                 Also run both versions and diff the data (per-node
                            row counts). Sinks are stripped before running, so no
                            destination is written; sources are read and
@@ -1450,6 +1492,25 @@ kept verbatim under `body`.
 /// Best-effort about the INPUTS and exact about the answer: a workspace with no
 /// subscriptions, or no catalog yet, has no loops to report, and neither is an
 /// error - `validate` is run on workspaces that have never built a graph. What
+/// Why `validate --affected` cannot take a revision for `--head`.
+///
+/// `affected_cmd::select` returns NO paths at all when head is set, and says
+/// why in its own comment: a revision has no files on disk to point at. Every
+/// selected pipeline was therefore unlocatable, so the command exited 2 with
+/// "selected but could not be located", which reads like a broken workspace
+/// rather than a flag that cannot work - and when the range happened to touch
+/// no pipeline it exited 0 having validated nothing.
+///
+/// `duckle-runner affected` still takes `--head`, and should: it only PRINTS a
+/// selection, which is where comparing two commits is meaningful.
+fn affected_head_refusal(head: &str) -> Option<String> {
+    (!head.trim().is_empty()).then(|| {
+        "--head names a committed revision, which has no files on disk to validate. \
+         Check it out and pass --base only."
+            .to_string()
+    })
+}
+
 /// it must never do is stay quiet when it can see one.
 fn workspace_trigger_cycles() -> Vec<String> {
     use duckle_duckdb_engine::{catalog, subscribe};
@@ -1473,6 +1534,7 @@ fn run_validate() -> ExitCode {
     let mut affected_base: Option<String> = None;
     let mut affected_head = String::new();
     let mut affected_workspace = PathBuf::from(".");
+    let mut workspace_given = false;
     let mut include_uncertain = false;
     // #312: CI reads a format, not console text. `--json` stays exactly as it
     // was and is the same document as `--format json`, so nothing that already
@@ -1506,7 +1568,8 @@ fn run_validate() -> ExitCode {
             "--base" => affected_base = Some(it.next().unwrap_or_default()),
             "--head" => affected_head = it.next().unwrap_or_default(),
             "--workspace" => {
-                affected_workspace = it.next().map(PathBuf::from).unwrap_or(affected_workspace)
+                affected_workspace = it.next().map(PathBuf::from).unwrap_or(affected_workspace);
+                workspace_given = true
             }
             "--include-uncertain" => include_uncertain = true,
             "--pipeline" => match it.next() {
@@ -1530,6 +1593,10 @@ fn run_validate() -> ExitCode {
     if let Some(base) = affected_base {
         if base.trim().is_empty() {
             eprintln!("duckle-runner validate --affected: --base <rev> is required");
+            return ExitCode::from(2);
+        }
+        if let Some(why) = affected_head_refusal(&affected_head) {
+            eprintln!("duckle-runner validate --affected: {why}");
             return ExitCode::from(2);
         }
         let selection = affected_cmd::select(
@@ -1606,9 +1673,27 @@ Refusing rather than reporting a clean run.",
         let outcome = std::fs::read_to_string(path)
             .map_err(|e| format!("read: {e}"))
             .and_then(|text| {
-                serde_json::from_str::<PipelineDoc>(&text).map_err(|e| format!("parse: {e}"))
+                serde_json::from_str::<PipelineDoc>(strip_bom(&text))
+                    .map_err(|e| format!("parse: {e}"))
             })
-            .and_then(|doc| {
+            .and_then(|mut doc| {
+                // #166: a node may carry only `connectionRef`, and the saved
+                // connection supplies the auth props the builders require.
+                // Every run path resolves refs BEFORE it compiles; validate did
+                // not, so such a pipeline was failed here for a field the
+                // connection provides - `snk.salesforce: instanceUrl required`
+                // on a pipeline that runs perfectly. The shipped live-suite
+                // under docs/salesforce-sink is exactly that shape.
+                //
+                // Best effort: a workspace with no connection file, or one that
+                // cannot be decrypted, leaves the document untouched and the
+                // builder's own error stands.
+                let ws = if workspace_given {
+                    affected_workspace.clone()
+                } else {
+                    path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."))
+                };
+                let _ = duckle_secrets::resolve_connection_refs(&ws, &mut doc.nodes);
                 // #298: a dead property is not a compile error - the pipeline
                 // compiles perfectly and does the wrong thing. Checked here so
                 // the one surface whose whole job is to say "this is fine"
@@ -1745,8 +1830,8 @@ fn run_side_for_review(
     engine: &DuckdbEngine,
 ) -> Result<std::collections::BTreeMap<String, Option<u64>>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let mut doc: PipelineDoc =
-        serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let mut doc: PipelineDoc = serde_json::from_str(strip_bom(&text))
+        .map_err(|e| format!("parse {}: {e}", path.display()))?;
     // Sink-safety: drop every sink node (and any edge touching it) so the run
     // cannot write to a destination.
     let sink_ids: std::collections::HashSet<String> = doc
@@ -1795,6 +1880,9 @@ fn run_review() -> Result<i32, String> {
     let mut as_json = false;
     let mut as_data = false;
     let mut as_drift = false;
+    // #312: the same three shapes validate/test/contracts emit, from the same
+    // report module, so a CI job reads one format across every gate.
+    let mut format = String::new();
     let mut duckdb_arg: Option<PathBuf> = None;
     let mut workspace_arg: Option<PathBuf> = None;
     let mut it = std::env::args().skip(2); // skip the exe and the "review" verb
@@ -1803,6 +1891,17 @@ fn run_review() -> Result<i32, String> {
             "--before" => before = Some(PathBuf::from(it.next().ok_or("--before needs a value")?)),
             "--after" => after = Some(PathBuf::from(it.next().ok_or("--after needs a value")?)),
             "--json" => as_json = true,
+            "--format" => match it.next().as_deref() {
+                Some(f @ ("json" | "junit" | "sarif")) => format = f.to_string(),
+                Some(other) => {
+                    return Err(format!(
+                        "duckle-runner review: unknown --format {other}. Use json, junit or sarif."
+                    ))
+                }
+                None => {
+                    return Err("duckle-runner review: --format needs json, junit or sarif".into())
+                }
+            },
             "--data" => as_data = true,
             "--drift" => as_drift = true,
             "--duckdb" => duckdb_arg = Some(PathBuf::from(it.next().ok_or("--duckdb needs a value")?)),
@@ -1827,10 +1926,24 @@ fn run_review() -> Result<i32, String> {
 
     let load = |p: &Path| -> Result<serde_json::Value, String> {
         let text = std::fs::read_to_string(p).map_err(|e| format!("read {}: {e}", p.display()))?;
-        serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", p.display()))
+        serde_json::from_str(strip_bom(&text)).map_err(|e| format!("parse {}: {e}", p.display()))
     };
-    let bv = load(&before)?;
-    let av = load(&after)?;
+    let mut bv = load(&before)?;
+    let mut av = load(&after)?;
+    // Resolve saved connections on both sides before anything reads the plan.
+    // `plan_sql_map` in the engine is best effort: a side that fails to compile
+    // yields an EMPTY map and `planChanged` then falls back to false, so a
+    // pipeline whose credentials come from a connection would have reported its
+    // plan as unchanged however much the plan changed. The workspace is the one
+    // given, else each file's own parent, matching a run.
+    let ws_for = |p: &Path| -> PathBuf {
+        workspace_arg
+            .clone()
+            .or_else(|| p.parent().map(Path::to_path_buf))
+            .unwrap_or_else(|| PathBuf::from("."))
+    };
+    let _ = duckle_secrets::resolve_connection_refs_value(&ws_for(&before), &mut bv);
+    let _ = duckle_secrets::resolve_connection_refs_value(&ws_for(&after), &mut av);
 
     // Compile status of each side. A change that breaks compilation is the gate.
     let compiles = |v: &serde_json::Value| -> Result<(), String> {
@@ -1910,18 +2023,40 @@ fn run_review() -> Result<i32, String> {
         }
     }
 
-    if as_json {
-        let out = serde_json::json!({
-            "before": { "path": before.display().to_string(),
-                "compiles": before_compiles.is_ok(),
-                "error": before_compiles.as_ref().err() },
-            "after": { "path": after.display().to_string(),
-                "compiles": after_compiles.is_ok(),
-                "error": after_compiles.as_ref().err() },
-            "diff": report,
-            "dataDiff": data_section,
-            "schemaDrift": drift_section,
-        });
+    // #312: translate the review into the shared findings model so
+    // --format json/junit/sarif emits the same shapes as validate/test and
+    // contracts check. After-side compile, run and drift failures gate;
+    // before-side failures, node diffs and row-count changes are
+    // informational passes (see review_findings).
+    let after_file = after.display().to_string();
+    let before_file = before.display().to_string();
+    let out = serde_json::json!({
+        "before": { "path": before_file,
+            "compiles": before_compiles.is_ok(),
+            "error": before_compiles.as_ref().err() },
+        "after": { "path": after_file,
+            "compiles": after_compiles.is_ok(),
+            "error": after_compiles.as_ref().err() },
+        "diff": report.clone(),
+        "dataDiff": data_section.clone(),
+        "schemaDrift": drift_section.clone(),
+    });
+    if !format.is_empty() {
+        let findings = review_findings(
+            &before_file,
+            &after_file,
+            &before_compiles,
+            &after_compiles,
+            &report,
+            data_section.as_ref(),
+            drift_section.as_ref(),
+        );
+        match format.as_str() {
+            "json" => println!("{}", report::json("review", &findings, out)),
+            "junit" => println!("{}", report::junit("review", &findings)),
+            _ => println!("{}", report::sarif("review", &findings)),
+        }
+    } else if as_json {
         println!("{}", serde_json::to_string_pretty(&out).unwrap_or_default());
     } else {
         let yn = |r: &Result<(), String>| if r.is_ok() { "yes" } else { "no" };
@@ -2046,6 +2181,188 @@ fn run_review() -> Result<i32, String> {
             0
         },
     )
+}
+
+/// #312: translate a review into the shared findings model so
+/// --format json/junit/sarif emits the same shapes as validate/test and
+/// contracts check. Only the after side gates, so before-side failures are
+/// reported as informational passes: a review whose before version does not
+/// compile is usually a fix, and a red finding plus exit 0 would tell the CI
+/// job two opposite stories about the same run.
+fn review_findings(
+    before_file: &str,
+    after_file: &str,
+    before_compiles: &Result<(), String>,
+    after_compiles: &Result<(), String>,
+    report: &serde_json::Value,
+    data_section: Option<&serde_json::Value>,
+    drift_section: Option<&serde_json::Value>,
+) -> Vec<report::Finding> {
+    let mut findings: Vec<report::Finding> = Vec::new();
+    findings.push(match before_compiles {
+        Ok(()) => report::Finding::pass(before_file, "compile", "compiles".into()),
+        Err(e) => {
+            report::Finding::pass(before_file, "compile-before", format!("before does not compile: {e}"))
+        }
+    });
+    findings.push(match after_compiles {
+        Ok(()) => report::Finding::pass(after_file, "compile", "compiles".into()),
+        Err(e) => report::Finding::fail(after_file, "compile", e.clone()),
+    });
+    for (key, file, rule) in [
+        ("added", after_file, "node-added"),
+        ("removed", before_file, "node-removed"),
+        ("changed", after_file, "node-changed"),
+    ] {
+        for e in report["nodes"][key].as_array().into_iter().flatten() {
+            findings.push(report::Finding {
+                node: e["node"].as_str().map(str::to_string),
+                ..report::Finding::pass(
+                    file,
+                    rule,
+                    format!("{} ({})", rule, e["componentId"].as_str().unwrap_or("?")),
+                )
+            });
+        }
+    }
+    if let Some(d) = data_section {
+        for (file, side) in [(before_file, "before"), (after_file, "after")] {
+            let e = &d[side];
+            findings.push(if e["ok"] == serde_json::json!(true) {
+                report::Finding::pass(file, "data-run", format!("{side} ran"))
+            } else if side == "before" {
+                report::Finding::pass(
+                    file,
+                    "data-run-before",
+                    format!("before failed to run: {}", e["error"].as_str().unwrap_or("?")),
+                )
+            } else {
+                report::Finding::fail(
+                    file,
+                    "data-run",
+                    format!("after failed to run: {}", e["error"].as_str().unwrap_or("?")),
+                )
+            });
+        }
+        for r in d["changedRows"].as_array().into_iter().flatten() {
+            findings.push(report::Finding {
+                node: r["node"].as_str().map(str::to_string),
+                ..report::Finding::pass(
+                    after_file,
+                    "row-count",
+                    format!("rows {} -> {}", r["beforeRows"], r["afterRows"]),
+                )
+            });
+        }
+    }
+    if let Some(d) = drift_section {
+        if d["ok"] == serde_json::json!(false) {
+            findings.push(report::Finding::fail(
+                after_file,
+                "schema-drift",
+                format!("drift check failed: {}", d["error"].as_str().unwrap_or("")),
+            ));
+        } else {
+            for s in d["sources"].as_array().into_iter().flatten() {
+                let file = s["path"].as_str().unwrap_or(after_file);
+                let node = s["nodeId"].as_str().map(str::to_string);
+                let f = match s["status"].as_str() {
+                    Some("drift") if s["breaking"] == serde_json::json!(true) => {
+                        report::Finding::fail(
+                            file,
+                            "schema-drift",
+                            format!(
+                                "breaking drift - missing: {}, type changes: {}",
+                                s["missingColumns"], s["typeChanges"]
+                            ),
+                        )
+                    }
+                    Some("drift") => report::Finding::pass(
+                        file,
+                        "schema-drift",
+                        format!("additive drift - added: {}", s["addedColumns"]),
+                    ),
+                    Some("match") => {
+                        report::Finding::pass(file, "schema-drift", "schema matches".into())
+                    }
+                    Some(other) => {
+                        report::Finding::pass(file, "schema-drift", format!("not checked ({other})"))
+                    }
+                    None => report::Finding::pass(file, "schema-drift", "not checked".into()),
+                };
+                findings.push(report::Finding { node, ..f });
+            }
+        }
+    }
+    findings
+}
+
+#[cfg(test)]
+mod tests {
+
+    /// `validate --affected --head <rev>` had two outcomes and neither was
+    /// useful: exit 2 blaming the workspace when the range touched a pipeline,
+    /// exit 0 having validated nothing when it did not. Measured on this repo
+    /// before the refusal: `--base b532f6f^ --head b532f6f` listed 27 pipelines
+    /// as "selected but could not be located".
+    #[test]
+    fn validate_affected_refuses_a_head_revision() {
+        assert!(
+            super::affected_head_refusal("").is_none(),
+            "no --head is the working-tree comparison, which is the useful one"
+        );
+        assert!(super::affected_head_refusal("   ").is_none(), "blank is not a revision");
+        let why = super::affected_head_refusal("b532f6f").expect("a revision must be refused");
+        assert!(
+            why.contains("--base"),
+            "the refusal has to say what to do instead, not just say no: {why}"
+        );
+    }
+
+    use super::*;
+
+    /// A before version that does not compile is the ordinary shape of a fix
+    /// review, and the gate exits 0 on it - so it must not produce a failing
+    /// finding, or JUnit/SARIF would report red on a green run.
+    #[test]
+    fn review_findings_reports_a_before_compile_failure_as_information() {
+        let findings = review_findings(
+            "old.json",
+            "new.json",
+            &Err("broken".into()),
+            &Ok(()),
+            &serde_json::json!({ "nodes": {} }),
+            None,
+            None,
+        );
+        assert!(
+            findings.iter().all(|f| f.ok),
+            "a before-only failure cannot fail the report: {findings:?}"
+        );
+        let before = findings.iter().find(|f| f.rule == "compile-before").unwrap();
+        assert!(before.message.contains("broken"), "{before:?}");
+    }
+
+    /// A changed node carries its id onto the finding, so a SARIF viewer can
+    /// group the diff by node rather than by prose.
+    #[test]
+    fn review_findings_names_the_changed_node() {
+        let report = serde_json::json!({
+            "nodes": { "changed": [{ "node": "n1", "componentId": "xf.filter" }] }
+        });
+        let findings = review_findings(
+            "old.json",
+            "new.json",
+            &Ok(()),
+            &Ok(()),
+            &report,
+            None,
+            None,
+        );
+        let f = findings.iter().find(|f| f.rule == "node-changed").unwrap();
+        assert_eq!(f.node.as_deref(), Some("n1"));
+        assert!(f.message.contains("xf.filter"), "{f:?}");
+    }
 }
 
 fn main() -> ExitCode {
@@ -2486,7 +2803,7 @@ fn run_retry() -> ExitCode {
     let pipeline = PathBuf::from(&prior.pipeline_path);
     let doc: duckle_duckdb_engine::PipelineDoc = match std::fs::read_to_string(&pipeline)
         .map_err(|e| e.to_string())
-        .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+        .and_then(|t| serde_json::from_str(strip_bom(&t)).map_err(|e| e.to_string()))
     {
         Ok(d) => d,
         Err(e) => {
@@ -2575,6 +2892,7 @@ fn run_retry() -> ExitCode {
         // old ones is the safety check the issue asks for, and replaying them
         // is what makes the check pass by construction rather than by luck.
         params: prior.parameters.clone(),
+        param_source: "retry of the original run".to_string(),
     };
     match run_with(args) {
         Ok(true) => ExitCode::from(0),

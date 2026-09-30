@@ -3,6 +3,7 @@ import { KeyValueField } from '../fields/KeyValueField';
 import { createPortal } from 'react-dom';
 import { Plug, Save, X } from 'lucide-react';
 import type { ConnectionKind, ConnectionPayload, RepoItem } from '../../repo-types';
+import { testConnection, type ConnectionTestResult } from '../../tauri-bridge';
 
 type Props = {
     item: RepoItem | null;
@@ -45,7 +46,7 @@ export const CONNECTION_TYPES: ConnectionType[] = [
     {
         kind: 'sqlserver',
         label: 'SQL Server',
-        fields: ['host', 'port', 'database', 'username', 'password'],
+        fields: ['host', 'port', 'database', 'username', 'password', 'encrypt', 'trustCert'],
         defaultPort: 1433,
     },
     {
@@ -172,7 +173,16 @@ const FIELD_LABELS: Partial<Record<keyof ConnectionPayload, string>> = {
     authType: 'Auth type (bearer / basic / none)',
     authToken: 'Auth token',
     authHeader: 'Auth header name (default Authorization)',
+    encrypt: 'Encrypt connection',
+    trustCert: 'Trust server certificate',
 };
+
+// The kinds the engine can test (connection_test.rs `probe`): the ones nodes
+// reference whose connection a test reaches the way a run does.
+const TESTABLE_KINDS = new Set<ConnectionKind>(['postgres', 'redshift', 'mysql', 'mariadb', 'sqlserver', 's3', 'rest']);
+
+// Yes / No / the node's default, for a boolean the engine reads with as_bool.
+const BOOLEAN_FIELDS = new Set<keyof ConnectionPayload>(['encrypt', 'trustCert']);
 
 const SECRET_FIELDS = new Set<keyof ConnectionPayload>([
     'password',
@@ -205,13 +215,28 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
     // wider than the text/number inputs that made up this form until now.
     const setField = (
         key: keyof ConnectionPayload,
-        value: string | number | { key: string; value: string }[],
+        value: string | number | boolean | undefined | { key: string; value: string }[],
     ) => {
         setValues(v => ({ ...v, [key]: value }));
     };
 
+    const [test, setTest] = useState<ConnectionTestResult | null>(null);
+    const [testing, setTesting] = useState(false);
+    const canTest = TESTABLE_KINDS.has(kind);
+
+    const handleTest = async () => {
+        setTesting(true);
+        setTest(null);
+        try {
+            setTest(await testConnection({ ...values, kind }));
+        } finally {
+            setTesting(false);
+        }
+    };
+
     const handleKindChange = (newKind: ConnectionKind) => {
         setKind(newKind);
+        setTest(null);
         const m = CONNECTION_TYPES.find(c => c.kind === newKind);
         setValues(v => ({
             ...v,
@@ -310,6 +335,27 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                                             <option value="require">require</option>
                                             <option value="verify-ca">verify-ca</option>
                                             <option value="verify-full">verify-full</option>
+                                        </select>
+                                    </div>
+                                );
+                            }
+                            if (BOOLEAN_FIELDS.has(field)) {
+                                const v = values[field] as boolean | undefined;
+                                return (
+                                    <div className="modal-field" key={field}>
+                                        <label className="modal-field-label">
+                                            {meta?.labels?.[field] ?? FIELD_LABELS[field] ?? field}
+                                        </label>
+                                        <select
+                                            className="modal-input"
+                                            value={v === undefined ? '' : v ? 'true' : 'false'}
+                                            onChange={e =>
+                                                setField(field, e.target.value === '' ? undefined : e.target.value === 'true')
+                                            }
+                                        >
+                                            <option value="">Default</option>
+                                            <option value="true">Yes</option>
+                                            <option value="false">No</option>
                                         </select>
                                     </div>
                                 );
@@ -425,7 +471,34 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                     </div>
                 </div>
 
+                {test && (
+                    <div className={`conn-test ${test.ok ? 'conn-test-ok' : 'conn-test-fail'}`} role="status">
+                        <div className="conn-test-message">{test.message}</div>
+                        {test.objects.length > 0 && (
+                            <ul className="conn-test-objects">
+                                {test.objects.map(o => (
+                                    <li key={o}>{o}</li>
+                                ))}
+                            </ul>
+                        )}
+                    </div>
+                )}
+
                 <div className="modal-footer">
+                    <button
+                        type="button"
+                        className="btn btn-secondary conn-test-button"
+                        onClick={handleTest}
+                        disabled={!canTest || testing}
+                        title={
+                            canTest
+                                ? 'Connect with these settings and list what they can see'
+                                : 'Testing this kind of connection is not supported yet'
+                        }
+                    >
+                        <Plug size={13} />
+                        {testing ? 'Testing...' : 'Test connection'}
+                    </button>
                     <button type="button" className="btn btn-secondary" onClick={onCancel}>
                         Cancel
                     </button>

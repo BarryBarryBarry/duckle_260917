@@ -574,9 +574,39 @@ pub fn load_for_retry(
     Ok(b)
 }
 
+/// Stamp this process as the executor of plan `id`, and remember that it did.
+///
+/// #360: a pid is not an identity. A container entrypoint is PID 1 on every
+/// start, so a restarted one finds its own pid on the plan a killed executor
+/// left, and `process_alive` answers, correctly, that pid 1 is alive. Knowing
+/// which plans this process actually started tells the two apart - the fix run
+/// receipts got, applied here. Every place that stamps a plan's pid goes
+/// through this, so none of them can stamp without claiming.
+pub fn this_process_owns(id: &str) -> Option<u32> {
+    crate::runlock::claim_started(&owner_key(id));
+    Some(std::process::id())
+}
+
+/// This process has finished executing plan `id`.
+pub fn released(id: &str) {
+    crate::runlock::release_started(&owner_key(id));
+}
+
+fn owner_key(id: &str) -> String {
+    format!("backfill/{id}")
+}
+
+/// Whether a plan's executor is still at work: its pid is alive, and is not a
+/// previous life of this process's own pid.
+fn executor_alive(b: &Backfill, live_pids: &dyn Fn(u32) -> bool) -> bool {
+    b.pid.is_some_and(|pid| {
+        live_pids(pid) && !crate::runlock::started_by_a_previous_life(pid, &owner_key(&b.id))
+    })
+}
+
 /// Reclaim one backfill's abandoned `running` slices; true when any were.
 fn reclaim_abandoned(workspace: &Path, b: &Backfill, live_pids: &dyn Fn(u32) -> bool) -> bool {
-    if b.pid.is_some_and(|pid| live_pids(pid)) {
+    if executor_alive(b, live_pids) {
         return false;
     }
     if !b.partitions.iter().any(|p| p.state == State::Running) {
@@ -587,7 +617,7 @@ fn reclaim_abandoned(workspace: &Path, b: &Backfill, live_pids: &dyn Fn(u32) -> 
     // whatever landed since: a slice that finished, or an executor that
     // started back up and claimed the plan under its own pid.
     let reclaimed = update(workspace, &b.id, |plan| {
-        if plan.pid.is_some_and(|pid| live_pids(pid)) {
+        if executor_alive(plan, live_pids) {
             return false;
         }
         let mut touched = false;
@@ -803,6 +833,40 @@ mod tests {
         let changed = reconcile(tmp.path(), &crate::runlock::process_alive);
         assert_eq!(changed, vec!["bf-elsewhere".to_string()], "a dead executor's slice was not reclaimed");
         assert_eq!(load(tmp.path(), "bf-elsewhere").unwrap().partitions[0].state, State::Interrupted);
+    }
+
+    /// #360: the container case. A plan naming THIS process's pid that this
+    /// process never started was left by a previous life of the pid, and
+    /// `process_alive` says it is alive because it is. Reclaimed - while a plan
+    /// this process really is executing, under the same pid, is left alone.
+    /// Without that second half, reaping every self-pid plan would pass.
+    #[test]
+    fn a_plan_naming_this_pid_that_this_process_never_started_is_reclaimed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut left = plan(("2020-01-01", "2020-01-02"));
+        left.id = "bf-previous-life".into();
+        left.pid = Some(std::process::id());
+        left.partitions[0].state = State::Running;
+        save(tmp.path(), &left).unwrap();
+
+        let mut mine = plan(("2020-01-01", "2020-01-02"));
+        mine.id = "bf-mine".into();
+        mine.pid = this_process_owns(&mine.id);
+        mine.partitions[0].state = State::Running;
+        save(tmp.path(), &mine).unwrap();
+
+        let changed = reconcile(tmp.path(), &crate::runlock::process_alive);
+        released(&mine.id);
+        assert_eq!(changed, vec!["bf-previous-life".to_string()]);
+        assert_eq!(
+            load(tmp.path(), "bf-previous-life").unwrap().partitions[0].state,
+            State::Interrupted
+        );
+        assert_eq!(
+            load(tmp.path(), "bf-mine").unwrap().partitions[0].state,
+            State::Running,
+            "this process's own plan was reaped"
+        );
     }
 
     #[test]

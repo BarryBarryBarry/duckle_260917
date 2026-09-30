@@ -308,7 +308,11 @@ export function runVarNames(nodes: Node<DuckleNodeData>[]): Set<string> {
 export function discoverParams(
     nodes: Node<DuckleNodeData>[],
     knownVars: Record<string, string>,
+    declared: Iterable<string> = [],
 ): string[] {
+    // A declared parameter (#317) is asked for with its own typed control and
+    // resolved by the engine, so it is not one of these.
+    const isDeclared = new Set(declared);
     // A run variable has a value by the time anything reads it. Prompting for
     // one asks the author for something the run supplies, and a typed value
     // would be substituted here and override it.
@@ -328,6 +332,7 @@ export function discoverParams(
                 if (PARAM_BUILTINS.has(key) || resolveTimeBuiltin(key) !== null) continue;
                 if (Object.prototype.hasOwnProperty.call(knownVars, key)) continue;
                 if (setByRun.has(key)) continue;
+                if (isDeclared.has(key)) continue;
                 found.add(key);
             }
         } else if (Array.isArray(value)) {
@@ -340,12 +345,51 @@ export function discoverParams(
     return Array.from(found).sort();
 }
 
+/** #317: one declared run parameter, as the engine's `params::ParamSpec`. */
+export type ParamSpec = {
+    type?: 'string' | 'integer' | 'number' | 'boolean' | 'date' | 'datetime' | 'secret';
+    required?: boolean;
+    default?: string;
+    enum?: string[];
+    minimum?: number;
+    maximum?: number;
+    pattern?: string;
+    description?: string;
+};
+
+/** The top-level fields of a pipeline document a run needs besides its graph. */
+export type PipelineRunFields = {
+    formatVersion?: number;
+    parameters?: Record<string, ParamSpec>;
+    maxRunSeconds?: number;
+    resourcePool?: string;
+};
+
+/**
+ * #317: what a run needs from the pipeline document besides its nodes and
+ * edges. The editor holds the whole file, and sending only the graph dropped the
+ * parameter contract, the run time limit and the resource pool, so a run
+ * started here was held to none of them.
+ */
+export function pipelineRunFields(pipeline: unknown): PipelineRunFields {
+    const p = (pipeline ?? {}) as Record<string, unknown>;
+    const out: PipelineRunFields = {};
+    if (typeof p.formatVersion === 'number') out.formatVersion = p.formatVersion;
+    if (p.parameters && typeof p.parameters === 'object' && !Array.isArray(p.parameters)) {
+        out.parameters = p.parameters as Record<string, ParamSpec>;
+    }
+    if (typeof p.maxRunSeconds === 'number') out.maxRunSeconds = p.maxRunSeconds;
+    if (typeof p.resourcePool === 'string' && p.resourcePool) out.resourcePool = p.resourcePool;
+    return out;
+}
+
 export function resolveForRun(
     nodes: Node<DuckleNodeData>[],
     repo: RepoItem[],
     workspacePath?: string | null,
     extraVars?: Record<string, string>,
     runtimeParams?: Record<string, string>,
+    leaveForEngine: Iterable<string> = [],
 ): Node<DuckleNodeData>[] {
     // One `now` for the whole pass so every placeholder (and every offset) in a
     // run stamps the exact same instant (mirrors context.rs:198-200).
@@ -364,6 +408,10 @@ export function resolveForRun(
     // no layer above - a static context, the global context, a typed parameter -
     // may pre-empt it. The engine's headless path skips the same names.
     for (const name of runVarNames(nodes)) delete vars[name];
+    // A declared parameter (#317) is the engine's to fill: it checks the value
+    // against the declaration, applies the default and treats it as a value. A
+    // context of the same name substituted here would bypass all three.
+    for (const name of leaveForEngine) delete vars[name];
     const sqlRoutines = new Map<string, string>();
     // Map a workspace pipeline id (or name) to its on-disk file path so a
     // dropdown-stored id resolves to something the engine can read.

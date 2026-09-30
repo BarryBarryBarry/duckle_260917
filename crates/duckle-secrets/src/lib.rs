@@ -72,22 +72,86 @@ pub fn workspace_key(workspace: &Path, create: bool) -> Result<[u8; 32], String>
     }
     // Create the key file owner-only from the start; writing first and
     // chmod'ing after left a brief world-readable window (TOCTOU).
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .map_err(|e| format!("create key: {}", e))?;
-        f.write_all(&k).map_err(|e| format!("write key: {}", e))?;
+    //
+    // create_new, not create: two processes reaching a fresh workspace together
+    // - the desktop saving a deploy target while `duckle serve` encrypts a
+    // connection - each found no key, each generated one, each wrote the same
+    // path, and each RETURNED ITS OWN. One key survived on disk and whatever the
+    // other had sealed became an `enc:v2:` blob that no key in the workspace
+    // opens, surfacing much later as an auth failure. The first writer is now
+    // authoritative and the loser adopts what is on disk, which is what this
+    // function's own rule - "a missing key is an error rather than minting a
+    // wrong key" - asks for.
+    let created = {
+        #[cfg(unix)]
+        {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+                .and_then(|mut f| f.write_all(&k))
+        }
+        #[cfg(not(unix))]
+        {
+            use std::io::Write;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .and_then(|mut f| f.write_all(&k))
+        }
+    };
+    match created {
+        Ok(()) => Ok(k),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Someone got there first. Theirs is the key every other process in
+            // this workspace will read, so this one uses it too.
+            adopt_existing_key(&path)
+        }
+        Err(e) => Err(format!("create key: {}", e)),
     }
-    #[cfg(not(unix))]
-    std::fs::write(&path, k).map_err(|e| format!("write key: {}", e))?;
-    Ok(k)
+}
+
+/// Read the key another process just claimed, waiting for it to be written.
+///
+/// Creating the file and writing it are two steps, so the process that lost the
+/// race can arrive between them and find the name taken and the file EMPTY.
+/// Treating that instant as corruption is wrong - the bytes are moments away -
+/// and it is not hypothetical: the concurrent-minting test passes on Windows by
+/// timing and failed on Linux and macOS, every racer panicking on a 0-byte read.
+///
+/// So this waits, briefly, for the size the file is about to have. A file that
+/// never reaches 32 bytes is reported rather than replaced: minting a new key
+/// over it would make every secret already sealed in this workspace unopenable,
+/// silently. That also covers the one case waiting cannot fix, a process killed
+/// between the create and the write, which leaves a key nobody can complete.
+fn adopt_existing_key(path: &Path) -> Result<[u8; 32], String> {
+    // ~500ms in total, which is far longer than the window and still short
+    // enough that a genuinely empty key file reports quickly.
+    for attempt in 0..50 {
+        match std::fs::read(path) {
+            Ok(bytes) if bytes.len() == 32 => {
+                let mut on_disk = [0u8; 32];
+                on_disk.copy_from_slice(&bytes);
+                return Ok(on_disk);
+            }
+            Ok(_) | Err(_) if attempt < 49 => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Ok(bytes) => {
+                return Err(format!(
+                    "workspace key at {} is {} bytes, not 32",
+                    path.display(),
+                    bytes.len()
+                ))
+            }
+            Err(e) => return Err(format!("read key: {}", e)),
+        }
+    }
+    unreachable!("the loop returns on its last attempt")
 }
 
 pub fn is_encrypted(s: &str) -> bool {
@@ -555,6 +619,17 @@ fn merge_rest_connection(conn: &JsonValue, map: &mut serde_json::Map<String, Jso
     }
 }
 
+/// The properties a `component_id` node gets from `conn`, as if it named the
+/// connection and nothing else. "Test connection" uses it on the connection
+/// being edited, which may not be saved yet, so the test sees exactly what a
+/// run of that node would.
+pub fn connection_node_props(component_id: &str, conn: &JsonValue) -> Result<JsonValue, String> {
+    let kind = conn.get("kind").and_then(|v| v.as_str()).unwrap_or("");
+    let mut props = JsonValue::Object(Default::default());
+    merge_generic_connection(component_id, kind, conn, &mut props)?;
+    Ok(props)
+}
+
 fn merge_generic_connection(
     component_id: &str,
     kind: &str,
@@ -589,6 +664,10 @@ fn merge_generic_connection(
         "connectTimeout",
         "options",
         "connParams",
+        // SQL Server's TLS choices, so a connection to a server with a
+        // self-signed certificate works without each node saying so.
+        "encrypt",
+        "trustCert",
     ];
     let map = props
         .as_object_mut()
@@ -637,12 +716,49 @@ fn merge_generic_connection(
             map.insert("account".into(), JsonValue::String(h.into()));
         }
     }
+    // SQL Server and Synapse nodes name the login `user`, where the connection
+    // stores `username` (#363). Without this the connection's user never
+    // reached the node, and a node that relied on its connection ran as nobody.
+    if matches!(component_id, "src.sqlserver" | "snk.sqlserver" | "src.synapse" | "snk.synapse") {
+        if let Some(u) = conn_str(conn, "username") {
+            map.insert("user".into(), JsonValue::String(u.into()));
+        }
+    }
     Ok(())
 }
 
 /// Resolve saved-connection references on every node in a pipeline document, in
 /// place. Call BEFORE the `${ENV:...}` pass so a connection field stored as a
 /// placeholder still expands afterwards.
+/// The same resolution for a document held as raw JSON.
+///
+/// A caller that is going to DIFF or hash a document cannot round-trip it
+/// through `PipelineDoc` first: serde drops whatever the struct does not model,
+/// and a diff would then report those fields as absent on both sides. This
+/// walks the value and rewrites only each node's properties in place.
+pub fn resolve_connection_refs_value(
+    workspace: &Path,
+    doc: &mut JsonValue,
+) -> Result<(), String> {
+    let Some(nodes) = doc.get_mut("nodes").and_then(|n| n.as_array_mut()) else {
+        return Ok(());
+    };
+    for node in nodes.iter_mut() {
+        let Some(component_id) = node
+            .pointer("/data/componentId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        let Some(props) = node.pointer_mut("/data/properties") else {
+            continue;
+        };
+        resolve_connection_ref_props(workspace, &component_id, props)?;
+    }
+    Ok(())
+}
+
 pub fn resolve_connection_refs(workspace: &Path, nodes: &mut [PipelineNode]) -> Result<(), String> {
     for node in nodes.iter_mut() {
         let Some(component_id) = node.data.component_id.clone() else {
@@ -680,6 +796,79 @@ mod tests {
         dir
     }
 
+
+    /// The process that loses the race waits for the winner's bytes.
+    ///
+    /// Creating the file and writing it are two steps. A racer that arrives
+    /// between them finds the name taken and the file EMPTY, and reading that
+    /// as corruption fails a mint that was about to succeed. This is the case
+    /// CI caught on Linux and macOS while Windows passed on timing, so it is
+    /// pinned here without a race: the file is left empty on purpose and filled
+    /// 80ms later.
+    #[test]
+    fn a_key_file_still_being_written_is_waited_for() {
+        let ws = temp_ws("mint_window");
+        let _ = std::fs::remove_dir_all(&ws);
+        let path = ws.join(".duckle").join("keys").join("secret.key");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // Exactly what the winner leaves behind between create_new and write.
+        std::fs::write(&path, b"").unwrap();
+
+        let writer = {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(80));
+                std::fs::write(&path, [9u8; 32]).unwrap();
+            })
+        };
+        let k = workspace_key(&ws, true).expect("the key the winner is writing");
+        writer.join().unwrap();
+        assert_eq!(
+            k,
+            [9u8; 32],
+            "the loser must adopt the winner's key, not fail on the instant before it lands"
+        );
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// Every process that mints the workspace key at once ends up with the same
+    /// key.
+    ///
+    /// Each racer used to generate its own 32 bytes, write them over the same
+    /// path and return the copy it had generated rather than the one that
+    /// survived. Whatever the losers sealed was then unopenable by any key in
+    /// the workspace, and the failure surfaced later as a bad password.
+    #[test]
+    fn concurrent_minting_agrees_on_the_key_that_is_on_disk() {
+        let ws = temp_ws("mint_race");
+        let _ = std::fs::remove_dir_all(&ws);
+        std::fs::create_dir_all(&ws).unwrap();
+
+        const RACERS: usize = 8;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(RACERS));
+        let handles: Vec<_> = (0..RACERS)
+            .map(|_| {
+                let ws = ws.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    workspace_key(&ws, true).expect("mint or adopt")
+                })
+            })
+            .collect();
+        let keys: Vec<[u8; 32]> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+        let on_disk = std::fs::read(ws.join(".duckle").join("keys").join("secret.key")).unwrap();
+        for (i, k) in keys.iter().enumerate() {
+            assert_eq!(
+                k.as_slice(),
+                on_disk.as_slice(),
+                "racer {i} kept a key that is not the one in the workspace, so everything \
+                 it sealed is unopenable"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
 
     /// The property the binding exists for.
     ///
@@ -1143,6 +1332,52 @@ mod tests {
         let p = node.data.properties.unwrap();
         assert_eq!(p["account"], "acme-xy12345");
         assert_eq!(p["username"], "u");
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// #363: SQL Server and Synapse nodes name the login `user`; a saved
+    /// connection stores it as `username`. Nothing mapped one to the other, so a
+    /// node that took everything from its connection ran as nobody and failed
+    /// "user required", with the user sitting in the connection.
+    #[test]
+    fn a_sql_server_connection_supplies_the_user_its_nodes_read() {
+        let ws = temp_ws("mssql");
+        write_connection(
+            &ws,
+            "prod",
+            r#"{"kind":"sqlserver","host":"db.local","port":1433,"database":"sales","username":"etl","password":"p"}"#,
+        );
+        for component in ["src.sqlserver", "snk.sqlserver", "src.synapse", "snk.synapse"] {
+            let mut node = sf_node(component, serde_json::json!({"connectionRef": "prod"}));
+            resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap();
+            let p = node.data.properties.unwrap();
+            assert_eq!(p["user"], "etl", "{component}: {p}");
+            assert_eq!(p["host"], "db.local", "{component}");
+            assert_eq!(p["database"], "sales", "{component}");
+        }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// #363: Autodetect reads one node's properties, not a pipeline. A node that
+    /// takes its host from a saved connection has to have it resolved there too,
+    /// or the Schema tab fails "host required" while the run works.
+    #[test]
+    fn one_nodes_properties_resolve_their_saved_connection() {
+        let ws = temp_ws("props");
+        write_connection(
+            &ws,
+            "prod",
+            r#"{"kind":"sqlserver","host":"db.local","database":"sales","username":"etl","password":"p"}"#,
+        );
+        let mut props = serde_json::json!({ "connectionRef": "prod", "tableName": "orders" });
+        resolve_connection_ref_props(&ws, "src.sqlserver", &mut props).unwrap();
+        assert_eq!(props["host"], "db.local");
+        assert_eq!(props["user"], "etl");
+        assert_eq!(props["tableName"], "orders", "the node's own fields stay");
+        // No ref, nothing to do.
+        let mut plain = serde_json::json!({ "host": "h" });
+        resolve_connection_ref_props(&ws, "src.sqlserver", &mut plain).unwrap();
+        assert_eq!(plain, serde_json::json!({ "host": "h" }));
         let _ = std::fs::remove_dir_all(&ws);
     }
 

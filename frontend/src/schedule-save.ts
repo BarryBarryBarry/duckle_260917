@@ -7,6 +7,11 @@ export type ScheduleEdit = {
     name: string;
     enabled: boolean;
     kind: ScheduleKind;
+    /**
+     * #317: set only when the dialog showed the pipeline's declared parameters.
+     * Left out, the values the schedule already has are kept.
+     */
+    params?: Record<string, string>;
 };
 
 /**
@@ -39,6 +44,7 @@ export function serverSchedule(s: Schedule | undefined, name: string): Record<st
         ...trigger,
         ...(s.timezone ? { timezone: s.timezone } : {}),
         ...(s.exclude ? { exclude: s.exclude } : {}),
+        ...(s.params ? { params: s.params } : {}),
     };
 }
 
@@ -80,5 +86,6 @@ export function scheduleForSave(loaded: Schedule | undefined, edit: ScheduleEdit
         name: edit.name.trim() || 'Schedule',
         enabled: edit.enabled,
         kind: edit.kind,
+        ...(edit.params !== undefined ? { params: edit.params } : {}),
     };
 }

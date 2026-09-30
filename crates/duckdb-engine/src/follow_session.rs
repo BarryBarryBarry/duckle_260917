@@ -125,6 +125,9 @@ pub fn begin(
     pipeline_name: &str,
     pipeline_path: &str,
 ) -> FollowSession {
+    // #360: claimed, so a session naming this pid that this process never began
+    // reads as a previous life's - the same fix run receipts got.
+    crate::runlock::claim_started(&owner_key(session_id));
     let session = FollowSession {
         session_id: session_id.to_string(),
         pipeline_name: pipeline_name.to_string(),
@@ -168,9 +171,14 @@ pub fn record_poll(
 
 /// The watcher stopped on purpose.
 pub fn finish(workspace: &Path, session: &mut FollowSession) {
+    crate::runlock::release_started(&owner_key(&session.session_id));
     session.state = STOPPED.to_string();
     session.pid = None;
     let _ = write(workspace, session);
+}
+
+fn owner_key(session_id: &str) -> String {
+    format!("follow/{session_id}")
 }
 
 /// Turn abandoned `running` sessions into an honest `interrupted`.
@@ -184,7 +192,10 @@ pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<Strin
         if session.state != RUNNING {
             continue;
         }
-        if session.pid.is_some_and(|pid| live_pids(pid)) {
+        if session.pid.is_some_and(|pid| {
+            live_pids(pid)
+                && !crate::runlock::started_by_a_previous_life(pid, &owner_key(&session.session_id))
+        }) {
             continue;
         }
         session.state = INTERRUPTED.to_string();
@@ -259,6 +270,23 @@ mod tests {
         assert_eq!(changed, vec![dead.session_id.clone()]);
         assert_eq!(load(tmp.path(), &dead.session_id).unwrap().state, INTERRUPTED);
         assert_eq!(load(tmp.path(), &alive.session_id).unwrap().state, RUNNING);
+    }
+
+    /// #360: a session naming this process's pid that this process never
+    /// began - what a restarted container's PID 1 finds - is interrupted, and
+    /// the one this process did begin, under the same pid, is not.
+    #[test]
+    fn a_session_naming_this_pid_that_this_process_never_began_is_interrupted() {
+        let tmp = ws();
+        let mine = begin(tmp.path(), "follow-mine", "a", "a.json");
+        let mut left = mine.clone();
+        left.session_id = "follow-previous-life".into();
+        write(tmp.path(), &left).unwrap();
+
+        let changed = reconcile(tmp.path(), &crate::runlock::process_alive);
+        assert_eq!(changed, vec!["follow-previous-life".to_string()]);
+        assert_eq!(load(tmp.path(), "follow-previous-life").unwrap().state, INTERRUPTED);
+        assert_eq!(load(tmp.path(), "follow-mine").unwrap().state, RUNNING, "our own watcher");
     }
 
     #[test]

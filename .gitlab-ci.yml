@@ -62,7 +62,7 @@ test:linux:
   <<: *rust_defaults
   stage: test
   variables:
-    DUCKDB_VERSION: "1.5.3"
+    DUCKDB_VERSION: "1.5.5"
   before_script:
     - rustc --version
     - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates
@@ -185,7 +185,7 @@ integration:postgres:
     POSTGRES_HOST_AUTH_METHOD: trust
   before_script:
     - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates
-    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v1.5.3/duckdb_cli-linux-amd64.zip" -o duckdb.zip
+    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip" -o duckdb.zip
     - unzip -o duckdb.zip -d /tmp/duckdb
     - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
     - $DUCKLE_DUCKDB_BIN :memory: -c "INSTALL postgres;"
@@ -209,7 +209,7 @@ integration:mysql:
         MYSQL_DATABASE: ducktest
   before_script:
     - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates default-mysql-client
-    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v1.5.3/duckdb_cli-linux-amd64.zip" -o duckdb.zip
+    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip" -o duckdb.zip
     - unzip -o duckdb.zip -d /tmp/duckdb
     - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
     - $DUCKLE_DUCKDB_BIN :memory: -c "INSTALL mysql;"
@@ -231,15 +231,17 @@ integration:minio:
   <<: *rust_defaults
   stage: integration
   services:
-    - name: minio/minio:latest
+    # The official MinIO images are gone from Docker Hub and quay.io; the same
+    # Chainguard build, pinned by digest, the GitHub minio and iceberg jobs use.
+    - name: cgr.dev/chainguard/minio@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
       alias: minio
-      command: ["server", "/data", "--console-address", ":9001"]
+      command: ["server", "/data"]
       variables:
         MINIO_ROOT_USER: minioadmin
         MINIO_ROOT_PASSWORD: minioadmin
   before_script:
     - apt-get update -qq && apt-get install -y -qq unzip curl ca-certificates
-    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v1.5.3/duckdb_cli-linux-amd64.zip" -o duckdb.zip
+    - curl -fsSL "https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip" -o duckdb.zip
     - unzip -o duckdb.zip -d /tmp/duckdb
     - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
     # Wait for MinIO to be ready.
@@ -247,8 +249,14 @@ integration:minio:
         curl -fs http://minio:9000/minio/health/live > /dev/null && break;
         echo "Waiting for MinIO... ($i)"; sleep 2;
       done
-    # Seed bucket + a test object via DuckDB itself.
-    - $DUCKLE_DUCKDB_BIN :memory: -c "
+    # A fresh MinIO has no buckets and DuckDB cannot create one, so the COPY
+    # below failed. One SigV4-signed PUT makes it; curl has signed since 7.75.
+    - curl -fsS -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user minioadmin:minioadmin http://minio:9000/duckle-test
+    # Seed a test object via DuckDB itself. A block scalar: as a plain scalar
+    # the `:memory: ` in it read as a mapping key, and the whole file failed to
+    # parse - so GitLab could not load this pipeline at all.
+    - |
+      $DUCKLE_DUCKDB_BIN :memory: -c "
         INSTALL httpfs; LOAD httpfs;
         CREATE OR REPLACE SECRET seed (
           TYPE S3, KEY_ID 'minioadmin', SECRET 'minioadmin',
@@ -262,6 +270,7 @@ integration:minio:
     - export DUCKLE_DUCKDB_BIN=/tmp/duckdb/duckdb
     - export DUCKLE_MINIO_HOST=minio DUCKLE_MINIO_PORT=9000 DUCKLE_MINIO_BUCKET=duckle-test DUCKLE_MINIO_ACCESS_KEY=minioadmin DUCKLE_MINIO_SECRET_KEY=minioadmin
     - cargo test -p duckle-duckdb-engine --test execution -- minio_
+    - cargo test -p duckle-duckdb-engine --test keyless_cloud
   rules:
     - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "main"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"

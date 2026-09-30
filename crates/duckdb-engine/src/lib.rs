@@ -58,6 +58,8 @@ pub mod rundiff;
 pub mod props;
 pub mod affected;
 pub mod format;
+pub mod fromsql;
+pub mod connection_test;
 pub mod catalog;
 pub mod runlock;
 pub mod s3;
@@ -73,6 +75,7 @@ pub mod nodeout;
 pub mod occurrences;
 pub mod outcache;
 pub mod params;
+pub mod pgoutput;
 pub mod retry;
 pub mod sla;
 pub mod plans;
@@ -89,13 +92,15 @@ pub mod watermark;
 pub mod xsd;
 pub mod xsd_contract;
 mod connectors;
+mod sharepoint;
 pub use connectors::remote_fingerprint;
 mod run_log;
 mod util;
 pub(crate) use util::*;
-pub use util::{is_secret_prop_key, literal_secrets};
+pub use util::{is_secret_prop_key, literal_secrets, SECRET_NEEDLES};
 pub use history::{append_run_record, load_run_history, record_run, RunRecord};
 pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
+pub use connection_test::ConnectionTest;
 use plan::{
     quote_ident, AiChunkSpec, AiClassifySpec, AiDedupeSpec, AiEmbedSpec, AiLlmSpec, AiOnInvalid,
     AiPiiSpec, AiResponseFormat,
@@ -217,6 +222,16 @@ pub struct DuckdbEngine {
     /// [`DuckdbEngine::execute_pipeline_with_events`]; `None` outside a run,
     /// where the node answers as soon as its rows are stored.
     webhook_acks: Option<Arc<std::sync::Mutex<Vec<std::net::TcpStream>>>>,
+    /// #329 / #296: the run's `maxRunSeconds`, once armed. Set on the clone a
+    /// run executes on, so a called child inherits it and arms no second one:
+    /// the limit is on the run that was started.
+    deadline: Option<Arc<Deadline>>,
+}
+
+/// A run's time limit, and whether it has been hit.
+struct Deadline {
+    secs: u64,
+    fired: AtomicBool,
 }
 
 impl std::fmt::Debug for DuckdbEngine {
@@ -383,6 +398,7 @@ impl DuckdbEngine {
             run_id: None,
             probing: false,
             webhook_acks: None,
+            deadline: None,
         }
     }
 
@@ -500,6 +516,7 @@ impl DuckdbEngine {
             // A real run is not a probe, whatever this engine was.
             probing: false,
             webhook_acks: None,
+            deadline: None,
         }
     }
 
@@ -521,6 +538,7 @@ impl DuckdbEngine {
             inherited_subs: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             probing: true,
             webhook_acks: None,
+            deadline: None,
         }
     }
 
@@ -541,6 +559,17 @@ impl DuckdbEngine {
 
     pub fn clear_cancel(&self) {
         self.cancel.store(false, Ordering::Relaxed);
+    }
+
+    /// When a cancelled run was stopped by its own `maxRunSeconds`, the error to
+    /// report instead: a timeout is a failure, so failure alerts fire, where a
+    /// cancel somebody asked for is not.
+    fn deadline_error(&self, was_cancelled: bool) -> Option<String> {
+        let d = self.deadline.as_ref().filter(|d| was_cancelled && d.fired.load(Ordering::Relaxed))?;
+        Some(format!(
+            "the run exceeded its time limit of {}s (maxRunSeconds) and was stopped",
+            d.secs
+        ))
     }
 
     /// Returns Err(Cancelled) if a cancel has been requested. Used at
@@ -779,9 +808,29 @@ impl DuckdbEngine {
             .unwrap_or_default()
     }
 
+    /// The rows of the LAST statement in `sql`, for a script that sets up
+    /// before it asks. A `CREATE SECRET` answers with a `Success` row of its own,
+    /// which `run_rows` returns as if it were the query's; measured on 1.5.5, an
+    /// empty final result still prints `[]`, so the last array is always the
+    /// final statement's.
+    fn run_last_rows(&self, db: Option<&Path>, sql: &str) -> Result<Vec<JsonValue>, EngineError> {
+        let out = self.run(db, sql, true)?;
+        match parse_json_arrays_checked(&out) {
+            Ok(arrays) => Ok(arrays.into_iter().last().unwrap_or_default()),
+            Err((_, reason)) => Err(json_bridge_failure(&reason, &out)),
+        }
+    }
+
     fn run_rows(&self, db: Option<&Path>, sql: &str) -> Result<Vec<JsonValue>, EngineError> {
         let out = self.run(db, sql, true)?;
-        Ok(parse_json_arrays(&out).into_iter().next().unwrap_or_default())
+        // Checked, because these rows are the ones a sink writes: 26 sink
+        // executors reach their target through here, and an unreadable result
+        // that came back as "no rows" made every one of them report success
+        // having written nothing.
+        match parse_json_arrays_checked(&out) {
+            Ok(arrays) => Ok(arrays.into_iter().next().unwrap_or_default()),
+            Err((_, reason)) => Err(json_bridge_failure(&reason, &out)),
+        }
     }
 
     /// The run variables set so far, as text, for passing into a child job.
@@ -903,12 +952,13 @@ impl DuckdbEngine {
         };
         let prelude = self.source_prelude(format, &options);
 
+        // The prelude can open with a CREATE SECRET, whose own answer comes first.
         let describe_sql = format!("{}DESCRIBE {};", prelude, select);
-        let cols = self.run_rows(None, &describe_sql)?;
+        let cols = self.run_last_rows(None, &describe_sql)?;
         let schema: Vec<Column> = cols.iter().filter_map(parse_describe_row).collect();
 
         let sample_sql = format!("{}{} LIMIT {};", prelude, select, PREVIEW_LIMIT);
-        let rows = self.run_rows(None, &sample_sql).unwrap_or_default();
+        let rows = self.run_last_rows(None, &sample_sql).unwrap_or_default();
 
         Ok(Inspection {
             schema,
@@ -929,6 +979,24 @@ impl DuckdbEngine {
         format: &str,
         options: &JsonValue,
     ) -> Result<Inspection, EngineError> {
+        let out = self.run_driver_probe(format, options, PREVIEW_ROW_LIMIT)?;
+        let out_str = out.to_string_lossy().replace('\\', "/");
+        // The parquet carries the real schema the driver returned.
+        let inspection = self.inspect("parquet", serde_json::json!({ "path": out_str }));
+        let _ = std::fs::remove_file(&out);
+        inspection
+    }
+
+    /// Run `src.<format>` with `options`, its query capped at `cap` rows, into a
+    /// throwaway parquet, and return that file for the caller to read and remove.
+    /// The driver is the one a run uses, so what lands in the file is what a run
+    /// of the node would read.
+    fn run_driver_probe(
+        &self,
+        format: &str,
+        options: &JsonValue,
+        cap: usize,
+    ) -> Result<std::path::PathBuf, EngineError> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static INSPECT_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -948,7 +1016,7 @@ impl DuckdbEngine {
         let component_id = format!("src.{}", format);
         // Cap the driver fetch where we can; correctness does not depend on it.
         let mut src_props = options.clone();
-        if let Some(capped) = plan::preview_source_query(format, &src_props, PREVIEW_ROW_LIMIT) {
+        if let Some(capped) = plan::preview_source_query(format, &src_props, cap) {
             if let Some(obj) = src_props.as_object_mut() {
                 obj.insert("query".to_string(), JsonValue::String(capped));
             }
@@ -1015,10 +1083,7 @@ impl DuckdbEngine {
                 .unwrap_or_else(|| format!("autodetect failed for src.{}", format));
             return Err(EngineError::Query(msg));
         }
-        // The parquet carries the real schema the driver returned.
-        let inspection = self.inspect("parquet", serde_json::json!({ "path": out_str }));
-        let _ = std::fs::remove_file(&out);
-        inspection
+        Ok(out)
     }
 
     /// SQL Server / Synapse autodetect that never trips the tiberius COLMETADATA
@@ -1221,6 +1286,49 @@ impl DuckdbEngine {
     /// (json_serialize_sql, a core function - no extension) and resolves the
     /// lineage from it. Foundation for impact analysis / breaking-change diff /
     /// data contracts.
+    /// "From SQL": a pipeline document from a pasted SELECT, one step per CTE
+    /// (see `fromsql`). Also returns why, when the query had to be kept as one
+    /// step.
+    pub fn pipeline_from_sql(&self, sql: &str) -> Result<(JsonValue, Option<String>), EngineError> {
+        let q = format!("SELECT json_serialize_sql('{}') AS ast", sql_escape(sql));
+        let ast = self
+            .run_rows(None, &q)?
+            .into_iter()
+            .next()
+            .and_then(|r| r.get("ast").cloned())
+            .ok_or_else(|| EngineError::Query("from sql: no AST returned".into()))?;
+        let ast = match ast {
+            JsonValue::String(s) => serde_json::from_str(&s)
+                .map_err(|e| EngineError::Query(format!("from sql: parse AST: {e}")))?,
+            other => other,
+        };
+        let split = fromsql::split(&ast).map_err(EngineError::Query)?;
+        // Every part back to SQL in one round trip, so the steps are DuckDB's
+        // own reading of the query rather than text sliced out of it.
+        let back: Vec<String> = split
+            .parts
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                format!(
+                    "SELECT {i} AS i, json_deserialize_sql('{}') AS sql",
+                    sql_escape(&fromsql::statement_json(&p.node))
+                )
+            })
+            .collect();
+        let mut sql_of = vec![String::new(); split.parts.len()];
+        for row in self.run_rows(None, &format!("{} ORDER BY i", back.join(" UNION ALL ")))? {
+            let i = row.get("i").and_then(JsonValue::as_u64).unwrap_or(u64::MAX) as usize;
+            if let (Some(slot), Some(text)) = (sql_of.get_mut(i), row.get("sql").and_then(JsonValue::as_str)) {
+                *slot = text.to_string();
+            }
+        }
+        if sql_of.iter().any(String::is_empty) {
+            return Err(EngineError::Query("from sql: a step could not be turned back into SQL".into()));
+        }
+        Ok((fromsql::pipeline(&split, &sql_of), split.kept_whole.clone()))
+    }
+
     pub fn column_lineage(&self, sql: &str) -> Result<Vec<lineage::OutputColumn>, EngineError> {
         let q = format!("SELECT json_serialize_sql('{}') AS ast", sql_escape(sql));
         let rows = self.run_rows(None, &q)?;
@@ -1398,8 +1506,44 @@ impl DuckdbEngine {
     {
         use std::io::Write;
         let acks = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let run = DuckdbEngine { webhook_acks: Some(Arc::clone(&acks)), ..self.clone() };
+        // #329 / #296: a limit is armed by the run that was started, never by a
+        // child it calls - the child runs on this clone and inherits it.
+        let deadline = match (&self.deadline, doc.max_run_seconds.filter(|s| *s > 0)) {
+            (None, Some(secs)) => Some(Arc::new(Deadline { secs, fired: AtomicBool::new(false) })),
+            _ => None,
+        };
+        let run = DuckdbEngine {
+            webhook_acks: Some(Arc::clone(&acks)),
+            deadline: deadline.clone().or_else(|| self.deadline.clone()),
+            ..self.clone()
+        };
+        // The watchdog marks the deadline and then asks for a cancel, which
+        // kills the running DuckDB child. It is told when the run ends and is
+        // joined before anything reads the flag, so it cannot fire into the
+        // engine's NEXT run.
+        let watchdog = deadline.as_ref().map(|d| {
+            let (done, wait) = std::sync::mpsc::channel::<()>();
+            let (d, cancel) = (Arc::clone(d), Arc::clone(&run.cancel));
+            let handle = std::thread::spawn(move || {
+                if let Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+                    wait.recv_timeout(std::time::Duration::from_secs(d.secs))
+                {
+                    d.fired.store(true, Ordering::Relaxed);
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            });
+            (done, handle)
+        });
         let result = run.execute_pipeline_in_run(doc, target, pipeline_name, user_on_event);
+        if let Some((done, handle)) = watchdog {
+            let _ = done.send(());
+            let _ = handle.join();
+            // The cancel was the deadline's, not anyone's request, so it must not
+            // outlive this run on an engine that is used again.
+            if deadline.as_ref().is_some_and(|d| d.fired.load(Ordering::Relaxed)) {
+                self.cancel.store(false, Ordering::Relaxed);
+            }
+        }
         let answer: &[u8] = if result.status == "ok" {
             b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
         } else {
@@ -1584,11 +1728,46 @@ impl DuckdbEngine {
         ));
         let _guard = TempDbGuard(db_path.clone());
 
+        // A `ctl.runjob` with returnsRows names a handoff parquet at plan time: the
+        // child writes it and the parent reads it through a lazy VIEW, so it has to
+        // outlive the stage and can only be removed once the run is over. Nothing
+        // removed it. The sweep in TempDbGuard keys on the run db's name, and this
+        // file is named before a run db exists, so every returnsRows call left one
+        // in the temp directory for good.
+        let _handoffs = TempFilesGuard(
+            compiled
+                .stages
+                .iter()
+                .filter_map(|s| match s.runtime.as_ref() {
+                    Some(RuntimeSpec::RunJob { vars, .. }) => vars
+                        .iter()
+                        .find(|(k, _)| k == "DUCKLE_RETURN")
+                        .map(|(_, v)| PathBuf::from(v)),
+                    _ => None,
+                })
+                .collect(),
+        );
+
         // Asking the run database what it has set costs a process, and a call or a loop
         // is where that would be paid. A pipeline that sets nothing has nothing to
         // answer with, so it is not asked - which keeps every pipeline that does not use
         // the feature exactly as fast as it was. What a caller handed THIS job travels
         // on through `inherited_subs`, which is not this question.
+        // A row count reads no column, and a reader running with `ignoreErrors`
+        // drops a row only when the column it cannot decode is read. So a
+        // pipeline that asked to skip bad rows reported the rows it skipped as
+        // though it had written them - on every stage, because the source is a
+        // view they all inline, and on every sink except snk.parquet, which
+        // counts the file it wrote. Asked once here, where the document is.
+        let counts_need_every_column = doc.nodes.iter().any(|n| {
+            n.data
+                .properties
+                .as_ref()
+                .and_then(|p| p.get("ignoreErrors"))
+                .map(|v| v.as_bool().unwrap_or(false) || v.as_str() == Some("true"))
+                .unwrap_or(false)
+        });
+
         let sets_run_vars = compiled
             .stages
             .iter()
@@ -1713,6 +1892,8 @@ impl DuckdbEngine {
                 &redact_secrets,
                 total_start,
                 &mask::tags_from_doc(doc),
+                counts_need_every_column,
+                &EndOfRun::from_doc(doc),
                 &mut on_event,
             );
             return r;
@@ -1853,6 +2034,7 @@ impl DuckdbEngine {
                     NodeRunStatus {
                         status: "ok".into(),
                         kind: Some("sink".into()),
+                        component: Some(stage.component_id.clone()),
                         note: None,
                         rows,
                         duration_ms: Some(0),
@@ -1886,7 +2068,19 @@ impl DuckdbEngine {
             // before running the SQL. Done in the executor so the
             // planner stays declarative.
             if let Some(ms) = stage.wait_ms {
-                std::thread::sleep(std::time::Duration::from_millis(ms));
+                // In slices, so a cancel - asked for, or a run's time limit -
+                // stops a wait instead of queueing behind it. One sleep of the
+                // whole duration kept a run going for as long as it had asked
+                // to wait, whatever happened meanwhile. The stage's own run
+                // then sees the flag and reports the cancel.
+                let until = Instant::now() + std::time::Duration::from_millis(ms);
+                while !self.cancel.load(Ordering::Relaxed) {
+                    let left = until.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    std::thread::sleep(left.min(std::time::Duration::from_millis(100)));
+                }
             }
             let started = Instant::now();
             // Advanced settings: memoryLimitMb prepends a PRAGMA so heavy
@@ -1969,7 +2163,7 @@ impl DuckdbEngine {
                 // isn't composed into the parent (the side-effect /
                 // trigger model). Full block-scope composition needs
                 // the DAG-engine refactor noted in the README.
-                if let Some(RuntimeSpec::RunJob { path, vars }) = stage.runtime.as_ref() {
+                if let Some(RuntimeSpec::RunJob { path, vars, passes_rows }) = stage.runtime.as_ref() {
                     // What the run has worked out so far goes first, and what the call
                     // names goes over it: naming a value on the call is how a parent
                     // says "run the child with this one", so it has to win.
@@ -1978,11 +2172,32 @@ impl DuckdbEngine {
                         false => Default::default(),
                     };
                     subs.extend(vars.iter().cloned());
-                    let res = if subs.is_empty() {
-                        self.run_subpipeline(path)
-                    } else {
-                        self.run_subpipeline_with_subs(path, &subs)
+                    // passesRows: snapshot the upstream the way ctl.parallelize does,
+                    // hand it over as ${DUCKLE_INPUT}, and remove it once the child is
+                    // done. Set last so a context variable of the same name cannot
+                    // point the child at some other file.
+                    let input = passes_rows.then(|| {
+                        unique_rest_tmp_path(&stage.node_id).with_extension("parquet")
+                    });
+                    let res = match &input {
+                        Some(file) => {
+                            let from = stage.from.clone().unwrap_or_else(|| stage.node_id.clone());
+                            let file_sql = file.display().to_string().replace('\\', "/");
+                            let copy = format!(
+                                "COPY (SELECT * FROM {}) TO '{}' (FORMAT PARQUET)",
+                                plan::quote_ident(&from),
+                                file_sql.replace('\'', "''")
+                            );
+                            subs.insert("DUCKLE_INPUT".to_string(), file_sql);
+                            self.run(Some(&db_path), &copy, false)
+                                .and_then(|_| self.run_subpipeline_with_subs(path, &subs))
+                        }
+                        None if subs.is_empty() => self.run_subpipeline(path),
+                        None => self.run_subpipeline_with_subs(path, &subs),
                     };
+                    if let Some(file) = &input {
+                        let _ = std::fs::remove_file(file);
+                    }
                     if let Err(e) = res {
                         result = Err(EngineError::Query(format!("ctl.runjob({}): {}", path, e)));
                         continue;
@@ -2202,6 +2417,7 @@ impl DuckdbEngine {
                                         NodeRunStatus {
                                             status: st.status.clone(),
                                             kind: st.kind.clone(),
+                                            component: st.component.clone(),
                                             note: None,
                                             rows: st.rows,
                                             duration_ms: st.duration_ms,
@@ -2236,7 +2452,19 @@ impl DuckdbEngine {
                         _ => true, // "always"
                     };
                     if fire {
-                        let msg = message.replace("{rows}", &rows.to_string());
+                        // #366: the first offending row, read only when the
+                        // message names something other than {rows}.
+                        let first = match (rows > 0, stage.from.as_deref()) {
+                            (true, Some(view)) if message.replace("{rows}", "").contains('{') => self
+                                .run_rows(
+                                    Some(&db_path),
+                                    &format!("SELECT * FROM {} LIMIT 1", plan::quote_ident(view)),
+                                )
+                                .ok()
+                                .and_then(|r| r.into_iter().next()),
+                            _ => None,
+                        };
+                        let msg = die_message(message, rows, first.as_ref());
                         on_event(PipelineEvent::Log {
                             node_id: stage.node_id.clone(),
                             level: "error".into(),
@@ -2287,6 +2515,8 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::SnowflakeSink(spec)) => {
                         self.run_snowflake_sink(&db_path, &secret_prefix, spec)
                     }
+                    // Local Delta Lake append, creating the table on first use.
+                    Some(RuntimeSpec::DeltaSink(spec)) => self.run_delta_sink(&db_path, spec),
                     Some(RuntimeSpec::DatabricksSink(spec)) => {
                         self.run_databricks_sink(&db_path, &secret_prefix, spec)
                     }
@@ -2376,6 +2606,10 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::TursoSink(spec)) => self.run_turso_sink(&db_path, spec),
                     Some(RuntimeSpec::Db2Source(spec)) => self.run_db2_source(&db_path, spec),
                     Some(RuntimeSpec::Db2Sink(spec)) => self.run_db2_sink(&db_path, spec),
+                    Some(RuntimeSpec::AccessSource(spec)) => self.run_access_source(&db_path, spec),
+                    Some(RuntimeSpec::AccessSink(spec)) => self.run_access_sink(&db_path, spec),
+                    Some(RuntimeSpec::SharePointSource(spec)) => self.run_sharepoint_source(&db_path, spec),
+                    Some(RuntimeSpec::SharePointSink(spec)) => self.run_sharepoint_sink(&db_path, spec),
                     Some(RuntimeSpec::ClickhouseSink(spec)) => {
                         self.run_clickhouse_sink(&db_path, spec)
                     }
@@ -2586,6 +2820,14 @@ impl DuckdbEngine {
                         pipeline_name,
                         &mut pending_writes,
                     ),
+                    // PostgreSQL log-based change feed: peek the slot, persist the
+                    // position on success, advance the slot on the next run.
+                    Some(RuntimeSpec::PgCdc(spec)) => self.run_pg_cdc(
+                        &db_path,
+                        spec,
+                        pipeline_name,
+                        &mut pending_writes,
+                    ),
                     // Control-flow variants (RunJob / InstallFallback /
                     // Iterate / Foreach / Log / Warn / non-firing Die) already
                     // ran their side effect above, so they fall through here to
@@ -2640,6 +2882,16 @@ impl DuckdbEngine {
                     break;
                 }
             }
+            // A staged sink publishes now that its COPY has finished. Inside the
+            // retry loop would publish a partial answer between attempts; after
+            // the run's own success is decided is where it belongs.
+            let result = match result {
+                Ok(msg) => match publish_staged(stage) {
+                    Ok(()) => Ok(msg),
+                    Err(e) => Err(EngineError::Query(e)),
+                },
+                err => err,
+            };
             let elapsed_ms = started.elapsed().as_millis() as u64;
 
             // A runtime stage can report that it checked its source and found
@@ -2731,6 +2983,7 @@ impl DuckdbEngine {
                             &db_path,
                             &stage.node_id,
                             !counted_by_sink.contains(stage.node_id.as_str()),
+                            counts_need_every_column,
                         ),
                     };
                     nodes.insert(
@@ -2738,6 +2991,7 @@ impl DuckdbEngine {
                         NodeRunStatus {
                             status: if stage_unchanged { "unchanged" } else { "ok" }.into(),
                             kind: Some(kind_label.into()),
+                            component: Some(stage.component_id.clone()),
                             note: stage_note.clone(),
                             rows: rows_opt,
                             duration_ms: Some(elapsed_ms),
@@ -2797,6 +3051,14 @@ impl DuckdbEngine {
                 }
                 Err(err) => {
                     let msg = redact_secret_values(&err.to_string(), &redact_secrets);
+                    // #118: a binder error naming one of our own generated guards
+                    // is about the column, not about `length`.
+                    let msg = sqldiag::explain_generated(&msg, &stage.sql, &stage.component_id)
+                        // and an empty JSON read is about the file, not about the
+                        // transform that named a column it does not have.
+                        .or_else(|| sqldiag::explain_empty_json(&msg, &stage.sql))
+                        .map(|explained| format!("{}: {}", stage.node_id, explained))
+                        .unwrap_or(msg);
                     let category = error_category::categorize_error(&msg);
                     let failing_sql = Some(redact_secret_values(&stage.sql, &redact_secrets));
                     nodes.insert(
@@ -2804,6 +3066,7 @@ impl DuckdbEngine {
                         NodeRunStatus {
                             status: "error".into(),
                             kind: Some(kind_label.into()),
+                            component: Some(stage.component_id.clone()),
                             note: None,
                             rows: None,
                             duration_ms: Some(elapsed_ms),
@@ -2873,6 +3136,7 @@ impl DuckdbEngine {
                     NodeRunStatus {
                         status: "skipped".into(),
                         kind: None,
+                        component: Some(stage.component_id.clone()),
                         note: Some("not run: an earlier stage stopped at its budget".into()),
                         rows: None,
                         duration_ms: None,
@@ -2884,6 +3148,10 @@ impl DuckdbEngine {
             }
         }
 
+        if let Some(timeout) = self.deadline_error(was_cancelled) {
+            was_cancelled = false;
+            overall_error = Some(timeout);
+        }
         let mut final_status = if was_cancelled {
             "cancelled"
         } else if overall_error.is_some() {
@@ -2979,6 +3247,7 @@ impl DuckdbEngine {
             }
         }
 
+        end_of_run(&compiled.stages, &mut nodes, &EndOfRun::from_doc(doc), &mut on_event);
         on_event(PipelineEvent::Finished {
             status: final_status.into(),
             duration_ms: total_start.elapsed().as_millis() as u64,
@@ -3045,6 +3314,11 @@ impl DuckdbEngine {
         // #301: the batched path has stages rather than the document, so the
         // column tags are handed in by the caller that does have it.
         mask_tags: &mask::TagMap,
+        // Same reason: whether any node asked for `ignoreErrors`, which decides
+        // whether a row count has to read every column to be true.
+        counts_need_every_column: bool,
+        // What the end of the run reports from the document. Same reason again.
+        end: &EndOfRun,
         on_event: &mut dyn FnMut(PipelineEvent),
     ) -> RunResult {
         use std::io::Write;
@@ -3288,7 +3562,8 @@ impl DuckdbEngine {
             };
             match count_from {
                 Some(t) => batched_sql.push_str(&format!(
-                    "COPY (SELECT COUNT(*) AS _duckle_r FROM {}) TO '{}' (FORMAT 'json', ARRAY false);\n",
+                    "COPY (SELECT COUNT(*) AS _duckle_r{} FROM {}) TO '{}' (FORMAT 'json', ARRAY false);\n",
+                    Self::count_projection(counts_need_every_column),
                     t,
                     path_to_sql(&marker),
                 )),
@@ -3459,6 +3734,16 @@ impl DuckdbEngine {
         let _ = writer_thread.join();
         cli_stderr = stderr_thread.join().unwrap_or_default();
 
+        // Publish the staged sinks. Markers drain in order and one is written
+        // after each stage's own statement, so `completed` is exactly how far
+        // the script got: the sinks below it wrote their file in full, which is
+        // what this path published before staging existed.
+        for stage in stages.iter().take(completed) {
+            if let Err(e) = publish_staged(stage) {
+                overall_error.get_or_insert(e);
+            }
+        }
+
         if let Some(idx) = failed_stage_idx {
             if idx < stages.len() {
                 let stage = &stages[idx];
@@ -3471,12 +3756,20 @@ impl DuckdbEngine {
                 } else {
                     redact_secret_values(&stderr_str, &redact_secrets)
                 };
+                // #118: as above - explain our own guard rather than repeating
+                // DuckDB's words about a function the author never wrote.
+                let msg = sqldiag::explain_generated(&msg, &stage.sql, &stage.component_id)
+                    // and as above, an empty JSON read upstream.
+                    .or_else(|| sqldiag::explain_empty_json(&msg, &stage.sql))
+                    .map(|explained| format!("{}: {}", stage.node_id, explained))
+                    .unwrap_or(msg);
                 let failing_sql = Some(redact_secret_values(&stage.sql, &redact_secrets));
                 nodes.insert(
                     stage.node_id.clone(),
                     NodeRunStatus {
                         status: "error".into(),
                         kind: Some(kind.into()),
+                        component: Some(stage.component_id.clone()),
                         note: None,
                         rows: None,
                         duration_ms: Some(elapsed),
@@ -3529,6 +3822,10 @@ impl DuckdbEngine {
             });
         }
 
+        if let Some(timeout) = self.deadline_error(was_cancelled) {
+            was_cancelled = false;
+            overall_error = Some(timeout);
+        }
         let final_status = if was_cancelled {
             "cancelled"
         } else if overall_error.is_some() {
@@ -3537,6 +3834,7 @@ impl DuckdbEngine {
             "ok"
         };
         let duration_ms = total_start.elapsed().as_millis() as u64;
+        end_of_run(stages, &mut nodes, end, on_event);
         on_event(PipelineEvent::Finished {
             status: final_status.into(),
             duration_ms,
@@ -3614,6 +3912,30 @@ impl DuckdbEngine {
         self.count_rows(db, from?).ok()
     }
 
+/// The projection a row count needs in order to be honest.
+///
+/// `COUNT(*)` needs no column, so DuckDB reads none - and a reader running with
+/// `ignore_errors` drops a row only when the column that cannot be decoded is
+/// actually read. The count therefore reported rows the run never saw: measured
+/// on the pinned 1.5.4 CLI over a 5-row CSV whose second row is latin-1,
+/// `SELECT count(*)` returns 5 while `SELECT *` returns 4, and the sink writes
+/// 4. Every stage downstream inherits it, because the source is a view they
+/// inline.
+///
+/// `COUNT(COLUMNS(*))` alongside it forces every column, which is what makes the
+/// row drop happen before the count. Counting rather than hashing because it is
+/// defined for every type, nested ones included.
+///
+/// Only when the pipeline asked for `ignoreErrors`: it is one aggregate per
+/// column per row, and no other pipeline should pay for it.
+fn count_projection(every_column: bool) -> &'static str {
+    if every_column {
+        ", COUNT(COLUMNS(*))"
+    } else {
+        ""
+    }
+}
+
     fn count_rows(&self, db: &Path, name: &str) -> Result<u64, EngineError> {
         self.count_from_expr(db, &plan::quote_ident(name))
     }
@@ -3648,6 +3970,7 @@ impl DuckdbEngine {
         db: &Path,
         name: &str,
         want_count: bool,
+        every_column: bool,
     ) -> (Option<u64>, Option<NodePreview>) {
         if !want_count && !self.previews {
             return (None, None);
@@ -3657,7 +3980,11 @@ impl DuckdbEngine {
         // fetch columns and rows that are then discarded. Ask for the count alone.
         let mut sql = String::new();
         if want_count {
-            sql.push_str(&format!("SELECT COUNT(*) AS n FROM {q};", q = q));
+            sql.push_str(&format!(
+                "SELECT COUNT(*) AS n{} FROM {q};",
+                Self::count_projection(every_column),
+                q = q
+            ));
         }
         if self.previews {
             sql.push_str(&format!(
@@ -4056,7 +4383,8 @@ impl DuckdbEngine {
         let s = sql.trim().trim_end_matches(';').trim();
         let combined = format!("DESCRIBE ({s}); SELECT * FROM ({s}) LIMIT {row_limit};");
         let out = self.run(None, &combined, true)?;
-        let arrays = parse_json_arrays(&out);
+        let arrays = parse_json_arrays_checked(&out)
+            .map_err(|(_, reason)| json_bridge_failure(&reason, &out))?;
         let columns = arrays
             .first()
             .map(|rows| rows.iter().filter_map(parse_describe_row).collect())
@@ -4073,7 +4401,8 @@ impl DuckdbEngine {
         let s = sql.trim().trim_end_matches(';').trim();
         let combined = format!("DESCRIBE ({s}); SELECT * FROM ({s}) LIMIT {row_limit};");
         let out = self.run(Some(db), &combined, true)?;
-        let arrays = parse_json_arrays(&out);
+        let arrays = parse_json_arrays_checked(&out)
+            .map_err(|(_, reason)| json_bridge_failure(&reason, &out))?;
         let columns = arrays
             .first()
             .map(|rows| rows.iter().filter_map(parse_describe_row).collect())
@@ -4121,6 +4450,18 @@ impl Drop for TempDbGuard {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Removes temp files a run named for itself, at the end of the run. For files
+/// the `<db>.*.parquet` sweep above cannot see because their name is fixed
+/// before the run db exists: the ctl.runjob handoff parquet is one.
+struct TempFilesGuard(Vec<PathBuf>);
+impl Drop for TempFilesGuard {
+    fn drop(&mut self) {
+        for path in &self.0 {
+            let _ = std::fs::remove_file(path);
         }
     }
 }
@@ -4260,6 +4601,7 @@ fn drain_batched_markers(
             NodeRunStatus {
                 status: "ok".into(),
                 kind: Some(kind.into()),
+                component: Some(stage.component_id.clone()),
                 note: None,
                 rows,
                 duration_ms: Some(elapsed),
@@ -4695,7 +5037,12 @@ fn materialize_empty_like_view(
 ///   w.finalize_into_table(db, &spec.node_id)?;
 pub(crate) struct JsonLinesWriter {
     writer: std::io::BufWriter<std::fs::File>,
-    path: PathBuf,
+    /// The NDJSON path, held by a guard so that abandoning the writer takes the
+    /// file with it. Only the two finalizers used to remove it, and there are a
+    /// dozen `?`s between `open` and either of them - an HTTP error mid-page,
+    /// `onError: fail`, a cancelled run - each of which left a file on the temp
+    /// volume that nothing would ever collect.
+    tmp: TempJson,
     /// Rows written so far. When 0 at finalize time the NDJSON file is empty and
     /// read_json_auto would type the node as a single `json` column, breaking
     /// every downstream column reference; the finalizer builds a typed 0-row
@@ -4723,6 +5070,24 @@ fn sql_path(p: &std::path::Path) -> String {
     p.display().to_string().replace('\\', "/").replace('\'', "''")
 }
 
+/// Owns the writer's NDJSON: removed when the writer goes out of scope, by any
+/// route. The finalizers already removed it on their way out and still do - the
+/// removals are `let _ =` and a second one is a no-op - so this only adds the
+/// paths that had no owner before.
+struct TempJson {
+    path: PathBuf,
+}
+
+impl Drop for TempJson {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        // `roll_part` parks the handle on a `.rolling` file while DuckDB reads
+        // the NDJSON, and removes it once the part is written. A part that
+        // fails to convert returns before that, leaving the empty file behind.
+        let _ = std::fs::remove_file(self.path.with_extension("rolling"));
+    }
+}
+
 pub(crate) struct Spill {
     bin: PathBuf,
     db: PathBuf,
@@ -4735,6 +5100,16 @@ pub(crate) struct Spill {
     dir: PathBuf,
     parts: usize,
     rows_in_part: usize,
+}
+
+impl Drop for Spill {
+    fn drop(&mut self) {
+        // The parts are sized for the whole result - that is the point of
+        // rolling them - so a writer abandoned mid-stream leaves behind exactly
+        // the directory this path exists to avoid writing. `finalize_typed`
+        // used to be the only remover, and it is not reached on any error path.
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
 }
 
 impl JsonLinesWriter {
@@ -4754,7 +5129,7 @@ impl JsonLinesWriter {
             .map_err(|e| EngineError::Query(format!("rest source: create tmp file: {}", e)))?;
         Ok(Self {
             writer: std::io::BufWriter::with_capacity(64 * 1024, file),
-            path,
+            tmp: TempJson { path },
             rows_written: 0,
             empty_schema,
             spill: None,
@@ -4774,7 +5149,7 @@ impl JsonLinesWriter {
         columns_spec: &str,
         every: usize,
     ) -> Result<Self, EngineError> {
-        let dir = self.path.with_extension("parts");
+        let dir = self.tmp.path.with_extension("parts");
         std::fs::create_dir_all(&dir)
             .map_err(|e| EngineError::Query(format!("spill: create {}: {e}", dir.display())))?;
         self.spill = Some(Spill {
@@ -4805,7 +5180,7 @@ impl JsonLinesWriter {
             .map_err(|e| EngineError::Query(format!("spill: flush: {e}")))?;
         // Reopen onto a fresh file after the conversion; the handle has to be
         // closed first because DuckDB reads the same path.
-        let empty = std::fs::File::create(self.path.with_extension("rolling"))
+        let empty = std::fs::File::create(self.tmp.path.with_extension("rolling"))
             .map_err(|e| EngineError::Query(format!("spill: create: {e}")))?;
         let old = std::mem::replace(
             &mut self.writer,
@@ -4816,7 +5191,7 @@ impl JsonLinesWriter {
         let part = spill.dir.join(format!("part-{:06}.parquet", spill.parts));
         let sql = format!(
             "COPY (SELECT * FROM read_json('{}', format='newline_delimited', columns={{{}}})) TO '{}' (FORMAT PARQUET, COMPRESSION ZSTD)",
-            sql_path(&self.path),
+            sql_path(&self.tmp.path),
             spill.columns_spec,
             sql_path(&part),
         );
@@ -4826,15 +5201,15 @@ impl JsonLinesWriter {
 
         // The NDJSON for this part is now redundant, and removing it here is
         // what bounds the temp volume to one part rather than the whole result.
-        let _ = std::fs::remove_file(&self.path);
-        let fresh = std::fs::File::create(&self.path)
+        let _ = std::fs::remove_file(&self.tmp.path);
+        let fresh = std::fs::File::create(&self.tmp.path)
             .map_err(|e| EngineError::Query(format!("spill: reopen: {e}")))?;
         let rolling = std::mem::replace(
             &mut self.writer,
             std::io::BufWriter::with_capacity(64 * 1024, fresh),
         );
         drop(rolling);
-        let _ = std::fs::remove_file(self.path.with_extension("rolling"));
+        let _ = std::fs::remove_file(self.tmp.path.with_extension("rolling"));
         Ok(())
     }
 
@@ -4874,7 +5249,7 @@ impl JsonLinesWriter {
         // or fail with a clear source-level message when none exists.
         if self.rows_written == 0 {
             let r = materialize_empty_result(bin, db, node_id, self.empty_schema.as_deref());
-            let _ = std::fs::remove_file(&self.path);
+            let _ = std::fs::remove_file(&self.tmp.path);
             return r;
         }
         // sample_size=-1 makes read_json_auto scan every row for type
@@ -4888,7 +5263,7 @@ impl JsonLinesWriter {
         let sql = format!(
             "CREATE OR REPLACE TABLE {} AS SELECT * FROM read_json_auto('{}', format='newline_delimited', sample_size=-1)",
             plan::quote_ident(node_id),
-            self.path
+            self.tmp.path
                 .display()
                 .to_string()
                 .replace('\\', "/")
@@ -4930,7 +5305,7 @@ impl JsonLinesWriter {
         // Clean up the temp NDJSON file whether the load succeeded or failed
         // (DuckDB has already read it by now); otherwise duckle-rest-*.json
         // accumulate in the temp dir forever.
-        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(&self.tmp.path);
         r
     }
 
@@ -4957,6 +5332,7 @@ impl JsonLinesWriter {
             .map_err(|e| EngineError::Query(format!("rest source: flush tmp file: {}", e)))?;
         drop(self.writer);
         let path = self
+            .tmp
             .path
             .display()
             .to_string()
@@ -4983,17 +5359,63 @@ impl JsonLinesWriter {
         };
         let r = apply_duckdb_sql(bin, db, &sql);
         let parts = self.spill.as_ref().map(|s| s.parts).unwrap_or(0);
-        if let Some(spill) = self.spill.as_ref() {
-            // Every part is redundant once the relation exists. Removed whether
-            // the load worked or not: parts left behind are the temp volume this
-            // exists to protect.
-            let _ = std::fs::remove_dir_all(&spill.dir);
-        }
+        // Every part is redundant once the relation exists, and the parts
+        // directory is removed as this writer drops - on this path and on every
+        // error path, which is why `Spill` owns it rather than this function.
         // Remove the temp NDJSON regardless of the load result; otherwise
         // duckle-rest-*.json accumulate in the temp dir forever (mirrors
         // finalize_into_table). With spilling on it only ever held the tail.
-        let _ = std::fs::remove_file(&self.path);
+        let _ = std::fs::remove_file(&self.tmp.path);
         r.map(|()| parts)
+    }
+}
+
+#[cfg(test)]
+mod jsonlines_cleanup_tests {
+    use super::JsonLinesWriter;
+    use std::path::Path;
+
+    /// A writer that is never finalized still owns files on the temp volume.
+    /// Thirteen call sites open one, and between `open` and `finalize` sit the
+    /// request, the pagination loop and every `?` in them: a 404 on page two,
+    /// `onError: fail`, a cancelled run. Each of those used to leave the NDJSON
+    /// behind for good - nothing else knows the name, and no sweep matches it.
+    #[test]
+    fn an_abandoned_writer_takes_its_ndjson_with_it() {
+        let mut w = JsonLinesWriter::open("cleanup_abandoned").unwrap();
+        let path = w.tmp.path.clone();
+        w.write_row(&serde_json::json!({ "a": 1 })).unwrap();
+        assert!(path.exists(), "the writer creates its NDJSON at open");
+        drop(w); // the error path: no finalize
+        assert!(
+            !path.exists(),
+            "abandoned NDJSON left behind: {}",
+            path.display()
+        );
+    }
+
+    /// And with spilling on it owns a directory of Parquet parts sized for the
+    /// whole result - the very thing spilling exists to keep off the temp
+    /// volume. `finalize_typed` removed it; no error path reaches that.
+    #[test]
+    fn an_abandoned_spilling_writer_takes_its_parts_with_it() {
+        let w = JsonLinesWriter::open("cleanup_spill")
+            .unwrap()
+            .spilling_every(
+                Path::new("duckdb"),
+                Path::new("unused.duckdb"),
+                "a: 'BIGINT'",
+                1_000_000,
+            )
+            .unwrap();
+        let dir = w.spill.as_ref().unwrap().dir.clone();
+        assert!(dir.exists(), "spilling creates the parts directory at open");
+        drop(w);
+        assert!(
+            !dir.exists(),
+            "abandoned spill directory left behind: {}",
+            dir.display()
+        );
     }
 }
 
@@ -5123,6 +5545,74 @@ fn allow_unsigned_extensions() -> bool {
     policy::load(ws.as_deref())
         .map(|p| p.allow_unsigned_extensions)
         .unwrap_or(false)
+}
+
+/// #366: a ctl.die message with its placeholders filled.
+///
+/// `{rows}` is the input's row count, as it always was; `{name}` is that
+/// column of `first`, the first offending row, so the message can say why the
+/// run went red rather than only how many rows did. A name that is not a column
+/// stays as typed. One pass, so a value that itself contains `{...}` is written
+/// out as it is rather than expanded again.
+fn die_message(template: &str, rows: u64, first: Option<&JsonValue>) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let Some(close) = after.find(['{', '}']).filter(|&i| after.as_bytes()[i] == b'}') else {
+            out.push('{');
+            rest = after;
+            continue;
+        };
+        let name = &after[..close];
+        match (name, first.and_then(|r| r.get(name))) {
+            ("rows", _) => out.push_str(&rows.to_string()),
+            (_, Some(JsonValue::String(s))) => out.push_str(s),
+            (_, Some(JsonValue::Null)) => out.push_str("NULL"),
+            (_, Some(v)) => out.push_str(&v.to_string()),
+            (_, None) => {
+                out.push('{');
+                out.push_str(name);
+                out.push('}');
+            }
+        }
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod die_message_tests {
+    use super::die_message;
+    use serde_json::json;
+
+    #[test]
+    fn a_placeholder_names_a_column_of_the_first_offending_row() {
+        let row = json!({ "reason": "store [1] not visible", "fail_code": "subset", "n": 3, "gone": null });
+        assert_eq!(
+            die_message("failed: {reason} (fail_code={fail_code}, n={n}, gone={gone}, rows={rows})", 2, Some(&row)),
+            "failed: store [1] not visible (fail_code=subset, n=3, gone=NULL, rows=2)"
+        );
+    }
+
+    /// `{rows}` keeps its meaning even when a column shares the name, a name
+    /// that is not a column stays as typed, and a value is not expanded again.
+    #[test]
+    fn rows_unknown_names_and_substituted_values_are_left_alone() {
+        let row = json!({ "rows": "column value", "reason": "{rows} {fail_code}" });
+        assert_eq!(
+            die_message("{rows} | {reason} | {nope} | { | {unclosed", 7, Some(&row)),
+            "7 | {rows} {fail_code} | {nope} | { | {unclosed"
+        );
+    }
+
+    /// With no offending row (a no-rows die) only `{rows}` has a value.
+    #[test]
+    fn without_a_row_only_rows_is_filled() {
+        assert_eq!(die_message("empty: {rows} {reason}", 0, None), "empty: 0 {reason}");
+    }
 }
 
 /// Run a read-only query via the duckdb CLI in `-json` mode and return the
@@ -5586,6 +6076,45 @@ fn cql_value_to_json(v: &scylla::value::CqlValue) -> JsonValue {
 }
 
 #[cfg(test)]
+mod json_bridge_tests {
+    use super::{json_bridge_failure, parse_json_arrays, parse_json_arrays_checked};
+
+    /// The CLI prints a non-finite double as a bare `NaN` token, and the row
+    /// bridge used to read that as "no rows".
+    ///
+    /// Verified against the pinned binary:
+    /// `duckdb -json -c "SELECT 1 AS id, 'nan'::DOUBLE AS v"` prints
+    /// `[{"id":1,"v":NaN}]`, which no JSON reader accepts.
+    #[test]
+    fn a_bare_nan_is_reported_rather_than_read_as_no_rows() {
+        let out = "[{\"id\":1,\"v\":NaN},\n{\"id\":2,\"v\":Infinity}]";
+        let err = parse_json_arrays_checked(out).expect_err("this is not JSON");
+        assert!(err.0.is_empty(), "nothing was read: {:?}", err.0);
+        let msg = json_bridge_failure(&err.1, out).to_string();
+        assert!(msg.contains("non-finite"), "{msg}");
+        assert!(msg.contains("isfinite"), "the message has to say what to do: {msg}");
+    }
+
+    #[test]
+    fn ordinary_output_still_parses_including_several_statements() {
+        let out = "[{\"a\":1}]\n[{\"b\":2},{\"b\":3}]";
+        let arrays = parse_json_arrays_checked(out).expect("valid JSON");
+        assert_eq!(arrays.len(), 2);
+        assert_eq!(arrays[1].len(), 2);
+        assert!(parse_json_arrays_checked("").expect("empty is not a failure").is_empty());
+    }
+
+    /// The lenient wrapper keeps exactly its old behaviour, because a preview
+    /// and a suggestion list are better off ignoring junk on the end.
+    #[test]
+    fn the_lenient_parser_still_returns_what_it_read() {
+        let out = "[{\"a\":1}]\nnot json at all";
+        let arrays = parse_json_arrays(out);
+        assert_eq!(arrays.len(), 1, "the good array survives: {arrays:?}");
+    }
+}
+
+#[cfg(test)]
 mod snowflake_jwt_tests {
     use super::snowflake_jwt_account;
 
@@ -5716,6 +6245,22 @@ mod cql_value_tests {
 /// - num   -> verbatim
 /// - str   -> 'escaped' (single quotes doubled)
 /// - obj/arr -> PARSE_JSON('escaped json') so it lands in a VARIANT column
+/// The DuckDB type for a SQL Server date/time column, from the type the
+/// server reports for it (#362). None for everything else, whose JSON values
+/// carry their type well enough.
+fn sqlserver_column_type(t: tiberius::ColumnType) -> Option<&'static str> {
+    use tiberius::ColumnType;
+    match t {
+        ColumnType::Datetime | ColumnType::Datetime2 | ColumnType::Datetime4 | ColumnType::Datetimen => {
+            Some("TIMESTAMP")
+        }
+        ColumnType::Daten => Some("DATE"),
+        ColumnType::Timen => Some("TIME"),
+        ColumnType::DatetimeOffsetn => Some("TIMESTAMPTZ"),
+        _ => None,
+    }
+}
+
 /// Render a SQL Server NUMERIC/DECIMAL as an exact decimal string from
 /// tiberius' unscaled i128 value + scale. tiberius' own Display formats
 /// the integer and fractional parts independently and signs both, so a
@@ -6066,6 +6611,93 @@ fn oracle_insert_all_rows_per_stmt(num_cols: usize, batch_size: usize) -> usize 
 /// That only holds where the sink owns the whole file: an append would also
 /// count rows that were already there, and a partitioned write spreads them
 /// across a directory tree this path does not name.
+/// Publish a staged sink: rename what the COPY wrote onto the destination.
+///
+/// The destination therefore only ever holds a file that was finished, and the
+/// file being written carries an extension no source glob matches, so a
+/// downstream `*.csv` cannot pick up a run that is still going - or one that was
+/// killed, whose staged file simply waits to be overwritten by the next run of
+/// the same sink.
+///
+/// A missing staged file is not a failure: a sink whose upstream source wrote
+/// the destination itself (`directWrite`) never ran a COPY.
+///
+/// A failed rename IS a failure. The rows are on disk under a name nothing else
+/// reads, and a run that reported ok would have published nothing.
+///
+/// An append (#367) to a file that already holds something adds the staged rows
+/// to its end instead; to a new or empty file it is the same rename.
+fn publish_staged(stage: &plan::Stage) -> Result<(), String> {
+    let (Some(staged), Some(dest)) = (stage.staged_write.as_deref(), stage.sink_path.as_deref())
+    else {
+        return Ok(());
+    };
+    if !std::path::Path::new(staged).exists() {
+        return Ok(());
+    }
+    let append = stage.sink_mode.as_deref().is_some_and(|m| m.trim().eq_ignore_ascii_case("append"));
+    if append && std::fs::metadata(dest).is_ok_and(|m| m.len() > 0) {
+        return append_staged(staged, dest, stage.staged_header)
+            .map_err(|e| format!("appending to {}: {}", dest, e));
+    }
+    std::fs::rename(staged, dest)
+        .map_err(|e| format!("publishing {} from {}: {}", dest, staged, e))
+}
+
+/// #367: add a staged file's rows to the end of `dest`, then remove it.
+///
+/// With `header`, the staged file's first line is its CSV header: it has to be
+/// the line `dest` starts with, since rows added under a different header are
+/// read as the wrong columns, and it is left out because `dest` has it already.
+/// A `dest` that does not end in a line break gets one first, so the first new
+/// row is not run into its last line. A write that fails is cut back off, so
+/// `dest` holds what it held before rather than part of a row.
+fn append_staged(staged: &str, dest: &str, header: bool) -> Result<(), String> {
+    use std::io::{BufRead, Read, Seek, Write};
+    let mut rows = std::io::BufReader::new(std::fs::File::open(staged).map_err(|e| e.to_string())?);
+    if header {
+        let line = |r: &mut dyn BufRead| -> Result<String, String> {
+            let mut l = String::new();
+            r.read_line(&mut l).map_err(|e| e.to_string())?;
+            Ok(l.trim_end_matches(['\r', '\n']).to_string())
+        };
+        let new = line(&mut rows)?;
+        let old = line(&mut std::io::BufReader::new(
+            std::fs::File::open(dest).map_err(|e| e.to_string())?,
+        ))?;
+        if new != old {
+            let cut = |s: &str| s.chars().take(200).collect::<String>();
+            return Err(format!(
+                "the rows have the columns {} and the file starts with {}; nothing was added",
+                cut(&new),
+                cut(&old)
+            ));
+        }
+    }
+    let mut out = std::fs::OpenOptions::new()
+        .read(true)
+        .append(true)
+        .open(dest)
+        .map_err(|e| e.to_string())?;
+    let len = out.metadata().map_err(|e| e.to_string())?.len();
+    let written = (|| -> std::io::Result<()> {
+        let mut last = [0u8];
+        out.seek(std::io::SeekFrom::End(-1))?;
+        out.read_exact(&mut last)?;
+        if last[0] != b'\n' {
+            out.write_all(b"\n")?;
+        }
+        std::io::copy(&mut rows, &mut out)?;
+        out.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = out.set_len(len);
+        return Err(e.to_string());
+    }
+    drop(rows);
+    std::fs::remove_file(staged).map_err(|e| format!("removing {}: {}", staged, e))
+}
+
 fn sink_self_count(stage: &plan::Stage) -> Option<String> {
     if stage.component_id != "snk.parquet" {
         return None;
@@ -6077,7 +6709,9 @@ fn sink_self_count(stage: &plan::Stage) -> Option<String> {
     if stage.sql.contains("PARTITION_BY") {
         return None;
     }
-    let path = stage.sink_path.as_deref()?;
+    // The staged file when this sink stages: in the batched path this COUNT is a
+    // statement in the same script, so it runs before the publish.
+    let path = stage.staged_write.as_deref().or(stage.sink_path.as_deref())?;
     // read_parquet globs, and the sink wrote ONE literal file. Measured against
     // DuckDB 1.5.4: `o[12].parquet` expands and counts files this sink never
     // wrote, and `o{1,2}.parquet` raises "No files found that match the
@@ -6139,10 +6773,31 @@ fn is_local_path(p: &str) -> bool {
 
 /// Parse the (possibly multiple) top-level JSON arrays the DuckDB CLI
 /// prints in `-json` mode.
+///
+/// Lenient: output that stops parsing part way yields what was read so far.
+/// That is right for a preview or a suggestion list, where junk on the end is
+/// worth ignoring, and WRONG for the rows a sink is about to write - which is
+/// why anything carrying data uses [`parse_json_arrays_checked`].
 fn parse_json_arrays(s: &str) -> Vec<Vec<JsonValue>> {
+    parse_json_arrays_checked(s).unwrap_or_else(|(arrays, _)| arrays)
+}
+
+/// The same parse, but saying so when the output was not JSON.
+///
+/// The CLI prints a non-finite double as the bare token `NaN` or `Infinity`,
+/// which no JSON reader accepts. Swallowing that failure turned one such value
+/// anywhere in a result into ZERO rows for the caller, and a sink that writes
+/// zero rows and returns Ok reports a green run having written nothing at all -
+/// over a target it may just have cleared. Louder is the only safe direction:
+/// the rows either arrive or the stage fails.
+///
+/// On failure, returns the arrays read before the failure alongside the reason,
+/// so the lenient wrapper keeps its old behaviour exactly.
+#[allow(clippy::type_complexity)]
+fn parse_json_arrays_checked(s: &str) -> Result<Vec<Vec<JsonValue>>, (Vec<Vec<JsonValue>>, String)> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut out = Vec::new();
     let stream = serde_json::Deserializer::from_str(trimmed).into_iter::<JsonValue>();
@@ -6150,10 +6805,25 @@ fn parse_json_arrays(s: &str) -> Vec<Vec<JsonValue>> {
         match value {
             Ok(JsonValue::Array(a)) => out.push(a),
             Ok(_) => {}
-            Err(_) => break,
+            Err(e) => return Err((out, e.to_string())),
         }
     }
-    out
+    Ok(out)
+}
+
+/// Why the CLI output did not parse, in terms the author can act on.
+fn json_bridge_failure(reason: &str, raw: &str) -> EngineError {
+    // Named specifically when it is the known cause, because the generic
+    // message would send the reader looking for a bug in their own data.
+    if raw.contains("NaN") || raw.contains("Infinity") || raw.contains("-Infinity") {
+        return EngineError::Query(format!(
+            "the result contains a non-finite number (NaN or Infinity), which DuckDB prints \
+             as a bare token that is not valid JSON, so the rows cannot be carried to this \
+             node. Replace them upstream - for example `CASE WHEN isfinite(x) THEN x END` in \
+             a Select or Custom SQL node - or cast the column to VARCHAR. ({reason})"
+        ));
+    }
+    EngineError::Query(format!("the DuckDB output could not be read as JSON: {reason}"))
 }
 
 /// Turn one DuckDB `DESCRIBE` row into a Column.
@@ -6536,24 +7206,33 @@ pub(crate) fn secret_statement(
         .collect::<String>();
     match format {
         "s3" => {
-            let key = get("accessKey")?;
-            let sec = get("secretKey")?;
-            let region = get("region").unwrap_or("us-east-1");
-            let session = get("sessionToken");
             // S3-compatible (MinIO / R2 / B2) sets endpoint + url_style +
             // use_ssl. Empty / missing values are skipped so plain AWS S3
             // keeps its defaults.
             let endpoint = get("endpoint").filter(|s| !s.is_empty());
             let url_style = get("urlStyle").filter(|s| !s.is_empty());
             let use_ssl = get("useSsl").filter(|s| !s.is_empty());
-            let mut parts = vec![
-                "TYPE S3".to_string(),
-                format!("KEY_ID '{}'", sql_escape(key)),
-                format!("SECRET '{}'", sql_escape(sec)),
-                format!("REGION '{}'", sql_escape(region)),
-            ];
-            if let Some(s) = session {
-                parts.push(format!("SESSION_TOKEN '{}'", sql_escape(s)));
+            let mut parts = vec!["TYPE S3".to_string()];
+            if get("cloudAuth") == Some("environment") {
+                // No key in the pipeline: the AWS chain finds one where the run
+                // is - env vars, a profile, SSO, IRSA, an instance or container
+                // role. It fails at create when there is none, so a run with no
+                // identity stops there rather than as a 403 on the first read.
+                // Keys still in the form are not sent: they would win.
+                parts.push("PROVIDER credential_chain".to_string());
+                if let Some(r) = get("region").map(str::trim).filter(|s| !s.is_empty()) {
+                    parts.push(format!("REGION '{}'", sql_escape(r)));
+                }
+            } else {
+                let key = get("accessKey")?;
+                let sec = get("secretKey")?;
+                let region = get("region").unwrap_or("us-east-1");
+                parts.push(format!("KEY_ID '{}'", sql_escape(key)));
+                parts.push(format!("SECRET '{}'", sql_escape(sec)));
+                parts.push(format!("REGION '{}'", sql_escape(region)));
+                if let Some(s) = get("sessionToken") {
+                    parts.push(format!("SESSION_TOKEN '{}'", sql_escape(s)));
+                }
             }
             if let Some(e) = endpoint {
                 parts.push(format!("ENDPOINT '{}'", sql_escape(e)));
@@ -6614,6 +7293,17 @@ pub(crate) fn secret_statement(
         }
         "azureblob" => {
             let account = get("accountName")?;
+            if get("cloudAuth") == Some("environment") {
+                // A managed identity, workload identity, the Azure CLI or the
+                // environment, by DuckDB's default chain. Never without the
+                // account: that secret is an INTERNAL error at the first read.
+                let account = Some(account.trim()).filter(|a| !a.is_empty())?;
+                return Some(format!(
+                    "CREATE OR REPLACE SECRET secret_{} (TYPE AZURE, PROVIDER credential_chain, ACCOUNT_NAME '{}');",
+                    sane,
+                    sql_escape(account)
+                ));
+            }
             let key = get("accountKey")?;
             Some(format!(
                 "CREATE OR REPLACE SECRET secret_{} (TYPE AZURE, CONNECTION_STRING 'DefaultEndpointsProtocol=https;AccountName={};AccountKey={};EndpointSuffix=core.windows.net');",
@@ -7010,11 +7700,158 @@ impl RunResult {
     }
 }
 
+/// What the end of a run reports, read from the document once. The batched
+/// path is handed this rather than the document, as it is the column tags.
+pub(crate) struct EndOfRun {
+    /// "Log row count": ticked nodes, with their labels.
+    log_row_count: std::collections::BTreeMap<String, String>,
+    /// #101: quality checks whose failing rows leave the main output.
+    reject_watch: std::collections::BTreeMap<String, RejectWatch>,
+}
+
+struct RejectWatch {
+    label: String,
+    /// The node feeding its main input, whose row count is the check's input.
+    input: String,
+    /// Whether anything reads its reject port.
+    wired: bool,
+}
+
+/// Quality checks whose pass and reject outputs split their input, so what
+/// they rejected is input rows minus output rows.
+const REJECTING_CHECKS: [&str; 7] = [
+    "qa.notnull",
+    "qa.schemavalidate",
+    "qa.range",
+    "qa.regex",
+    "qa.unique",
+    "qa.outlier",
+    "qa.refintegrity",
+];
+
+impl EndOfRun {
+    pub(crate) fn from_doc(doc: &PipelineDoc) -> Self {
+        let main = |h: &Option<String>| matches!(h.as_deref(), None | Some("") | Some("main"));
+        let log_row_count = doc
+            .nodes
+            .iter()
+            .filter(|n| {
+                n.data.properties.as_ref().and_then(|p| p.get("logRowCount")).and_then(|v| v.as_bool())
+                    == Some(true)
+            })
+            .map(|n| (n.id.clone(), n.data.label.clone()))
+            .collect();
+        let reject_watch = doc
+            .nodes
+            .iter()
+            .filter(|n| REJECTING_CHECKS.contains(&n.data.component_id.as_deref().unwrap_or("")))
+            // warn keeps every row on the main output and fail stops the run,
+            // so only reject (the default) takes rows away.
+            .filter(|n| {
+                let on_fail = n
+                    .data
+                    .properties
+                    .as_ref()
+                    .and_then(|p| p.get("onFail"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase();
+                on_fail.is_empty() || on_fail == "reject"
+            })
+            .filter_map(|n| {
+                // Only from a main-to-main edge is the upstream's count the
+                // check's input; anything else is not a count this can use.
+                let input = doc
+                    .edges
+                    .iter()
+                    .find(|e| e.target == n.id && main(&e.target_handle) && main(&e.source_handle))?
+                    .source
+                    .clone();
+                let wired = doc.edges.iter().any(|e| {
+                    e.source == n.id && matches!(e.source_handle.as_deref(), Some("reject") | Some("filter"))
+                });
+                Some((n.id.clone(), RejectWatch { label: n.data.label.clone(), input, wired }))
+            })
+            .collect();
+        Self { log_row_count, reject_watch }
+    }
+}
+
+/// What the end of the run says, sent by BOTH execution paths just before it
+/// finishes - the one point where every count is settled.
+fn end_of_run(
+    stages: &[plan::Stage],
+    nodes: &mut std::collections::BTreeMap<String, NodeRunStatus>,
+    end: &EndOfRun,
+    on_event: &mut dyn FnMut(PipelineEvent),
+) {
+    // #101: rows a quality check rejected, on its node. Rows that went nowhere
+    // are also a warning: a check with nothing on its reject port discarded
+    // them, and the run otherwise reported ok without a word about it.
+    for stage in stages {
+        let Some(w) = end.reject_watch.get(&stage.node_id) else { continue };
+        let rows_in = nodes.get(&w.input).and_then(|n| n.rows);
+        let rows_out = nodes.get(&stage.node_id).and_then(|n| n.rows);
+        let (Some(rows_in), Some(rows_out)) = (rows_in, rows_out) else { continue };
+        let Some(rejected) = rows_in.checked_sub(rows_out).filter(|n| *n > 0) else { continue };
+        let what = if w.wired {
+            format!("{rejected} rows failed the check and went to its reject port")
+        } else {
+            format!("{rejected} rows failed the check and were dropped: nothing is connected to its reject port")
+        };
+        if let Some(st) = nodes.get_mut(&stage.node_id) {
+            st.note = Some(match st.note.take().filter(|n| !n.trim().is_empty()) {
+                Some(prev) => format!("{prev}; {what}"),
+                None => what.clone(),
+            });
+        }
+        if !w.wired {
+            on_event(PipelineEvent::Log {
+                node_id: stage.node_id.clone(),
+                level: "warn".into(),
+                message: format!("{}: {what}", w.label),
+            });
+        }
+    }
+    row_count_logs(stages, nodes, &end.log_row_count, on_event);
+}
+
+/// "Log row count": each ticked node's final count as a log line, in stage
+/// order, sent by BOTH execution paths just before the run finishes. Not at the
+/// node's own finish, because only then is every count settled - on the
+/// per-stage path a view feeding a self-counting sink has its figure back-filled
+/// from the sink afterwards.
+fn row_count_logs(
+    stages: &[plan::Stage],
+    nodes: &std::collections::BTreeMap<String, NodeRunStatus>,
+    wanted: &std::collections::BTreeMap<String, String>,
+    on_event: &mut dyn FnMut(PipelineEvent),
+) {
+    for stage in stages {
+        let (Some(label), Some(rows)) =
+            (wanted.get(&stage.node_id), nodes.get(&stage.node_id).and_then(|n| n.rows))
+        else {
+            continue;
+        };
+        on_event(PipelineEvent::Log {
+            node_id: stage.node_id.clone(),
+            level: "info".into(),
+            message: format!("{label}: {rows} rows"),
+        });
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct NodeRunStatus {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+    /// The node's component id (`src.rest`, `xf.filter`, ...), so metrics and
+    /// diffs can group by WHAT ran rather than only by node id. Absent for
+    /// stages back-filled without a component.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub component: Option<String>,
     /// What the node reported on SUCCESS, when it had something to say.
     ///
     /// Driver connectors already return a sentence describing what they did -
@@ -7431,6 +8268,8 @@ mod tests {
             from: None,
             publish_group: None,
             sink_path: None,
+            staged_write: None,
+            staged_header: false,
             sink_mode: None,
             sink_compression: None,
             sink_direct: false,
@@ -7937,7 +8776,7 @@ mod sql_literal_tests {
 
 #[cfg(test)]
 mod cloud_secret_tests {
-    use super::secret_statement;
+    use super::{secret_family, secret_statement, JsonValue};
 
     #[test]
     fn a_gcs_bucket_keeps_the_region_it_was_given() {
@@ -7989,6 +8828,117 @@ mod cloud_secret_tests {
         )
         .expect("still makes one");
         assert!(!blank.contains("REGION"), "got: {blank}");
+    }
+
+    #[test]
+    fn a_keyless_s3_node_takes_its_credentials_from_the_environment() {
+        // An IAM role, an instance profile, IRSA, SSO or an AWS profile: no key
+        // in the pipeline at all, and the secret is made all the same.
+        let s = secret_statement(
+            "s3",
+            "src_s3_1",
+            &serde_json::json!({ "cloudAuth": "environment", "region": "eu-west-1" }),
+        )
+        .expect("no keys are needed");
+        assert!(s.contains("PROVIDER credential_chain"), "got: {s}");
+        assert!(s.contains("REGION 'eu-west-1'"), "got: {s}");
+
+        // Keys left in the form from before are not sent alongside: the choice
+        // was the environment, and a stale key would quietly win over it.
+        let stale = secret_statement(
+            "s3",
+            "src_s3_1",
+            &serde_json::json!({ "cloudAuth": "environment", "accessKey": "k", "secretKey": "s" }),
+        )
+        .expect("makes one");
+        assert!(!stale.contains("KEY_ID"), "got: {stale}");
+
+        // No region given, none is invented: the chain finds the environment's
+        // own, where the key path defaults to us-east-1.
+        let bare = secret_statement("s3", "src_s3_1", &serde_json::json!({ "cloudAuth": "environment" }))
+            .expect("makes one");
+        assert!(!bare.contains("REGION"), "got: {bare}");
+
+        // S3-compatible stores keep their endpoint.
+        let minio = secret_statement(
+            "s3",
+            "src_minio_1",
+            &serde_json::json!({ "cloudAuth": "environment", "endpoint": "localhost:9000", "urlStyle": "path", "useSsl": "false" }),
+        )
+        .expect("makes one");
+        assert!(minio.contains("ENDPOINT 'localhost:9000'"), "got: {minio}");
+        assert!(minio.contains("URL_STYLE 'path'"), "got: {minio}");
+        assert!(minio.contains("USE_SSL false"), "got: {minio}");
+    }
+
+    #[test]
+    fn a_keyless_azure_node_signs_in_as_its_identity() {
+        // A managed identity, workload identity, the Azure CLI or the
+        // environment: DuckDB's default chain, for the account named.
+        let s = secret_statement(
+            "azureblob",
+            "src_az_1",
+            &serde_json::json!({ "cloudAuth": "environment", "accountName": "acct" }),
+        )
+        .expect("no key is needed");
+        assert!(s.contains("TYPE AZURE"), "got: {s}");
+        assert!(s.contains("PROVIDER credential_chain"), "got: {s}");
+        assert!(s.contains("ACCOUNT_NAME 'acct'"), "got: {s}");
+        assert!(!s.contains("AccountKey"), "got: {s}");
+
+        // Without an account DuckDB fails that secret with an INTERNAL error at
+        // the first read. None instead, which reads "No valid Azure credentials"
+        // (both measured on the 1.5.5 CLI).
+        assert!(
+            secret_statement("azureblob", "src_az_1", &serde_json::json!({ "cloudAuth": "environment" }))
+                .is_none()
+        );
+    }
+
+    /// Every cloud storage form, filled in, makes the secret its runs need.
+    ///
+    /// The Azure form offered an access key and a secret key, and the Azure
+    /// secret is made from an account name and an account key. Nothing mapped
+    /// one onto the other, so a node set up from its own form ran with no
+    /// credentials at all; only a saved connection, which does carry the
+    /// account fields, ever worked. Read from the generated catalog, so it is
+    /// the form as the editor draws it that is checked.
+    #[test]
+    fn every_cloud_form_offers_the_fields_its_secret_is_made_from() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("duckle-mcp")
+            .join("catalog.json");
+        let catalog: JsonValue =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("catalog.json")).expect("JSON");
+        let mut checked = Vec::new();
+        for c in catalog["components"].as_array().expect("components") {
+            let id = c["id"].as_str().unwrap_or_default();
+            let bare = id.split_once('.').map(|(_, f)| f).unwrap_or(id);
+            let family = secret_family(bare);
+            if !matches!(family, "s3" | "gcs" | "azureblob") {
+                continue;
+            }
+            // Every field the form declares, filled in; the auth choice left
+            // at its default, which is the keys.
+            let mut props = serde_json::Map::new();
+            for s in c["manifest"]["sections"].as_array().into_iter().flatten() {
+                for f in s["fields"].as_array().into_iter().flatten() {
+                    if let Some(k) = f["key"].as_str().filter(|k| *k != "cloudAuth") {
+                        props.insert(k.to_string(), JsonValue::String("x".into()));
+                    }
+                }
+            }
+            assert!(
+                secret_statement(family, "n", &JsonValue::Object(props)).is_some(),
+                "{id}: filling in every field its form offers makes no {family} secret"
+            );
+            checked.push(id.to_string());
+        }
+        // Not vacuous: the families are there to be checked.
+        for id in ["src.s3", "snk.s3", "src.gcs", "src.azureblob", "snk.azureblob", "src.minio"] {
+            assert!(checked.iter().any(|c| c == id), "{id} was not checked: {checked:?}");
+        }
     }
 }
 

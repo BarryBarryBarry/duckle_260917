@@ -15,6 +15,9 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 duckle-metadata = { workspace = true }
 duckle-plugin-sdk = { workspace = true }
+# A child pipeline is read from disk inside the engine, so its saved
+# connections have to be resolved here too. No cycle: it depends on neither.
+duckle-secrets = { workspace = true }
 # Blocking HTTP client for SaaS connectors (snk.webhook, snk.rest,
 # src.rest, vector-DB HTTP APIs). ureq is ~20kb with minimal deps
 # vs ~100kb for reqwest + tokio, and it matches the per-stage CLI
@@ -51,6 +54,10 @@ cron = { workspace = true }
 # dep tree (300+ services we don't need).
 hmac = "0.13"
 base64 = "0.23"
+# NTLM for SharePoint Server on premises (Windows authentication). NTLMv2 on
+# RustCrypto primitives already in the tree; chosen over sspi, which brings
+# Kerberos and pre-release crypto crates this does not need.
+ntlmclient = "0.2"
 # MongoDB. The official driver is async-only; we use a minimal tokio
 # rt feature and call .block_on() from the synchronous executor.
 # Significant dep cost (~5MB, 30s of compile time) but the only path
@@ -290,4 +297,4 @@ libc = "0.2"
 # no equivalent of on Windows. 0.61 is already compiled into the tree for tokio,
 # so this adds two feature flags rather than a dependency.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_System_Threading"] }

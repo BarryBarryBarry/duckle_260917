@@ -22,7 +22,7 @@ pub fn source_select_for_format(format: &str, props: &JsonValue) -> Option<Strin
         "avro" => build_avro_source(props),
         "inline" => build_inline_source(props),
         "filelist" => return build_filelist_source(props).ok(),
-        "iceberg" => build_iceberg_source(props),
+        "iceberg" => return build_iceberg_source(props).ok(),
         "delta" => build_delta_source(props),
         "spatial" => build_spatial_source(props),
         "gdb" => build_gdb_source(props),
@@ -143,6 +143,35 @@ pub(crate) fn missing_input(node: &PipelineNode, port: &str) -> EngineError {
 
 // ---- View SQL (sources + transforms) ------------------------------------
 
+/// Encodings DuckDB ACCEPTS and then reads wrongly.
+///
+/// A wrong SPELLING is a hard error - "The CSV Reader does not support the
+/// encoding: CP950" - which is why the offered list could be trusted. `BIG5` is
+/// the exception: 1.5.4 takes it and its converter maps the newline byte 0x0A to
+/// U+25D9 rather than a line break, so the reader sees ONE line. Measured on the
+/// pinned CLI over a 3-row Big5 file: 0 rows and 5 columns, the file's own
+/// contents standing in as column names. The run is green, the node honestly
+/// says "ok (0 rows)", and an overwrite sink downstream replaces its target with
+/// that. Every other offered encoding read its own content back correctly.
+///
+/// Refused here rather than only removed from the dropdown, because a pipeline
+/// saved before the removal still carries the value, and so does one written by
+/// hand or generated from the API.
+fn refuse_broken_encoding(props: &JsonValue) -> Result<(), String> {
+    let Some(enc) = string_prop(props, "encoding").filter(|s| !s.trim().is_empty()) else {
+        return Ok(());
+    };
+    if !enc.trim().eq_ignore_ascii_case("big5") {
+        return Ok(());
+    }
+    Err("encoding 'BIG5': DuckDB accepts this name and then reads the file wrongly - its \
+         converter turns the newline byte into a character, so the whole file arrives as one \
+         line and the read returns zero rows with the file's contents as column names. \
+         Convert the file to UTF-8 first (for example `iconv -f BIG5 -t UTF-8`) and leave the \
+         encoding unset."
+        .to_string())
+}
+
 pub(crate) fn build_view_sql(
     component_id: &str,
     props: &JsonValue,
@@ -192,16 +221,22 @@ pub(crate) fn build_view_sql(
         // cast back to their type, and rows that fail parsing are dropped from
         // main (they flow to the reject relation instead) rather than aborting
         // the read. With the reject port unwired the SQL is unchanged.
-        "src.csv" => Ok(if reject_wired {
-            build_csv_source_split(props, declared, false)
-        } else {
-            build_csv_source(props, declared)
-        }),
-        "src.tsv" => Ok(if reject_wired {
-            build_csv_source_split(props, declared, true)
-        } else {
-            build_tsv_source(props, declared)
-        }),
+        "src.csv" => {
+            refuse_broken_encoding(props)?;
+            Ok(if reject_wired {
+                build_csv_source_split(props, declared, false)
+            } else {
+                build_csv_source(props, declared)
+            })
+        }
+        "src.tsv" => {
+            refuse_broken_encoding(props)?;
+            Ok(if reject_wired {
+                build_csv_source_split(props, declared, true)
+            } else {
+                build_tsv_source(props, declared)
+            })
+        }
         "src.parquet" => Ok(build_parquet_source(props)),
         "src.json" | "src.jsonl" => Ok(build_json_source(props)),
         "src.sqlite" => build_sqlite_source(props),
@@ -224,7 +259,7 @@ pub(crate) fn build_view_sql(
         "src.inline" => Ok(build_inline_source(props)),
         "src.filelist" => build_filelist_source(props),
         "src.artifact" => Ok(build_artifact_source(props)),
-        "src.iceberg" => Ok(build_iceberg_source(props)),
+        "src.iceberg" => build_iceberg_source(props),
         "src.delta" => Ok(build_delta_source(props)),
         "src.spatial" => Ok(build_spatial_source(props)),
         "src.gdb" => Ok(build_gdb_source(props)),
@@ -3710,6 +3745,59 @@ pub(crate) fn quality_pass_predicate(component_id: &str, props: &JsonValue) -> R
     }
 }
 
+/// #101: the code a component's rejected rows carry, or None when its reject
+/// output is not an error.
+///
+/// A small closed set, so a downstream pipeline can group or route rejects by
+/// code without parsing a message. A filter's misses and a join's unmatched
+/// rows are the data taking the other branch, not a failure, so they have no
+/// code and stay the bare row.
+pub(crate) fn reject_error_code(component_id: &str) -> Option<&'static str> {
+    Some(match component_id {
+        "qa.notnull" => "not_null",
+        "qa.schemavalidate" => "missing_value",
+        "qa.range" => "out_of_range",
+        "qa.regex" => "pattern_mismatch",
+        "qa.unique" => "duplicate_key",
+        "qa.refintegrity" => "orphan_key",
+        "qa.outlier" => "outlier",
+        "src.csv" | "src.tsv" => "parse_error",
+        _ => return None,
+    })
+}
+
+/// Append the #101 envelope to an error-type reject body: which node rejected
+/// the row, why, and when. It goes after the row's own columns, which are left
+/// exactly as they were. `__rejected_at` matches the dead-letter file's column
+/// of the same name, and the `__` prefix keeps clear of a user's own columns.
+pub(crate) fn with_reject_envelope(component_id: &str, node_id: &str, body: String) -> String {
+    match reject_error_code(component_id) {
+        Some(code) => format!(
+            "SELECT *, '{}' AS __node_id, '{}' AS __error_code, CURRENT_TIMESTAMP AS __rejected_at FROM ({})",
+            sql_escape(node_id),
+            code,
+            body
+        ),
+        None => body,
+    }
+}
+
+/// The same envelope for a reject TABLE a runtime executor has already written,
+/// such as the REST family's failed parents, which never pass through compiled
+/// SQL. Same names, types and values as `with_reject_envelope`, so rejects from
+/// either kind of node union without a cast. Runs on an empty table too, so a
+/// clean run's reject relation has the shape a failing one would.
+pub(crate) fn reject_envelope_alter_sql(table: &str, node_id: &str, code: &str) -> String {
+    let t = quote_ident(table);
+    format!(
+        "ALTER TABLE {t} ADD COLUMN __node_id VARCHAR DEFAULT '{}'; \
+         ALTER TABLE {t} ADD COLUMN __error_code VARCHAR DEFAULT '{}'; \
+         ALTER TABLE {t} ADD COLUMN __rejected_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP;",
+        sql_escape(node_id),
+        sql_escape(code)
+    )
+}
+
 /// Reject-port SQL for components that split rows. None = no reject table.
 pub(crate) fn build_reject_sql(
     component_id: &str,
@@ -4272,6 +4360,11 @@ pub(crate) fn rename_pairs(props: &JsonValue) -> Vec<(String, String)> {
 fn parse_rename_map_file(path: &str) -> Result<Vec<(String, String)>, String> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Rename: could not read mapping file '{}': {}", path, e))?;
+    // A byte order mark is not whitespace, so `trim` left it on the FIRST
+    // old-name: the CSV header stopped being recognised as a header, and the
+    // stage asked DuckDB to EXCLUDE a column that does not exist - a binder
+    // error naming a column that prints exactly like the right one.
+    let content = crate::format::strip_bom(&content);
     let ext = std::path::Path::new(path)
         .extension()
         .and_then(|e| e.to_str())
@@ -5627,9 +5720,42 @@ fn json_read_extra_args(props: &JsonValue) -> String {
     extra
 }
 
+/// `format='array'` for a JSON array that begins with a byte order mark.
+///
+/// DuckDB's shape sniff does not see past a BOM, so a BOM'd top-level array -
+/// what PowerShell 5.1 `Out-File -Encoding utf8`, Notepad and a good deal of
+/// .NET produce - came back as ONE row holding the whole document in a single
+/// `json` column, on a green run. Naming the format reads it correctly.
+///
+/// Deliberately narrow, all measured on the pinned 1.5.4 CLI:
+/// - BOM + array, auto            -> one `json` column (the bug)
+/// - BOM + array, format='array'  -> correct
+/// - BOM + NDJSON, auto           -> correct already
+/// - BOM + NDJSON, explicit format-> "byte order mark (BOM) is not supported"
+///
+/// So an array is the only shape worth naming, and only when the author has not
+/// named one. A remote path simply fails to open, which is the right answer: a
+/// BOM cannot be sniffed without fetching the object, and the read is what
+/// fetches it.
+fn bom_json_array_format(path: &str, props: &JsonValue) -> Option<&'static str> {
+    let named = string_prop(props, "format").unwrap_or_default();
+    if !matches!(named.trim().to_ascii_lowercase().as_str(), "" | "auto") {
+        return None;
+    }
+    use std::io::Read;
+    let mut head = [0u8; 16];
+    let n = std::fs::File::open(path).ok()?.read(&mut head).ok()?;
+    let rest = head[..n].strip_prefix(&[0xEF, 0xBB, 0xBF])?;
+    let first = rest.iter().find(|b| !b.is_ascii_whitespace())?;
+    (*first == b'[').then_some("array")
+}
+
 pub(crate) fn build_json_source(props: &JsonValue) -> String {
     let path = string_prop(props, "path").unwrap_or_default();
-    let extra = json_read_extra_args(props);
+    let mut extra = json_read_extra_args(props);
+    if let Some(fmt) = bom_json_array_format(&path, props) {
+        extra.push_str(&format!(", format='{}'", fmt));
+    }
     // recordsPath: a dotted key path to the array of records inside the JSON
     // (e.g. a REST envelope like {"data":[...]} or {"response":{"records":[...]}}).
     // When set, walk to that array and unnest + recursively flatten each record
@@ -5916,6 +6042,10 @@ pub(crate) fn attach_prelude(component_id: &str, props: &JsonValue) -> String {
         // race on the cached extension file and intermittently fail.
         "src.avro" => return "LOAD avro; ".into(),
         "src.excel" => return "LOAD excel; ".into(),
+        "src.iceberg" | "snk.iceberg" if is_iceberg_rest(props) => {
+            let alias = if component_id == "src.iceberg" { "duckle_src" } else { "duckle_dst" };
+            return iceberg_rest_attach(props, alias);
+        }
         "src.iceberg" | "snk.iceberg" => return "LOAD iceberg; ".into(),
         "src.delta" => return "LOAD delta; ".into(),
         // Vector Similarity Search uses the vss extension's array_*
@@ -6013,6 +6143,17 @@ fn mssql_attach(props: &JsonValue) -> String {
     if let Some(p) = string_prop(props, "password").filter(|s| !s.is_empty()) {
         parts.push(format!("password={}", p));
     }
+    // #357: carry "Encrypt connection" into the bulk path too. It was read only
+    // where the tiberius driver builds its config, and `bulk` defaults to true,
+    // so on the sink's own default path the control did nothing: a user on SQL
+    // Server 2014 followed the field's advice, unchecked it, and still failed the
+    // handshake unless they also unchecked "Bulk write", which nothing said.
+    //
+    // Stated in both directions rather than only when off. The extension has its
+    // own default and the form claims one, and a connection string that says what
+    // the form says is the only version of this that cannot drift apart from it.
+    let encrypt = props.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(true);
+    parts.push(format!("encrypt={}", encrypt));
     // #86 follow-up: honour the same "Trust TLS cert" toggle as the legacy
     // driver (default off). When off we omit the key so the extension validates
     // the cert / lets an older non-TLS server negotiate plainly; when on we trust
@@ -6508,8 +6649,12 @@ pub(crate) fn build_relational_sink(
         // Truncate keeps the table's existing schema (and any indexes /
         // grants on it) and replaces just the rows. Useful when the
         // table is referenced by downstream views or foreign keys.
+        // A guarded DELETE rather than TRUNCATE: TRUNCATE cannot be made
+        // conditional, and the rule above applies here too. Emptying a table
+        // because an upstream hiccuped is worse than clearing it a little more
+        // slowly.
         "truncate" => Ok(format!(
-            "TRUNCATE TABLE {q}; INSERT INTO {q} SELECT * FROM {from}",
+            "DELETE FROM {q} WHERE EXISTS (SELECT 1 FROM {from}); INSERT INTO {q} SELECT * FROM {from}",
             q = qual,
             from = quote_ident(from_view)
         )),
@@ -6819,16 +6964,108 @@ pub(crate) fn build_excel_sink(props: &JsonValue, from_view: &str) -> String {
     )
 }
 
-/// Iceberg sink: COPY ... TO '<path>' (FORMAT 'iceberg'). DuckDB
-/// v1.5+ writes a full Iceberg table (data/ + metadata/) at the
-/// given path. Read-back via src.iceberg.
-pub(crate) fn build_iceberg_sink(props: &JsonValue, from_view: &str) -> String {
-    let path = string_prop(props, "path").unwrap_or_default();
-    format!(
-        "COPY (SELECT * FROM {}) TO '{}' (FORMAT 'iceberg')",
-        quote_ident(from_view),
-        sql_escape(&path)
-    )
+/// Iceberg sink. With a path: COPY ... TO '<path>' (FORMAT 'iceberg'), which
+/// DuckDB v1.5+ writes as a full table (data/ + metadata/). Through a REST
+/// catalog: into the attached catalog (see `iceberg_rest_attach`), creating the
+/// namespace and table when missing.
+pub(crate) fn build_iceberg_sink(props: &JsonValue, from_view: &str) -> Result<String, String> {
+    let from = quote_ident(from_view);
+    if is_iceberg_rest(props) {
+        let (namespace, table) = iceberg_rest_table(props)?;
+        let qualified = format!("duckle_dst.{}.{}", quote_ident(&namespace), quote_ident(&table));
+        let schema = format!("CREATE SCHEMA IF NOT EXISTS duckle_dst.{}; ", quote_ident(&namespace));
+        let mode = string_prop(props, "mode").unwrap_or_default().to_ascii_lowercase();
+        return Ok(match mode.as_str() {
+            // The extension has no CREATE OR REPLACE, and says so.
+            "overwrite" => format!(
+                "{schema}DROP TABLE IF EXISTS {qualified}; CREATE TABLE {qualified} AS SELECT * FROM {from}"
+            ),
+            // Append is the default: a misconfigured pipeline should add rows,
+            // not drop a table. The empty CREATE makes a missing table without
+            // writing, so the INSERT is the only write whether or not it existed.
+            "" | "append" => format!(
+                "{schema}CREATE TABLE IF NOT EXISTS {qualified} AS SELECT * FROM {from} WHERE false; \
+                 INSERT INTO {qualified} BY NAME SELECT * FROM {from}"
+            ),
+            other => return Err(format!("Iceberg sink: mode '{other}' is not one of append, overwrite")),
+        });
+    }
+    // With no path the COPY wrote the table into whatever directory the process
+    // happened to be in, and reported success.
+    let path = string_prop(props, "path")
+        .filter(|p| !p.trim().is_empty())
+        .ok_or_else(|| {
+            "Iceberg sink: path required (the table directory), or set catalog to rest".to_string()
+        })?;
+    Ok(format!("COPY (SELECT * FROM {}) TO '{}' (FORMAT 'iceberg')", from, sql_escape(&path)))
+}
+
+/// Whether an Iceberg node goes through a REST catalog rather than a path.
+pub(crate) fn is_iceberg_rest(props: &JsonValue) -> bool {
+    string_prop(props, "catalog").is_some_and(|c| c.eq_ignore_ascii_case("rest"))
+}
+
+/// The namespace and table a REST-catalog node names, both required.
+fn iceberg_rest_table(props: &JsonValue) -> Result<(String, String), String> {
+    let get = |k: &str| string_prop(props, k).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    for key in ["catalogUri", "warehouse"] {
+        if get(key).is_none() {
+            return Err(format!("Iceberg REST catalog: {key} required"));
+        }
+    }
+    let namespace = get("namespace").ok_or("Iceberg REST catalog: namespace required")?;
+    let table = get("table").ok_or("Iceberg REST catalog: table required")?;
+    Ok((namespace, table))
+}
+
+/// LOAD, secrets and ATTACH for a REST catalog, as `alias`.
+///
+/// Two secrets, for two different things. The catalog's own credentials -
+/// OAuth2 client credentials or a bearer token - go in an ICEBERG secret the
+/// ATTACH names. The data files live in object storage, and a catalog that does
+/// not vend credentials needs an S3 secret for them; that is built by the same
+/// `secret_statement` every S3 node uses, from the same keys, so a saved S3
+/// connection supplies it too. The catalog address is `catalogUri`, never
+/// `endpoint`, which is the storage endpoint in those same keys.
+pub(crate) fn iceberg_rest_attach(props: &JsonValue, alias: &str) -> String {
+    let get = |k: &str| string_prop(props, k).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let mut sql = String::from("LOAD iceberg; LOAD httpfs; ");
+    if let Some(storage) = crate::secret_statement("s3", &format!("{alias}_store"), props) {
+        sql.push_str(&storage);
+        sql.push(' ');
+    }
+    let catalog_secret = format!("{alias}_catalog");
+    let auth = match get("authType").unwrap_or_default().to_ascii_lowercase().as_str() {
+        "oauth2" => {
+            let mut parts = vec![
+                "TYPE iceberg".to_string(),
+                format!("CLIENT_ID '{}'", sql_escape(&get("clientId").unwrap_or_default())),
+                format!("CLIENT_SECRET '{}'", sql_escape(&get("clientSecret").unwrap_or_default())),
+            ];
+            if let Some(uri) = get("oauth2ServerUri") {
+                parts.push(format!("OAUTH2_SERVER_URI '{}'", sql_escape(&uri)));
+            }
+            if let Some(scope) = get("oauth2Scope") {
+                parts.push(format!("OAUTH2_SCOPE '{}'", sql_escape(&scope)));
+            }
+            sql.push_str(&format!("CREATE OR REPLACE SECRET {catalog_secret} ({}); ", parts.join(", ")));
+            format!("SECRET {catalog_secret}")
+        }
+        "token" => {
+            sql.push_str(&format!(
+                "CREATE OR REPLACE SECRET {catalog_secret} (TYPE iceberg, TOKEN '{}'); ",
+                sql_escape(&get("token").unwrap_or_default())
+            ));
+            format!("SECRET {catalog_secret}")
+        }
+        _ => "AUTHORIZATION_TYPE 'none'".to_string(),
+    };
+    sql.push_str(&format!(
+        "ATTACH '{}' AS {alias} (TYPE iceberg, ENDPOINT '{}', {auth}); ",
+        sql_escape(&get("warehouse").unwrap_or_default()),
+        sql_escape(&get("catalogUri").unwrap_or_default()),
+    ));
+    sql
 }
 
 /// Geospatial sink via the spatial extension's GDAL writer. The form's
@@ -6997,9 +7234,19 @@ pub(crate) fn build_db_sink(
         // Keep the existing table (and its rowids / downstream references),
         // replace just the rows. CREATE IF NOT EXISTS so a first run still
         // works against a fresh target file.
+        //
+        // The clear is conditional on the upstream having rows, which is the rule
+        // `run_oracle_sink` states and the Rust-side clearing sinks obey: a run
+        // that produced nothing leaves the target alone rather than emptying it
+        // on the strength of an upstream that may simply have failed to produce.
+        // A late source file, a filter matching nothing or an empty API page used
+        // to delete yesterday's data and report ok. Expressed in SQL so it costs
+        // no extra round trip, and it is the same shape the upsert branch already
+        // sends to these targets: a DELETE against the attached table correlated
+        // with the local relation.
         return Ok(format!(
             "CREATE TABLE IF NOT EXISTS duckle_dst.{t} AS SELECT * FROM {up} LIMIT 0; \
-             DELETE FROM duckle_dst.{t}; \
+             DELETE FROM duckle_dst.{t} WHERE EXISTS (SELECT 1 FROM {up}); \
              INSERT INTO duckle_dst.{t} SELECT * FROM {up}",
             t = t,
             up = up,
@@ -7759,7 +8006,16 @@ pub(crate) fn build_dt_epoch(inputs: &NodeInputs, props: &JsonValue) -> Result<S
             qcol
         )
     } else {
-        format!("epoch(CAST({} AS TIMESTAMP))", qcol)
+        // #359: a TIMESTAMP WITH TIME ZONE already names an instant, and casting
+        // it to TIMESTAMP takes the host's wall clock - an IST host answered
+        // 5h30m late. Everything else keeps the cast, which is what lets a
+        // VARCHAR column in at all: epoch(VARCHAR) does not bind. typeof() folds
+        // to a constant, so only one branch ever runs.
+        format!(
+            "CASE WHEN typeof({c}) = 'TIMESTAMP WITH TIME ZONE' THEN epoch(CAST({c} AS TIMESTAMPTZ)) \
+             ELSE epoch(CAST({c} AS TIMESTAMP)) END",
+            c = qcol
+        )
     };
     let output = string_prop(props, "outputColumn")
         .filter(|s| !s.is_empty())
@@ -9103,9 +9359,15 @@ pub(crate) fn build_filelist_source(props: &JsonValue) -> Result<String, String>
 /// Iceberg source via the DuckDB iceberg extension's `iceberg_scan`.
 /// The `path` is the iceberg table location (a local directory or an
 /// `s3://...` URL backed by a cloud SECRET created elsewhere).
-pub(crate) fn build_iceberg_source(props: &JsonValue) -> String {
+pub(crate) fn build_iceberg_source(props: &JsonValue) -> Result<String, String> {
+    // Through a REST catalog the table is read from the attached catalog, which
+    // `iceberg_rest_attach` puts in the stage prelude as duckle_src.
+    if is_iceberg_rest(props) {
+        let (namespace, table) = iceberg_rest_table(props)?;
+        return Ok(format!("SELECT * FROM duckle_src.{}.{}", quote_ident(&namespace), quote_ident(&table)));
+    }
     let path = string_prop(props, "path").unwrap_or_default();
-    format!("SELECT * FROM iceberg_scan('{}')", sql_escape(&path))
+    Ok(format!("SELECT * FROM iceberg_scan('{}')", sql_escape(&path)))
 }
 
 /// Delta Lake source via the DuckDB delta extension's `delta_scan`.
@@ -9441,8 +9703,31 @@ pub(crate) fn build_cloud_source(
         })
         .unwrap_or_default();
     let override_fmt = string_prop(props, "format");
+    // `format` is read TWICE on this node, for two different questions: here as
+    // the container (parquet / json / tsv / csv), and again inside
+    // `build_json_source` as the JSON SHAPE (array / jsonl / object). So a shape
+    // value - which is the spelling src.json uses, and the only thing that reads
+    // a BOM'd array correctly - matched no container arm and fell through to the
+    // CSV reader: the JSON body was parsed as CSV, and the sink got comma-split
+    // fragments of the document as COLUMN NAMES with zero rows, on a green run.
+    //
+    // A shape therefore selects the JSON container, and the prop is left in
+    // place so the JSON builder still reads it as the shape. Both questions get
+    // the same answer instead of disagreeing.
+    let shape_means_json = matches!(
+        override_fmt
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "array" | "jsonl" | "ndjson" | "newline_delimited" | "object" | "unstructured"
+    );
     let lower = path.to_ascii_lowercase();
-    let chosen = override_fmt.filter(|s| !s.is_empty()).unwrap_or_else(|| {
+    let chosen = if shape_means_json {
+        "json".to_string()
+    } else {
+        override_fmt.filter(|s| !s.is_empty()).unwrap_or_else(|| {
         if lower.ends_with(".parquet") || lower.ends_with(".pq") {
             "parquet".into()
         } else if lower.ends_with(".json")
@@ -9455,7 +9740,21 @@ pub(crate) fn build_cloud_source(
         } else {
             "csv".into()
         }
-    });
+        })
+    };
+    // A value that is neither a container nor a shape is refused rather than
+    // read as CSV. Falling through meant any typo - or any format this source
+    // does not implement - parsed the body with the CSV reader and reported ok.
+    if !matches!(
+        chosen.trim().to_ascii_lowercase().as_str(),
+        "csv" | "tsv" | "json" | "parquet" | "avro" | "orc"
+    ) {
+        return Err(EngineError::Unsupported(format!(
+            "Cloud source format '{}' is not recognised. Use parquet, json, csv or tsv for the \
+             container, or a JSON shape (array, jsonl, object) which selects JSON.",
+            chosen
+        )));
+    }
     // Delegate to the LOCAL format builders with the resolved cloud path
     // injected into a cloned props, so a cloud (s3/gcs/azure/http) source
     // gets the same treatment as its local counterpart: parquet column
@@ -9468,6 +9767,11 @@ pub(crate) fn build_cloud_source(
     let mut local = props.clone();
     if let Some(obj) = local.as_object_mut() {
         obj.insert("path".into(), JsonValue::String(path.clone()));
+    }
+    if matches!(chosen.as_str(), "csv" | "tsv") || !matches!(chosen.as_str(), "parquet" | "json" | "avro" | "orc") {
+        // The fallthrough below is the CSV reader, so anything that is not one
+        // of the named formats reaches it too.
+        refuse_broken_encoding(&local).map_err(EngineError::Unsupported)?;
     }
     Ok(match chosen.as_str() {
         "parquet" => build_parquet_source(&local),
@@ -9576,6 +9880,17 @@ fn refuse_unimplemented_file_mode(
     if mode.is_empty() || mode.eq_ignore_ascii_case("overwrite") {
         return Ok(());
     }
+    // #367: a line-oriented file appends, by adding its staged rows to the end.
+    if mode.eq_ignore_ascii_case("append") {
+        return match append_refusal(component_id, props) {
+            None => Ok(()),
+            Some(why) => Err(EngineError::Unsupported(format!(
+                "{component_id}: cannot append to this file - {why}. Written as it stands, the \
+                 COPY would replace the file rather than add to it, so it is refused. Remove the \
+                 mode, or write to a database sink, which does implement it."
+            ))),
+        };
+    }
     Err(EngineError::Unsupported(format!(
         "{component_id}: write mode '{mode}' is not implemented for a file sink - it writes with \
          COPY, which always replaces the file. Running this would have REPLACED the existing data \
@@ -9588,6 +9903,111 @@ fn refuse_unimplemented_file_mode(
     )))
 }
 
+/// #367: why `component_id` cannot append with these props, or None when it can.
+///
+/// An append adds the staged file's lines to the end of the destination, which
+/// adds rows only to one local, uncompressed, line-oriented file. Anything else
+/// is refused rather than replaced, as every file-sink mode other than
+/// overwrite used to be.
+fn append_refusal(component_id: &str, props: &JsonValue) -> Option<&'static str> {
+    match component_id {
+        "snk.csv" | "snk.tsv" | "snk.json" | "snk.jsonl" => {}
+        "snk.parquet" => {
+            return Some(
+                "a Parquet file cannot be added to in place; write one file per run (a dated \
+                 path, for example) and read the directory with a glob",
+            )
+        }
+        _ => return Some("append is not implemented for this file format"),
+    }
+    let path = string_prop(props, "path").unwrap_or_default();
+    if !crate::is_local_path(&path) || path.contains(['*', '?', '[', '{']) {
+        return Some("only a single local file can be appended to");
+    }
+    let compressed = string_prop(props, "compression")
+        .is_some_and(|c| matches!(c.trim().to_ascii_lowercase().as_str(), "gzip" | "zstd"));
+    if compressed || path.ends_with(".gz") || path.ends_with(".zst") {
+        return Some("a compressed file cannot be appended to line by line");
+    }
+    if !columns_from_props(props, "partitionBy").unwrap_or_default().is_empty() {
+        return Some("a partitioned write is a directory of files, not one file");
+    }
+    if component_id.starts_with("snk.json")
+        && string_prop(props, "format").is_some_and(|f| f.eq_ignore_ascii_case("array"))
+    {
+        return Some("a JSON array file cannot be added to; write JSON Lines instead");
+    }
+    None
+}
+
+/// The extension a single-file sink writes under before it is published.
+///
+/// Deliberately not the destination's extension: a source glob is written as
+/// `*.csv`, and the whole point is that no glob of the OUTPUT format can match
+/// a file that is still being written. A downstream pipeline reading
+/// `/lake/daily/*.csv` used to load the good file plus a prefix of an abandoned
+/// one - measured here as 10,518,992 rows where 8,000,000 existed, on a run
+/// that reported success.
+pub(crate) const STAGED_SUFFIX: &str = ".duckle-partial";
+
+/// Where a single-file sink writes before it is published, or None when it
+/// writes its destination directly.
+///
+/// Publishing is a rename onto the destination, so the destination only ever
+/// holds a file that was finished. DuckDB stages a COPY itself, but only when
+/// the target already exists, which a dated export never does - so a run killed
+/// mid-write left a partial file at the real path, with a correct header, rows
+/// in order and a fifth of the data missing.
+///
+/// ONE function decides, and both sides call it: `build_sink_sql` points the
+/// COPY here, and the planner records the same answer on the Stage for the
+/// executor to publish. If the two could disagree, the disagreement would be a
+/// sink that wrote to a name nobody renames - a run that reports success having
+/// published nothing.
+///
+/// An append stages too (#367): the executor adds the staged rows to the end of
+/// the destination instead of renaming over it, so an append that fails part
+/// way leaves the destination as it was.
+///
+/// Not for: another mode ("error if exists" is a question about the
+/// destination), a partitioned write (a DIRECTORY of files, not one file), a
+/// remote destination (a rename is a local filesystem operation), or a glob.
+pub(crate) fn staged_sink_path(component_id: &str, props: &JsonValue) -> Option<String> {
+    if !matches!(
+        component_id,
+        "snk.csv" | "snk.tsv" | "snk.parquet" | "snk.json" | "snk.jsonl"
+    ) {
+        return None;
+    }
+    let mode = string_prop(props, "mode").unwrap_or_default();
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "" | "overwrite" => {}
+        "append" if append_refusal(component_id, props).is_none() => {}
+        _ => return None,
+    }
+    if !columns_from_props(props, "partitionBy")
+        .unwrap_or_default()
+        .is_empty()
+    {
+        return None;
+    }
+    let path = string_prop(props, "path").filter(|p| !p.trim().is_empty())?;
+    if !crate::is_local_path(&path) || path.contains(['*', '?', '[', '{']) {
+        return None;
+    }
+    Some(format!("{}{}", path, STAGED_SUFFIX))
+}
+
+/// The props a sink's COPY is built from: the same props with `path` pointed at
+/// the staging file, when this sink stages.
+fn staged_props(component_id: &str, props: &JsonValue) -> JsonValue {
+    let mut p = props.clone();
+    if let (Some(staged), Some(obj)) = (staged_sink_path(component_id, props), p.as_object_mut()) {
+        obj.insert("path".into(), JsonValue::String(staged));
+    }
+    p
+}
+
 pub(crate) fn build_sink_sql(
     component_id: &str,
     props: &JsonValue,
@@ -9598,10 +10018,13 @@ pub(crate) fn build_sink_sql(
     match component_id {
         "snk.csv" => {
             refuse_unimplemented_file_mode(component_id, props)?;
-            Ok(build_csv_sink(props, from_view))
+            refuse_unwritable_compression(component_id, props)?;
+            Ok(build_csv_sink(&staged_props(component_id, props), from_view))
         }
         "snk.tsv" => {
-            let mut p = props.clone();
+            refuse_unimplemented_file_mode(component_id, props)?;
+            refuse_unwritable_compression(component_id, props)?;
+            let mut p = staged_props(component_id, props);
             if let Some(obj) = p.as_object_mut() {
                 obj.insert("delimiter".into(), JsonValue::String("\t".into()));
             }
@@ -9609,11 +10032,12 @@ pub(crate) fn build_sink_sql(
         }
         "snk.parquet" => {
             refuse_unimplemented_file_mode(component_id, props)?;
-            Ok(build_parquet_sink(props, from_view))
+            Ok(build_parquet_sink(&staged_props(component_id, props), from_view))
         }
         "snk.json" | "snk.jsonl" => {
             refuse_unimplemented_file_mode(component_id, props)?;
-            Ok(build_json_sink(props, from_view))
+            refuse_unwritable_compression(component_id, props)?;
+            Ok(build_json_sink(&staged_props(component_id, props), from_view))
         }
         "snk.s3" | "snk.gcs" | "snk.azureblob"
         | "snk.minio" | "snk.r2" | "snk.b2" => {
@@ -9642,7 +10066,7 @@ pub(crate) fn build_sink_sql(
             Ok(build_excel_sink(props, from_view))
         }
         "snk.spatial" => Ok(build_spatial_sink(props, from_view)),
-        "snk.iceberg" => Ok(build_iceberg_sink(props, from_view)),
+        "snk.iceberg" => build_iceberg_sink(props, from_view).map_err(EngineError::Config),
         other => Err(EngineError::Unsupported(format!(
             "Sink '{}' is not yet implemented",
             other
@@ -9705,6 +10129,15 @@ pub(crate) fn build_cloud_sink(
     if let Some(obj) = local.as_object_mut() {
         obj.insert("path".into(), JsonValue::String(path.clone()));
         obj.remove("partitionBy");
+    }
+    // Compression is a Parquet setting on the cloud forms, and snk.s3 saves
+    // zstd on every node it makes, so the CSV and JSON builders - which read it
+    // now - must not see it here: an object nobody asked to compress stays
+    // plain, and a name ending .gz or .zst still compresses it.
+    if chosen != "parquet" {
+        if let Some(obj) = local.as_object_mut() {
+            obj.remove("compression");
+        }
     }
     Ok(match chosen.as_str() {
         "csv" => build_csv_sink(&local, from_view),
@@ -9781,14 +10214,87 @@ fn partition_guarded_source(props: &JsonValue, from_view: &str, partition: &[Str
     )
 }
 
-pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
-    let path = string_prop(props, "path").unwrap_or_default();
-    // The sink form writes `writeHeader`; the source uses `hasHeader`.
-    let header = props
+/// `USE_TMP_FILE true` for a single-file COPY, so the destination path only
+/// ever holds a complete file.
+///
+/// DuckDB stages a COPY beside the target and renames it when the write
+/// finished - but by DEFAULT only when the target already exists. So a run that
+/// was killed mid-write left a partial file at the REAL path whenever the
+/// destination was new, which is every dated export: correct header, rows in
+/// order, a last line intact enough to parse, and a fifth of the data missing,
+/// with nothing marking it. Measured on this repo: an 8,000,000-row export
+/// killed 2.6s in left 6,162,821 rows that read back with no error at all;
+/// with the destination already present, the same kill left the good file
+/// untouched. Asking for it always is what makes those two cases behave alike,
+/// rather than the durability of an output depending on whether yesterday's
+/// file happens to still be there.
+///
+/// Not for a partitioned write: that produces a DIRECTORY of files, with no
+/// single file to stage.
+fn staged_write(options: &mut Vec<String>, partitioned: bool) {
+    if !partitioned {
+        options.push("USE_TMP_FILE true".to_string());
+    }
+}
+
+/// The compression a staged CSV or JSON COPY has to be told about.
+///
+/// DuckDB takes it from the target's extension - exact-case `.gz` or `.zst`,
+/// measured against 1.5.5 (`.gzip`, `.zstd` and `.GZ` all write plain text) -
+/// and a staged target ends in `.duckle-partial`. Without this an `out.csv.gz`
+/// was written as plain text and published under the `.gz` name.
+fn staged_compression(path: &str) -> Option<&'static str> {
+    let dest = path.strip_suffix(STAGED_SUFFIX)?;
+    if dest.ends_with(".gz") {
+        Some("gzip")
+    } else if dest.ends_with(".zst") {
+        Some("zstd")
+    } else {
+        None
+    }
+}
+
+/// The compression a CSV or JSON sink writes: Gzip or Zstd when its form says
+/// so, whatever the file is called; otherwise what the name asks for, which
+/// DuckDB reads itself from an unstaged path and `staged_compression` supplies
+/// for a staged one.
+fn text_compression(props: &JsonValue, path: &str) -> Option<&'static str> {
+    match string_prop(props, "compression").map(|c| c.trim().to_ascii_lowercase()).as_deref() {
+        Some("gzip") => Some("gzip"),
+        Some("zstd") => Some("zstd"),
+        _ => staged_compression(path),
+    }
+}
+
+/// A CSV or JSON file can be written plain, gzip or zstd. Snappy and LZ4 are
+/// Parquet codecs the form used to offer here too, and nothing read the choice,
+/// so a pipeline that picked one got a plain file; refused now rather than
+/// still ignored.
+fn refuse_unwritable_compression(component_id: &str, props: &JsonValue) -> Result<(), EngineError> {
+    let c = string_prop(props, "compression").unwrap_or_default();
+    match c.trim().to_ascii_lowercase().as_str() {
+        "" | "none" | "uncompressed" | "auto" | "gzip" | "zstd" => Ok(()),
+        other => Err(EngineError::Unsupported(format!(
+            "{component_id}: compression '{other}' cannot be written for a CSV or JSON file - pick \
+             gzip, zstd or none"
+        ))),
+    }
+}
+
+/// Whether a CSV sink writes a header line. The sink form writes
+/// `writeHeader`; the source uses `hasHeader`. The COPY and an append (#367),
+/// which leaves the header out when the file already has one, both ask here.
+pub(crate) fn csv_writes_header(props: &JsonValue) -> bool {
+    props
         .get("writeHeader")
         .or_else(|| props.get("hasHeader"))
         .and_then(JsonValue::as_bool)
-        .unwrap_or(true);
+        .unwrap_or(true)
+}
+
+pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
+    let path = string_prop(props, "path").unwrap_or_default();
+    let header = csv_writes_header(props);
     let delim = string_prop(props, "delimiter").unwrap_or_else(|| ",".into());
     let null_val = string_prop(props, "nullValue").unwrap_or_default();
     let mut options = vec![
@@ -9798,6 +10304,9 @@ pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
     ];
     if !null_val.is_empty() {
         options.push(format!("NULLSTR '{}'", sql_escape(&null_val)));
+    }
+    if let Some(c) = text_compression(props, &path) {
+        options.push(format!("COMPRESSION '{c}'"));
     }
     let partition = columns_from_props(props, "partitionBy").unwrap_or_default();
     if !partition.is_empty() {
@@ -9809,6 +10318,7 @@ pub(crate) fn build_csv_sink(props: &JsonValue, from_view: &str) -> String {
         options.push(format!("PARTITION_BY ({})", cols));
         options.push("OVERWRITE_OR_IGNORE".to_string());
     }
+    staged_write(&mut options, !partition.is_empty());
     format!(
         "COPY ({}) TO '{}' ({})",
         partition_guarded_source(props, from_view, &partition),
@@ -9883,6 +10393,7 @@ pub(crate) fn build_parquet_sink(props: &JsonValue, from_view: &str) -> String {
         // leave untouched siblings alone).
         options.push("OVERWRITE_OR_IGNORE".to_string());
     }
+    staged_write(&mut options, !partition.is_empty());
     let source = partition_guarded_source(props, from_view, &partition);
     // #319: optional Hilbert spatial ordering, so geometries that are close on
     // the ground land close in the file and row-group pruning can skip more.
@@ -9937,10 +10448,11 @@ pub(crate) fn build_json_sink(props: &JsonValue, from_view: &str) -> String {
         .map(|f| f.eq_ignore_ascii_case("array"))
         .unwrap_or(false);
     format!(
-        "COPY (SELECT * FROM {}) TO '{}' (FORMAT JSON, ARRAY {})",
+        "COPY (SELECT * FROM {}) TO '{}' (FORMAT JSON, ARRAY {}, USE_TMP_FILE true{})",
         quote_ident(from_view),
         sql_escape(&path),
-        if array { "true" } else { "false" }
+        if array { "true" } else { "false" },
+        text_compression(props, &path).map(|c| format!(", COMPRESSION '{c}'")).unwrap_or_default()
     )
 }
 

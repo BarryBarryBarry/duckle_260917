@@ -871,9 +871,19 @@ pub fn collect(uri: &str, props: &serde_json::Value) -> Result<Vec<String>, Stri
             )
         })?;
         let (bucket, prefix) = crate::s3::parse_s3_uri(uri).map_err(|e| e.to_string())?;
-        // The same cap the listing source uses, so a prefix holding years of
-        // drops is bounded work rather than an unbounded walk.
-        let objects = cfg.list(&bucket, &prefix, 10_000).map_err(|e| e.to_string())?;
+        // Bounded work rather than an unbounded walk - but a bound is not a
+        // licence to read the chain short. Totality is checked against what is
+        // listed, so a prefix past the bound is refused, not quietly truncated.
+        const MOST: usize = 10_000;
+        let objects = cfg.list(&bucket, &prefix, MOST + 1).map_err(|e| e.to_string())?;
+        if objects.len() > MOST {
+            return Err(format!(
+                "{uri} holds more than {MOST} objects, more than a sequence lists. Reading only \
+                 the first {MOST} would leave the rest out of the totality check without \
+                 saying so; move superseded generations out of the prefix, or point the \
+                 sequence at a narrower one"
+            ));
+        }
         return Ok(objects
             .into_iter()
             .map(|o| format!("s3://{bucket}/{}", o.key))

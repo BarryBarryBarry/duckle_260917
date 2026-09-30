@@ -63,6 +63,36 @@ const EMBEDDED_MCP: &[u8] = include_bytes!(env!("DUCKLE_EMBEDDED_MCP"));
 const EMBEDDED_LANCE: &[u8] = include_bytes!(env!("DUCKLE_EMBEDDED_LANCE"));
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// The GDK backend to ask for before GTK starts on Linux, or why there is no
+/// window to open. Takes DISPLAY, WAYLAND_DISPLAY and GDK_BACKEND as set.
+///
+/// On Wayland, X11 first (through XWayland, the #169 workaround) and Wayland
+/// when there is no X server. X11 alone was #361: a Wayland session without
+/// XWayland had nowhere to open the window, and GTK panicked.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn gdk_backend_for(
+    display: Option<&str>,
+    wayland: Option<&str>,
+    chosen: Option<&str>,
+) -> Result<Option<&'static str>, String> {
+    let set = |v: Option<&str>| v.is_some_and(|s| !s.is_empty());
+    if set(chosen) {
+        return Ok(None);
+    }
+    if set(wayland) {
+        return Ok(Some("x11,wayland"));
+    }
+    if set(display) {
+        return Ok(None);
+    }
+    Err("Duckle cannot open its window: this session has no display (neither DISPLAY nor \
+         WAYLAND_DISPLAY is set), which is what a login over SSH or a server without a \
+         desktop looks like. Start it from a desktop session, or run it without a window: \
+         `Duckle-linux-x64 serve` runs the scheduler and the web console, and \
+         `Duckle-linux-x64 run` runs a pipeline."
+        .to_string())
+}
+
 pub fn run() {
     // #169: on Linux the webview is webkitgtk, whose GTK/GDK stack crashes at
     // startup on several Wayland compositors - reported on KDE Plasma 6 with the
@@ -73,10 +103,18 @@ pub fn run() {
     // override, and must be set before GTK initializes (before the builder).
     #[cfg(target_os = "linux")]
     {
-        if std::env::var_os("WAYLAND_DISPLAY").is_some()
-            && std::env::var_os("GDK_BACKEND").is_none()
-        {
-            std::env::set_var("GDK_BACKEND", "x11");
+        let var = |k: &str| std::env::var(k).ok();
+        match gdk_backend_for(
+            var("DISPLAY").as_deref(),
+            var("WAYLAND_DISPLAY").as_deref(),
+            var("GDK_BACKEND").as_deref(),
+        ) {
+            Ok(Some(backend)) => std::env::set_var("GDK_BACKEND", backend),
+            Ok(None) => {}
+            Err(why) => {
+                eprintln!("{why}");
+                std::process::exit(1);
+            }
         }
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
@@ -188,6 +226,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping,
             autodetect_schema,
+            connection_test,
             run_pipeline,
             run_pipeline_partial,
             run_history,
@@ -200,6 +239,7 @@ pub fn run() {
             complete_node_sql,
             describe_node_columns,
             pipeline_column_lineage,
+            pipeline_from_sql,
             pipeline_trust_report,
             schedule_set_workspace,
             schedule_list,
@@ -228,6 +268,7 @@ pub fn run() {
             import_job_file,
             chat_send,
             chat_close_session,
+            ai_models,
             chat_extract_pipeline,
             duckie_history::duckie_conversations_list,
             duckie_history::duckie_conversation_get,
@@ -352,11 +393,37 @@ fn engine() -> Result<DuckdbEngine, String> {
 /// `read_parquet`, `read_json_auto`, `sqlite_scan`. The hand-rolled
 /// `CsvConnector` stays as a backup for environments where the DuckDB
 /// engine fails to come up.
+/// Test a connection as the Connections editor holds it, saved or not: does it
+/// reach its server, and what can it see there. It can wait on a host that does
+/// not answer, so it runs off the async runtime.
+#[tauri::command]
+async fn connection_test(payload: JsonValue) -> Result<duckle_duckdb_engine::ConnectionTest, String> {
+    let eng = engine()?;
+    tokio::task::spawn_blocking(move || eng.test_connection(&payload))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn autodetect_schema(
     format: String,
-    options: JsonValue,
+    mut options: JsonValue,
+    workspace_path: Option<String>,
 ) -> Result<InspectionPayload, String> {
+    // #363: a node on a saved connection autodetects the way it runs, with the
+    // connection's fields, instead of failing "host required".
+    let refers = options.get("connectionRef").and_then(|v| v.as_str()).is_some_and(|s| !s.is_empty());
+    match workspace_path.as_deref().filter(|w| !w.is_empty()) {
+        Some(ws) => duckle_secrets::resolve_connection_ref_props(
+            std::path::Path::new(ws),
+            &format!("src.{}", format),
+            &mut options,
+        )?,
+        None if refers => {
+            return Err("this node uses a saved connection; open a workspace so it can be resolved".into())
+        }
+        None => {}
+    }
     let inspection = match engine() {
         Ok(eng) => match eng.inspect(&format, options.clone()) {
             Ok(insp) => insp,
@@ -440,6 +507,7 @@ async fn run_pipeline(
     pipeline_id: Option<String>,
     pipeline_name: Option<String>,
     workspace_path: Option<String>,
+    params: Option<std::collections::HashMap<String, String>>,
 ) -> Result<RunResult, String> {
     let engine = engine()?.for_new_run();
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.clone());
@@ -452,6 +520,10 @@ async fn run_pipeline(
     resolve_saved_connections(&mut pipeline, &workspace_path)?;
     duckle_duckdb_engine::context::apply_env(&mut pipeline);
     duckle_duckdb_engine::context::apply_vault(&mut pipeline);
+    // #317: the run prompt's values meet the pipeline's declared contract here,
+    // as a run from any other surface does: checked, defaults filled, and each
+    // one a value rather than statement text.
+    duckle_duckdb_engine::context::apply_params(&mut pipeline, &params.unwrap_or_default())?;
     ensure_pixeltable_if_used(&app, &pipeline);
     let name = pipeline_name.clone();
     let receipt = begin_desktop_run(
@@ -563,6 +635,7 @@ async fn run_pipeline_partial(
     pipeline_id: Option<String>,
     pipeline_name: Option<String>,
     workspace_path: Option<String>,
+    params: Option<std::collections::HashMap<String, String>>,
 ) -> Result<RunResult, String> {
     let engine = engine()?.for_new_run();
     *CURRENT_RUN.lock().unwrap_or_else(|p| p.into_inner()) = Some(engine.clone());
@@ -572,6 +645,10 @@ async fn run_pipeline_partial(
     resolve_saved_connections(&mut pipeline, &workspace_path)?;
     duckle_duckdb_engine::context::apply_env(&mut pipeline);
     duckle_duckdb_engine::context::apply_vault(&mut pipeline);
+    // #317: the run prompt's values meet the pipeline's declared contract here,
+    // as a run from any other surface does: checked, defaults filled, and each
+    // one a value rather than statement text.
+    duckle_duckdb_engine::context::apply_params(&mut pipeline, &params.unwrap_or_default())?;
     ensure_pixeltable_if_used(&app, &pipeline);
     let target = target_node_id;
     let name = pipeline_name.clone();
@@ -699,8 +776,14 @@ fn cancel_pipeline() -> Result<(), String> {
 /// Compile a pipeline to DuckDB SQL without executing. Used by the
 /// "Copy SQL" / "Export SQL" features so users can copy the generated
 /// statements out of the app.
+///
+/// Saved connections are resolved first, as a run resolves them (#363): a node
+/// that takes its host from a connection otherwise failed "host required" here
+/// while the same pipeline ran. Secret values are still replaced with named
+/// placeholders by `compile_pipeline_sql`.
 #[tauri::command]
-fn compile_pipeline(pipeline: PipelineDoc) -> Result<Vec<StageSql>, String> {
+fn compile_pipeline(mut pipeline: PipelineDoc, workspace_path: Option<String>) -> Result<Vec<StageSql>, String> {
+    resolve_saved_connections(&mut pipeline, &workspace_path)?;
     compile_pipeline_sql(&pipeline).map_err(|e| e.to_string())
 }
 
@@ -758,6 +841,14 @@ fn complete_node_sql(
     engine()?
         .complete_node_sql(&pipeline, &node_id, &inputs, cursor, limit.unwrap_or(12))
         .map_err(|e| e.to_string())
+}
+
+/// "From SQL": a pasted SELECT as a pipeline, one step per CTE. `keptWhole`
+/// says why, when the query had to stay one step. Read-only.
+#[tauri::command]
+fn pipeline_from_sql(sql: String) -> Result<serde_json::Value, String> {
+    let (pipeline, kept_whole) = engine()?.pipeline_from_sql(&sql).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({ "pipeline": pipeline, "keptWhole": kept_whole }))
 }
 
 /// Column-level lineage for the whole pipeline: each node's output columns
@@ -1015,11 +1106,14 @@ fn plans_list(workspace_path: String) -> Result<Vec<plans::Plan>, String> {
 /// second window reaches. Returning the full list means the caller redraws from what was
 /// actually written instead of from what it hoped was written.
 #[tauri::command]
-fn plans_save(workspace_path: String, plan: plans::Plan) -> Result<Vec<plans::Plan>, String> {
-    let problems = plan.problems();
-    if !problems.is_empty() {
-        return Err(problems.join("; "));
-    }
+fn plans_save(
+    workspace_path: String,
+    mut plan: plans::Plan,
+) -> Result<Vec<plans::Plan>, String> {
+    // #317: the same save as the console's - structure, the stored parameter values
+    // a save that does not mention them keeps, and those values against each
+    // pipeline's own contract.
+    plans::prepare_for_save(std::path::Path::new(&workspace_path), &mut plan)?;
     plans::update(
         std::path::Path::new(&workspace_path),
         move |list| match list.iter().position(|p| p.id == plan.id) {
@@ -1305,6 +1399,28 @@ fn import_job_file(path: String) -> Result<JobImport, String> {
 }
 
 // ---- AI chat assistant -------------------------------------------------
+
+/// What the configured AI endpoint offers, so the assistant's model can be
+/// chosen from a list instead of typed from memory.
+///
+/// Falls back to the workspace's saved base URL when none is supplied, which is
+/// what the Settings panel does before anything has been saved.
+#[tauri::command]
+async fn ai_models(
+    base_url: Option<String>,
+    api_key: Option<String>,
+    workspace: Option<String>,
+) -> Result<Vec<llama_chat::ModelChoice>, String> {
+    let saved = app_settings::ai_config(workspace.as_deref().unwrap_or(""));
+    let base = base_url
+        .filter(|b| !b.trim().is_empty())
+        .or(saved.base_url)
+        .ok_or_else(|| "set a base URL first".to_string())?;
+    let key = api_key.filter(|k| !k.trim().is_empty()).or(saved.api_key);
+    tokio::task::spawn_blocking(move || llama_chat::list_models(&base, key.as_deref()))
+        .await
+        .map_err(|e| e.to_string())?
+}
 
 /// Send a message to the local Qwen model and stream tokens back over
 /// the `on_event` channel. Lazy-boots `llama-server` on the first call
@@ -2588,6 +2704,62 @@ fn mcp_inject_config(app: tauri::AppHandle, client: String) -> Result<String, St
 mod tests {
     use super::*;
 
+    /// #363: Plan compiled the pipeline without resolving its saved
+    /// connections, so a SQL Server node that took its host from one failed
+    /// "host required" in Plan while the same pipeline ran. Plan now resolves
+    /// them the way Run does.
+    #[test]
+    fn plan_resolves_saved_connections_like_run() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(ws.path().join("connections")).unwrap();
+        std::fs::write(
+            ws.path().join("connections").join("prod.json"),
+            r#"{"kind":"sqlserver","host":"db.local","port":1433,"database":"sales","username":"etl","password":"p"}"#,
+        )
+        .unwrap();
+        let pipeline: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [{ "id": "s", "position": { "x": 0, "y": 0 },
+                        "data": { "label": "s", "componentId": "src.sqlserver",
+                                  "properties": { "connectionRef": "prod", "tableName": "orders" } } }],
+            "edges": []
+        }))
+        .unwrap();
+        let stages = compile_pipeline(pipeline.clone(), Some(ws.path().to_string_lossy().into_owned()))
+            .expect("Plan resolves the connection");
+        assert_eq!(stages.len(), 1);
+        // With no workspace to resolve it from, the reason is said.
+        let err = compile_pipeline(pipeline, None).unwrap_err();
+        assert!(err.contains("saved connection"), "{err}");
+    }
+
+    /// #361: on a Wayland session with no X server the window never opened -
+    /// "Failed to initialize gtk backend!" - because the #169 workaround sent
+    /// GTK to X11 whenever WAYLAND_DISPLAY was set, and there was no X11 to go
+    /// to. Reproduced with the v0.7.3 binary under a headless Weston: X11 alone
+    /// panics, "x11,wayland" opens the window. X11 is still tried first, so the
+    /// #169 fix holds wherever XWayland is running.
+    #[test]
+    fn gtk_falls_back_to_wayland_when_there_is_no_x_server() {
+        assert_eq!(gdk_backend_for(None, Some("wayland-0"), None), Ok(Some("x11,wayland")));
+        assert_eq!(gdk_backend_for(Some(":0"), Some("wayland-0"), None), Ok(Some("x11,wayland")));
+        assert_eq!(gdk_backend_for(Some(":0"), None, None), Ok(None));
+        // A backend the user chose is theirs, whatever else is set.
+        assert_eq!(gdk_backend_for(None, Some("wayland-0"), Some("wayland")), Ok(None));
+        assert_eq!(gdk_backend_for(None, None, Some("broadway")), Ok(None));
+    }
+
+    /// #361, the other way to get the same panic: no display at all, as over
+    /// SSH or on a server. That is said, with where to go instead, rather than
+    /// a panic from inside the windowing toolkit. An empty variable is unset.
+    #[test]
+    fn a_session_with_no_display_is_told_so_rather_than_panicking() {
+        for (display, wayland) in [(None, None), (Some(""), Some(""))] {
+            let why = gdk_backend_for(display, wayland, None).unwrap_err();
+            assert!(why.contains("DISPLAY") && why.contains("WAYLAND_DISPLAY"), "{why}");
+            assert!(why.contains("serve"), "names the way to run without a window: {why}");
+        }
+    }
+
     /// Sidecars are extracted and then EXECUTED, so where they are staged is a
     /// security boundary. It used to be the shared temp directory under a name
     /// derived only from a tag and a length, and the caller returned that path on
@@ -2666,11 +2838,13 @@ mod tests {
                     // The console's spelling, because the editor writes it that way too.
                     pipelines: vec!["pipelines/orders.json".into()],
                     continue_on_failure: None,
+                    params: None,
                 },
                 plans::Step {
                     name: "Publish".into(),
                     pipelines: vec!["pipelines/export.json".into()],
                     continue_on_failure: None,
+                    params: None,
                 },
             ],
         };
@@ -2694,6 +2868,7 @@ mod tests {
                 name: "Empty".into(),
                 pipelines: vec![],
                 continue_on_failure: None,
+                params: None,
             }],
         };
         let err = plans_save(ws.clone(), broken).expect_err("an empty step is not a plan");

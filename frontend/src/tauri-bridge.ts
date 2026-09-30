@@ -2,9 +2,17 @@ import type { ComponentDef } from './workflow-ui/palette-data';
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { isTauri } from './tauri-dialog';
 import { isWebBackend } from './web-fs';
+import { getWorkspacePath } from './workspace';
 import type { Column } from './pipeline-types';
 import type { Edge, Node } from '@xyflow/react';
 import type { DuckleNodeData } from './pipeline-types';
+import type { PipelineRunFields } from './run-resolve';
+
+/**
+ * #317: what a run carries besides its graph - the pipeline's own top-level
+ * fields, and the declared parameters' values for the engine to check and apply.
+ */
+export type RunInput = { fields?: PipelineRunFields; params?: Record<string, string> };
 
 type AutodetectPayload = {
     columns: Column[];
@@ -30,7 +38,12 @@ export async function tauriAutodetect(
 ): Promise<AutodetectPayload | null> {
     if (isTauri()) {
         try {
-            return await invoke<AutodetectPayload>('autodetect_schema', { format, options });
+            // The workspace resolves a saved connection the node refers to (#363).
+            return await invoke<AutodetectPayload>('autodetect_schema', {
+                format,
+                options,
+                workspacePath: getWorkspacePath(),
+            });
         } catch (err) {
             const message =
                 typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
@@ -50,6 +63,40 @@ export async function tauriAutodetect(
         return (await res.json()) as AutodetectPayload;
     }
     return null;
+}
+
+// ---- Test connection ---------------------------------------------------
+
+/** What testing a connection found (the engine's `ConnectionTest`). */
+export type ConnectionTestResult = {
+    ok: boolean;
+    message: string;
+    /** Tables and views, or the objects at the top of a bucket, sorted. */
+    objects: string[];
+    /** More were visible than `objects` lists. */
+    more: boolean;
+};
+
+/**
+ * Test a connection as the editor holds it, saved or not. The engine runs what a
+ * node using it runs, so a pass here is a connection a run can use. In the web
+ * editor it needs the admin role, like every connection command.
+ */
+export async function testConnection(payload: unknown): Promise<ConnectionTestResult> {
+    if (!isTauri() && !isWebBackend()) {
+        return {
+            ok: false,
+            message: 'Testing a connection needs the desktop app or duckle serve.',
+            objects: [],
+            more: false,
+        };
+    }
+    try {
+        return await invoke<ConnectionTestResult>('connection_test', { payload });
+    } catch (err) {
+        const message = typeof err === 'string' ? err : err instanceof Error ? err.message : String(err);
+        return { ok: false, message, objects: [], more: false };
+    }
 }
 
 // ---- Pipeline execution ------------------------------------------------
@@ -117,12 +164,13 @@ export type PipelineEvent =
  * line carries the RunResult. Mirrors the desktop Channel without Tauri.
  */
 async function runViaSse(
-    pipeline: { nodes: Node<DuckleNodeData>[]; edges: Edge[] },
+    pipeline: PipelineRunFields & { nodes: Node<DuckleNodeData>[]; edges: Edge[] },
     onEvent?: (evt: PipelineEvent) => void,
     pipelineId?: string,
     pipelineName?: string | null,
     workspacePath?: string | null,
     targetNodeId?: string,
+    params?: Record<string, string>,
 ): Promise<RunResult | null> {
     const fail = (error: string): RunResult => ({
         status: 'error',
@@ -142,6 +190,7 @@ async function runViaSse(
                 workspacePath: workspacePath ?? null,
                 // Present for run-to-here (partial); omitted/null = full run.
                 targetNodeId: targetNodeId ?? null,
+                params: params ?? null,
             }),
         });
         if (!res.ok) {
@@ -201,22 +250,25 @@ export async function runPipeline(
     pipelineId?: string,
     workspacePath?: string | null,
     pipelineName?: string | null,
+    input?: RunInput,
 ): Promise<RunResult | null> {
     if (!isTauri() && !isWebBackend()) return null;
+    const pipeline = { ...(input?.fields ?? {}), nodes, edges };
     // Web edition streams progress over SSE so the live per-node animation works
     // just like the desktop Channel.
     if (isWebBackend()) {
-        return runViaSse({ nodes, edges }, onEvent, pipelineId, pipelineName, workspacePath);
+        return runViaSse(pipeline, onEvent, pipelineId, pipelineName, workspacePath, undefined, input?.params);
     }
     const channel = new Channel<PipelineEvent>();
     if (onEvent) channel.onmessage = onEvent;
     try {
         return await invoke<RunResult>('run_pipeline', {
-            pipeline: { nodes, edges },
+            pipeline,
             onEvent: channel,
             pipelineId: pipelineId ?? null,
             pipelineName: pipelineName ?? null,
             workspacePath: workspacePath ?? null,
+            params: input?.params ?? null,
         });
     } catch (err) {
         console.error('runPipeline failed', err);
@@ -238,18 +290,21 @@ export async function runPipelinePartial(
     pipelineId?: string,
     workspacePath?: string | null,
     pipelineName?: string | null,
+    input?: RunInput,
 ): Promise<RunResult | null> {
     if (!isTauri() && !isWebBackend()) return null;
+    const pipeline = { ...(input?.fields ?? {}), nodes, edges };
     // Web edition: run-to-here streams over SSE like a full run, passing the
     // target node so the server runs only the subgraph up to it.
     if (isWebBackend()) {
-        return runViaSse({ nodes, edges }, onEvent, pipelineId, pipelineName, workspacePath, targetNodeId);
+        return runViaSse(pipeline, onEvent, pipelineId, pipelineName, workspacePath, targetNodeId, input?.params);
     }
     const channel = new Channel<PipelineEvent>();
     if (onEvent) channel.onmessage = onEvent;
     try {
         return await invoke<RunResult>('run_pipeline_partial', {
-            pipeline: { nodes, edges },
+            params: input?.params ?? null,
+            pipeline,
             targetNodeId,
             onEvent: channel,
             pipelineId: pipelineId ?? null,
@@ -919,6 +974,8 @@ export type StageSql = {
 export async function compilePipelineSql(
     nodes: Node<DuckleNodeData>[],
     edges: Edge[],
+    // The workspace to resolve saved connections from, as a run does (#363).
+    workspacePath?: string | null,
 ): Promise<StageSql[] | null> {
     // null = compilation not available (web build / no Tauri). A real
     // compile failure THROWS the engine's error string so callers (the
@@ -928,6 +985,7 @@ export async function compilePipelineSql(
     if (!isTauri() && !isWebBackend()) return null;
     return await invoke<StageSql[]>('compile_pipeline', {
         pipeline: { nodes, edges },
+        workspacePath: workspacePath ?? null,
     });
 }
 
@@ -1036,6 +1094,18 @@ export async function completeNodeSql(
     } catch {
         return [];
     }
+}
+
+/** "From SQL": the pipeline a pasted SELECT becomes, one step per CTE. */
+export type FromSql = {
+    pipeline: { nodes: Node<DuckleNodeData>[]; edges: Edge[] };
+    /** Why the query stayed one step, when it could not be split. */
+    keptWhole: string | null;
+};
+
+export async function pipelineFromSql(sql: string): Promise<FromSql | null> {
+    if (!isTauri() && !isWebBackend()) return null;
+    return await invoke<FromSql>('pipeline_from_sql', { sql });
 }
 
 /** A resolved origin column for lineage (#103). */
@@ -1149,6 +1219,12 @@ export type Schedule = {
     exclude?: { weekdays?: string[]; dates?: string[] };
     misfire?: 'skip' | 'latest' | 'all';
     catchup?: { maxCatchupRuns: number; maxCatchupAgeDays: number };
+    /**
+     * #317: the parameter values this schedule's runs are given, checked against the
+     * pipeline's declared contract. Absent means "this save did not say", which the
+     * backend reads as "keep what is there".
+     */
+    params?: Record<string, string>;
     last_run_at?: string;
     last_run_status?: 'ok' | 'error' | 'cancelled';
     last_run_duration_ms?: number;
@@ -1242,6 +1318,12 @@ export type PlanStep = {
     name: string;
     /** Workspace-relative pipeline files. Order between them means nothing. */
     pipelines: string[];
+    /**
+     * #317: parameter values for each pipeline in the step, keyed the way `pipelines`
+     * names it, each checked by that pipeline's own contract. Absent means "this save
+     * did not say", which keeps what is stored; empty clears.
+     */
+    params?: Record<string, Record<string, string>>;
 };
 
 export type Plan = {
@@ -1657,6 +1739,25 @@ export async function settingsGetAi(workspace: string): Promise<AiConfig> {
             harnessIdleTimeoutSecs: null,
         };
     }
+}
+
+export type AiModelChoice = { id: string; kind: string | null; chat: boolean };
+
+/**
+ * What the configured endpoint offers, so a model can be picked rather than
+ * typed. Vercel's AI Gateway answers this without a key, so the list can be
+ * browsed before one exists; OpenAI requires one and says so itself.
+ *
+ * `chat: false` entries are listed but not offered: an embedding or evaluation
+ * model cannot answer the assistant at all.
+ */
+export async function aiModels(
+    workspace: string,
+    baseUrl: string | null,
+    apiKey: string | null,
+): Promise<AiModelChoice[]> {
+    if (!isTauri()) return [];
+    return await invoke<AiModelChoice[]>('ai_models', { workspace, baseUrl, apiKey });
 }
 
 /** Persist the Duckie provider configuration. */

@@ -63,7 +63,7 @@ const UNIVERSAL: [&str; 10] = [
     "retryBackoffMs",    // beside retryAttempts
     "memoryLimitMb",     // plan/mod.rs:1887
     "continueOnFailure", // plan/mod.rs:1876
-    "logRowCount",       // panel-only today, no runtime read yet
+    "logRowCount",       // lib.rs row_count_wanted, both execution paths
     "sqlOverride",       // builders.rs:159, generic build_view_sql
     // The panel writes the OUTER key: `contracts.allowPii` is one nested field
     // inside a `contracts` object, and `check` only ever sees `contracts`.
@@ -78,7 +78,7 @@ const UNIVERSAL: [&str; 10] = [
 /// the check for the whole component would hide everything else. They are
 /// listed here with the line that reads them so the list can be worked off
 /// rather than grown.
-const ACCEPTED: [(&str, &str, &str); 5] = [
+const ACCEPTED: [(&str, &str, &str); 8] = [
     ("xf.groupby", "materialize", "read at plan/mod.rs:6440 for every component"),
     ("code.sql", "materialize", "read at plan/mod.rs:6440 for every component"),
     // The single-key sort form. The editor now writes `orderBy` and no longer
@@ -91,6 +91,11 @@ const ACCEPTED: [(&str, &str, &str); 5] = [
     ("xf.sort", "sortColumn", "legacy single-key form, read by build_sort"),
     ("xf.sort", "direction", "beside sortColumn"),
     ("xf.sort", "nullsLast", "beside sortColumn"),
+    // What the Visual Mapper saves (App.tsx handleMapperSave): a modal, not a
+    // form field, so no manifest draws them.
+    ("xf.map", "mapper", "outputs and filter, read by build_mapper (builders.rs:4539)"),
+    ("xf.map", "lookups", "the lookup joins, read by build_mapper (builders.rs:4581)"),
+    ("xf.map", "filter", "the top-level spelling of mapper.filter (builders.rs:4571)"),
 ];
 
 /// One property problem, in the shape #298 asked for.
@@ -720,6 +725,30 @@ mod tests {
         assert!(legacy.is_empty(), "a pipeline saved before the change was refused: {legacy:?}");
     }
 
+    /// The Visual Mapper saves its outputs under `mapper` and its joins under
+    /// `lookups` (App.tsx handleMapperSave), and build_mapper reads both. The
+    /// manifest declares only `mode` and `expressions`, so every map built in
+    /// the editor failed `validate` for two properties the engine runs on.
+    #[test]
+    fn a_map_the_visual_mapper_saved_validates() {
+        let editor = check(&doc(
+            "xf.map",
+            serde_json::json!({
+                "mode": "visual",
+                "lookups": [{ "port": "lookup_1", "leftKey": "id", "rightKey": "id", "joinType": "left" }],
+                "mapper": { "outputs": [{ "id": "o1", "name": "id", "expression": "main.id" }], "filter": "" }
+            }),
+        ));
+        assert!(editor.is_empty(), "the Visual Mapper's own output was refused: {editor:?}");
+
+        // The same filter, written at the top level as build_mapper also accepts it.
+        let written = check(&doc(
+            "xf.map",
+            serde_json::json!({ "expressions": [{ "key": "id", "value": "id" }], "filter": "id > 0" }),
+        ));
+        assert!(written.is_empty(), "a filter build_mapper reads was called dead: {written:?}");
+    }
+
     /// A GraphQL source is a query and its variables, and neither was
     /// declared.
     ///
@@ -757,6 +786,40 @@ mod tests {
     /// `returnsRows` - the handoff that lets a child give its rows back to the
     /// parent through ${DUCKLE_RETURN} - was read by the engine and declared by
     /// no form, so the feature could only be reached by hand.
+    /// #101: the editor shows the reject envelope's columns downstream of any
+    /// `src.*` or `qa.*` reject port and no other (`edgeSchema` in
+    /// schema-resolve.ts), because its column pickers offer only what it lists.
+    /// That rule holds only while every such port really carries the envelope:
+    /// a SQL-side reject through `reject_error_code`, or a REST-family source
+    /// through its executor. A new validator or source with a reject port and
+    /// neither would show columns the engine never writes.
+    #[test]
+    fn every_error_reject_port_carries_the_envelope() {
+        let catalog: serde_json::Value = serde_json::from_str(CATALOG).expect("catalog parses");
+        let mut checked = 0;
+        for c in catalog["components"].as_array().expect("components") {
+            let id = c["id"].as_str().unwrap_or_default();
+            let has_reject = c["ports"]["outputs"]
+                .as_array()
+                .is_some_and(|o| o.iter().any(|p| p["id"] == "reject"));
+            if !has_reject {
+                continue;
+            }
+            checked += 1;
+            let editor_shows_it = id.starts_with("src.") || id.starts_with("qa.");
+            let engine_writes_it = crate::plan::reject_error_code(id).is_some()
+                || crate::plan::reads_incremental(id);
+            assert_eq!(
+                editor_shows_it, engine_writes_it,
+                "{id}: the editor {} the envelope columns and the engine {} them",
+                if editor_shows_it { "shows" } else { "hides" },
+                if engine_writes_it { "writes" } else { "does not write" },
+            );
+        }
+        // 45 reject ports today. Far fewer means the scan stopped seeing them.
+        assert!(checked >= 40, "only {checked} reject ports found in the catalog");
+    }
+
     #[test]
     fn a_child_pipeline_node_offers_the_handoff_and_not_the_fiction() {
         for id in ["ctl.runpipeline", "ctl.runjob", "ctl.trigger"] {
@@ -764,6 +827,11 @@ mod tests {
             assert!(
                 keys.contains("returnsRows"),
                 "{id} reads returnsRows and no field offers it"
+            );
+            // The other direction of the same handoff, so it gets the same guard.
+            assert!(
+                keys.contains("passesRows"),
+                "{id} reads passesRows and no field offers it"
             );
             assert!(
                 !keys.contains("waitForCompletion"),

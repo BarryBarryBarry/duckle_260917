@@ -59,7 +59,8 @@ import { writeClipboard, readClipboard, instantiateClipboard } from './clipboard
 import { RunStatusContext } from './canvas/run-status-context';
 import { layoutByDependency } from './canvas/layout';
 import { validatePipeline } from './validation';
-import { resolveForRun, discoverParams, builtinVars, buildContextVars } from './run-resolve';
+import { resolveForRun, discoverParams, builtinVars, buildContextVars, pipelineRunFields } from './run-resolve';
+import type { ParamSpec } from './run-resolve';
 import { livePreviewable } from './live-preview';
 import WorkspacePickerModal from './workflow-ui/WorkspacePickerModal';
 import { AccountChip, ProfileSetupModal } from './workflow-ui/AccountMenu';
@@ -881,6 +882,10 @@ export default function App() {
     const [runParamPrompt, setRunParamPrompt] = useState<{
         names: string[];
         target: string | null;
+        // #317: the declared parameters, asked for with typed controls, and any
+        // value a context already gives one of them.
+        declared: Record<string, ParamSpec>;
+        prefill: Record<string, string>;
     } | null>(null);
 
     const [buildModalPipelineId, setBuildModalPipelineId] = useState<string | null>(null);
@@ -1504,7 +1509,11 @@ export default function App() {
     // resolveForRun (highest precedence) on both desktop and the web editor.
     // `target` is the run-to-here node, or null for a full run.
     const launchRun = useCallback(
-        async (target: string | null, runtimeParams?: Record<string, string>) => {
+        async (
+            target: string | null,
+            runtimeParams?: Record<string, string>,
+            declaredValues?: Record<string, string>,
+        ) => {
             // Don't launch a run that's guaranteed to fail (e.g. a sink with no
             // output path) - that only yields a cryptic engine error. Surface
             // the Problems tab so the user can fix it first.
@@ -1516,17 +1525,27 @@ export default function App() {
             // Global-context file vars load fresh each run so a runtime
             // KEY=VALUE file resolves too.
             const extra = await settingsLoadContextVars(workspacePathState ?? '');
-            // First pass (no params supplied yet): if any ${name} is unbound,
-            // pop the prompt and defer the run until the user submits.
+            // #317: the pipeline's own top-level fields travel with the run, so
+            // its parameter contract, time limit and pool apply here too.
+            const runFields = pipelineRunFields(pipelineData[activeJobId]);
+            const declared = runFields.parameters ?? {};
+            const declaredNames = Object.keys(declared);
+            // First pass (no params supplied yet): if any ${name} is unbound, or
+            // the pipeline declares parameters, pop the prompt and defer the run
+            // until the user submits.
             if (!runtimeParams) {
-                const known = {
+                const known: Record<string, string> = {
                     ...builtinVars(workspacePathState),
                     ...buildContextVars(repo),
                     ...extra,
                 };
-                const unbound = discoverParams(nodes, known);
-                if (unbound.length > 0) {
-                    setRunParamPrompt({ names: unbound, target });
+                const unbound = discoverParams(nodes, known, declaredNames);
+                if (unbound.length > 0 || declaredNames.length > 0) {
+                    const prefill: Record<string, string> = {};
+                    for (const name of declaredNames) {
+                        if (Object.prototype.hasOwnProperty.call(known, name)) prefill[name] = known[name];
+                    }
+                    setRunParamPrompt({ names: unbound, target, declared, prefill });
                     return;
                 }
             }
@@ -1538,7 +1557,8 @@ export default function App() {
                 // Inline SQL routines + substitute ${context.var} (and the
                 // supplied run params) before running; the canvas keeps the
                 // editable, un-substituted values.
-                const runNodes = resolveForRun(nodes, repo, workspacePathState, extra, runtimeParams);
+                const runNodes = resolveForRun(nodes, repo, workspacePathState, extra, runtimeParams, declaredNames);
+                const input = { fields: runFields, params: declaredValues ?? {} };
                 const result = target
                     ? await runPipelinePartial(
                           runNodes,
@@ -1548,6 +1568,7 @@ export default function App() {
                           activeJobId,
                           workspacePathState,
                           pipelineName,
+                          input,
                       )
                     : await runPipeline(
                           runNodes,
@@ -1556,13 +1577,14 @@ export default function App() {
                           activeJobId,
                           workspacePathState,
                           pipelineName,
+                          input,
                       );
                 finishRun(start, result);
             } finally {
                 setIsRunning(false);
             }
         },
-        [nodes, edges, repo, handleEvent, finishRun, activeJobId, workspacePathState, validation.errorCount],
+        [nodes, edges, repo, handleEvent, finishRun, activeJobId, workspacePathState, validation.errorCount, pipelineData],
     );
 
     const handleRun = useCallback(() => {
@@ -1697,7 +1719,7 @@ export default function App() {
         // failure (so the Plan tab can show it). For copy/export we just
         // can't produce SQL in that case, so treat it as "nothing to do".
         try {
-            const stages = await compilePipelineSql(nodes, edges);
+            const stages = await compilePipelineSql(nodes, edges, workspacePathState);
             if (!stages) return null;
             return stages
                 .map(
@@ -1709,7 +1731,7 @@ export default function App() {
             console.warn('buildSqlText: pipeline does not compile', err);
             return null;
         }
-    }, [nodes, edges]);
+    }, [nodes, edges, workspacePathState]);
 
     const handleCopySql = useCallback(async () => {
         const text = await buildSqlText();
@@ -2247,14 +2269,15 @@ export default function App() {
     };
 
     const handleCreatePipeline = useCallback(
-        (rawName: string, parentId: string, template: PipelineTemplate) => {
+        (rawName: string, parentId: string, template: PipelineTemplate, built?: PipelineState) => {
             const id = freshId('p');
             const realParent = repo.find(
                 i => i.id === parentId && (i.type === 'folder' || i.type === 'project'),
             )
                 ? parentId
                 : 'pipelines';
-            const seed = seedTemplate(template);
+            // From SQL arrives already built; the other templates are seeded here.
+            const seed = built ?? seedTemplate(template);
             setRepo(r => [...r, { id, name: rawName, type: 'pipeline', parentId: realParent }]);
             setPipelineData(d => ({ ...d, [id]: seed }));
             setJobs(js => [...js, { id, name: rawName, dirty: false }]);
@@ -2964,6 +2987,7 @@ export default function App() {
 
             {scheduleModalPipelineId ? (
                 <ScheduleEditorModal
+                    declared={pipelineRunFields(pipelineData[scheduleModalPipelineId]).parameters ?? {}}
                     pipelineId={scheduleModalPipelineId}
                     pipelineName={
                         repo.find(r => r.id === scheduleModalPipelineId)?.name ??
@@ -2988,12 +3012,14 @@ export default function App() {
             {runParamPrompt ? (
                 <RunParametersModal
                     paramNames={runParamPrompt.names}
+                    declared={runParamPrompt.declared}
+                    prefill={runParamPrompt.prefill}
                     pipelineName={repo.find(r => r.id === activeJobId)?.name ?? activeJobId}
                     onCancel={() => setRunParamPrompt(null)}
-                    onSubmit={values => {
+                    onSubmit={({ undeclared, declared }) => {
                         const target = runParamPrompt.target;
                         setRunParamPrompt(null);
-                        void launchRun(target, values);
+                        void launchRun(target, undeclared, declared);
                     }}
                 />
             ) : null}
@@ -3067,7 +3093,12 @@ export default function App() {
                     workspacePath={workspacePathState}
                     pipelines={repo
                         .filter(r => r.type === 'pipeline')
-                        .map(r => ({ id: r.id, name: r.name }))}
+                        .map(r => ({
+                            id: r.id,
+                            name: r.name,
+                            // #317: a plan step binds values to what each pipeline declares.
+                            declared: pipelineRunFields(pipelineData[r.id]).parameters ?? {},
+                        }))}
                     onClose={() => setShowPlans(false)}
                 />
             ) : null}

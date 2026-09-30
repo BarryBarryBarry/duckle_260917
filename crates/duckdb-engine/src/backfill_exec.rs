@@ -7,6 +7,7 @@
 //! resource pool, a receipt that forgets its release.
 
 use crate::backfill::{self, Backfill, PartitionRun, State};
+use crate::format::strip_bom;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -74,8 +75,8 @@ pub fn plan_for(
 ) -> Result<Backfill, String> {
     let text = std::fs::read_to_string(pipeline_path)
         .map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
-    let raw: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
+    let raw: serde_json::Value = serde_json::from_str(strip_bom(&text))
+        .map_err(|e| format!("{}: {e}", pipeline_path.display()))?;
     let def = crate::partition::of(&raw).ok_or_else(|| {
         format!(
             "{} declares no `partition`, so there is nothing to slice it by",
@@ -94,14 +95,16 @@ pub fn plan_for(
         workspace,
         &std::env::var("DUCKLE_ENVIRONMENT").unwrap_or_else(|_| "default".into()),
     );
+    let id = backfill::new_id(&name);
+    let pid = backfill::this_process_owns(&id);
     Ok(Backfill {
-        id: backfill::new_id(&name),
+        id,
         pipeline: name.clone(),
         pipeline_path: pipeline_path.display().to_string(),
         created_at: chrono::Utc::now().to_rfc3339(),
         release_id: release.clone(),
         max_concurrent: max_concurrent.max(1),
-        pid: Some(std::process::id()),
+        pid,
         kind: backfill::Kind::Partition,
         chunk_node: None,
         staging: None,
@@ -422,6 +425,7 @@ pub fn execute_with(
     // Clearing the pid is the only change here, so it goes through the file
     // too: returning this process's copy would hand the caller a plan without
     // whatever was cancelled or retried while it ran.
+    backfill::released(&id);
     match backfill::update(workspace, &id, |disk| disk.pid = None) {
         Ok((fresh, ())) => fresh,
         Err(_) => {
@@ -445,7 +449,7 @@ fn run_one(
 ) -> Result<String, (Option<String>, String)> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| (None, format!("{}: {e}", path.display())))?;
-    let doc: crate::PipelineDoc = serde_json::from_str(&text)
+    let doc: crate::PipelineDoc = serde_json::from_str(strip_bom(&text))
         .map_err(|e| (None, format!("{}: {e}", path.display())))?;
     run_doc(
         workspace, duckdb, resolve, doc, path, pipeline, backfill_id, slice, release, gates,

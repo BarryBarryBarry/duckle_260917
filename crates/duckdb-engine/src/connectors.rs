@@ -7,6 +7,7 @@
 //! because this is a child module of the crate root.
 
 use crate::*;
+use crate::format::strip_bom;
 
 /// Render one row into a line for a text / raw HTTP body (issue #147),
 /// substituting `${column}` placeholders with the row's values. Missing keys and
@@ -2118,9 +2119,18 @@ impl DuckdbEngine {
         //
         // LIMIT 1 rather than a count: the question is whether ANY row exists,
         // and the rows are materialized further down anyway.
+        //
+        // The probe reads the SAME projection the write will read, not a bare
+        // `SELECT 1`. A constant projection cannot fail the way the real read
+        // can - a non-finite double in a selected column, for one - so the guard
+        // said "there are rows", the table was truncated, and the read that
+        // followed came back empty. The rule is that the row set which decides
+        // "there is nothing to write" has to be the one that decides "do not
+        // clear", and the only way to keep that true is to ask the same question.
         if spec.upsert_keys.is_empty() && spec.mode == "truncate" {
             let probe = format!(
-                "SELECT 1 FROM {} LIMIT 1",
+                "SELECT {} FROM {} LIMIT 1",
+                select_items.join(", "),
                 plan::quote_ident(&spec.from_view)
             );
             let rows = self.run_rows(Some(db), &probe)?;
@@ -3776,10 +3786,26 @@ impl DuckdbEngine {
         let mut conn = database
             .new_connection()
             .map_err(|e| EngineError::Query(format!("adbc: connect: {}", e)))?;
+        // #364: ClickHouse's Arrow export sends DateTime as UInt32 seconds, Enum
+        // as its code, IPv4 as a number and UUID / FixedString / 128- and
+        // 256-bit integers as raw bytes, so the Schema and Preview tabs showed
+        // numbers and bytes. Asked for the query's column types on this same
+        // connection, ClickHouse casts those columns itself before sending them,
+        // and is asked for String as text, which before 24.3 it sent as bytes.
+        // Anything that goes wrong here leaves the query exactly as written.
+        let is_clickhouse = spec.entrypoint.as_deref() == Some("AdbcClickhouseInit")
+            || spec.driver.to_lowercase().contains("clickhouse");
+        let query = if is_clickhouse {
+            clickhouse_described(&mut conn, &spec.query)
+                .map(|cols| clickhouse_arrow_query(&spec.query, &cols))
+                .unwrap_or_else(|| spec.query.clone())
+        } else {
+            spec.query.clone()
+        };
         let mut stmt = conn
             .new_statement()
             .map_err(|e| EngineError::Query(format!("adbc: statement: {}", e)))?;
-        stmt.set_sql_query(&spec.query)
+        stmt.set_sql_query(&query)
             .map_err(|e| EngineError::Query(format!("adbc: set query: {}", e)))?;
         let reader = stmt
             .execute()
@@ -4192,12 +4218,20 @@ impl DuckdbEngine {
             // chrono::DateTime<FixedOffset> (or Utc), NOT a Naive* type, so
             // the naive probes below would all miss and it became NULL.
             // Emit an RFC3339 string preserving the original offset.
+            // #362: every date/time is written in one fixed shape the column's
+            // DuckDB type parses, and `sqlserver_column_type` then types the
+            // column from what the server said it is. The shapes used to vary
+            // with the value: `%.f` wrote nanoseconds (".123333333" for a
+            // datetime's 1/300 s ticks, nine digits for a datetime2), which
+            // DuckDB's type guess refuses, so a column with a fraction in it
+            // came back VARCHAR while its whole-second neighbour was a TIMESTAMP.
             ColumnType::DatetimeOffsetn => {
+                const OFFSET: &str = "%Y-%m-%d %H:%M:%S%.6f%:z";
                 if let Ok(Some(dt)) = row.try_get::<chrono::DateTime<chrono::FixedOffset>, _>(i) {
-                    return JsonValue::String(dt.to_rfc3339());
+                    return JsonValue::String(dt.format(OFFSET).to_string());
                 }
                 if let Ok(Some(dt)) = row.try_get::<chrono::DateTime<chrono::Utc>, _>(i) {
-                    return JsonValue::String(dt.to_rfc3339());
+                    return JsonValue::String(dt.format(OFFSET).to_string());
                 }
                 return row
                     .try_get::<&str, _>(i)
@@ -4220,13 +4254,28 @@ impl DuckdbEngine {
                 // DuckDB's read_json_auto which re-parses them as
                 // TIMESTAMP / DATE / TIME.
                 if let Ok(Some(dt)) = row.try_get::<chrono::NaiveDateTime, _>(i) {
-                    return JsonValue::String(dt.format("%Y-%m-%dT%H:%M:%S%.f").to_string());
+                    // A classic datetime counts in 1/300 s ticks and SQL Server
+                    // shows it to the millisecond (".123" is 37 ticks, not
+                    // ".123333"), so it is rounded there. datetime2 is kept to
+                    // the microsecond, which is what a DuckDB TIMESTAMP holds.
+                    let classic = matches!(
+                        col.column_type(),
+                        ColumnType::Datetime | ColumnType::Datetime4 | ColumnType::Datetimen
+                    );
+                    let dt = if classic {
+                        let nanos = dt.and_utc().timestamp_subsec_nanos() as i64;
+                        dt - chrono::Duration::nanoseconds(nanos)
+                            + chrono::Duration::milliseconds((nanos + 500_000) / 1_000_000)
+                    } else {
+                        dt
+                    };
+                    return JsonValue::String(dt.format("%Y-%m-%d %H:%M:%S%.6f").to_string());
                 }
                 if let Ok(Some(d)) = row.try_get::<chrono::NaiveDate, _>(i) {
                     return JsonValue::String(d.format("%Y-%m-%d").to_string());
                 }
                 if let Ok(Some(t)) = row.try_get::<chrono::NaiveTime, _>(i) {
-                    return JsonValue::String(t.format("%H:%M:%S%.f").to_string());
+                    return JsonValue::String(t.format("%H:%M:%S%.6f").to_string());
                 }
                 row.try_get::<&str, _>(i)
                     .ok()
@@ -4476,7 +4525,7 @@ impl DuckdbEngine {
         batch_rows: usize,
         node_id: &str,
     ) -> Result<String, EngineError> {
-        use odbc_api::buffers::TextRowSet;
+        use odbc_api::buffers::{ColumnarBuffer, TextColumn};
         use odbc_api::{ColumnDescription, ConnectionOptions, Cursor, Environment, ResultSetMetadata};
 
         let env = Environment::new()
@@ -4526,10 +4575,36 @@ impl DuckdbEngine {
         // Fetch in batches as text, writing each row to the NDJSON file. ODBC
         // text rendering keeps the source's textual form; the typed finalize
         // casts each column afterwards.
+        //
+        // Wide (UTF-16) text on Windows. A narrow buffer there is filled in the
+        // machine's ANSI code page, not UTF-8, so every accented letter from an
+        // ODBC source on Windows came back as a replacement character. Elsewhere
+        // the driver managers speak UTF-8 in narrow buffers, which stays as it was.
         let mut writer = JsonLinesWriter::open(node_id)?;
         let batch = batch_rows.max(1);
-        let buffers = TextRowSet::for_cursor(batch, &mut cursor, Some(65536))
-            .map_err(|e| EngineError::Query(format!("{}: alloc buffers: {}", family, e)))?;
+        let mut columns: Vec<(u16, TextColumn<OdbcChar>)> = Vec::with_capacity(ncols as usize);
+        for i in 1..=ncols {
+            let data_type = cursor
+                .col_data_type(i)
+                .map_err(|e| EngineError::Query(format!("{}: column {} type: {}", family, i, e)))?;
+            #[cfg(windows)]
+            let encoded = data_type.utf16_len();
+            #[cfg(not(windows))]
+            let encoded = data_type.utf8_len();
+            let len = match encoded {
+                Some(n) => Some(n),
+                None => cursor
+                    .col_display_size(i)
+                    .map_err(|e| EngineError::Query(format!("{}: column {} size: {}", family, i, e)))?,
+            };
+            // Capped, as before: a driver that reports no size or a huge one
+            // would otherwise size the buffer from nothing or from gigabytes.
+            let len = len.map(|n| n.get()).unwrap_or(65536).min(65536);
+            let column = TextColumn::try_new(batch, len)
+                .map_err(|e| EngineError::Query(format!("{}: alloc buffers: {:?}", family, e)))?;
+            columns.push((i, column));
+        }
+        let buffers = ColumnarBuffer::new(columns);
         let mut rows_cursor = cursor
             .bind_buffer(buffers)
             .map_err(|e| EngineError::Query(format!("{}: bind buffers: {}", family, e)))?;
@@ -4542,10 +4617,8 @@ impl DuckdbEngine {
             for r in 0..view.num_rows() {
                 let mut obj = serde_json::Map::with_capacity(names.len());
                 for (c, name) in names.iter().enumerate() {
-                    let v = match view.at(c, r) {
-                        Some(bytes) => {
-                            JsonValue::String(String::from_utf8_lossy(bytes).into_owned())
-                        }
+                    let v = match view.column(c).get(r) {
+                        Some(chars) => JsonValue::String(odbc_text(chars)),
                         None => JsonValue::Null,
                     };
                     obj.insert(name.clone(), v);
@@ -4825,6 +4898,247 @@ impl DuckdbEngine {
     ) -> Result<String, EngineError> {
         Err(EngineError::Config(
             "db2: this build was compiled without ODBC support (enable the `db2` feature)".into(),
+        ))
+    }
+
+    /// Microsoft Access, read. On Windows the Access ODBC driver runs the query
+    /// and types every column. Nowhere else has that driver, so there a table
+    /// is read through mdbtools, which can export a table but not run SQL.
+    pub(crate) fn run_access_source(
+        &self,
+        db: &Path,
+        spec: &plan::AccessSourceSpec,
+    ) -> Result<String, EngineError> {
+        if !Path::new(&spec.path).is_file() {
+            return Err(EngineError::Config(format!("access: {} is not a file", spec.path)));
+        }
+        #[cfg(all(windows, feature = "odbc"))]
+        {
+            let query = match (&spec.query, &spec.table) {
+                (Some(q), _) => q.clone(),
+                (None, Some(t)) => format!("SELECT * FROM {}", access_ident(t)?),
+                (None, None) => {
+                    return Err(EngineError::Config("access: tableName or query required".into()))
+                }
+            };
+            self.run_odbc_source(
+                db,
+                "access",
+                &access_conn_string(&spec.path, spec.password.as_deref(), false),
+                &query,
+                spec.batch_rows,
+                &spec.node_id,
+            )
+        }
+        #[cfg(not(all(windows, feature = "odbc")))]
+        {
+            self.run_access_mdbtools(db, spec)
+        }
+    }
+
+    /// Access without its ODBC driver: mdbtools. `mdb-export` writes the table
+    /// as CSV and `mdb-schema` says what each column is, so the text is read as
+    /// text and each column cast to its own type afterwards - a code column
+    /// keeps its leading zeros, and a number column is a number.
+    #[cfg(not(all(windows, feature = "odbc")))]
+    fn run_access_mdbtools(
+        &self,
+        db: &Path,
+        spec: &plan::AccessSourceSpec,
+    ) -> Result<String, EngineError> {
+        let Some(table) = spec.table.as_deref() else {
+            return Err(EngineError::Config(
+                "access: a query needs the Microsoft Access ODBC driver, which exists only on \
+                 Windows. Here a table is read through mdbtools, so name the table instead"
+                    .into(),
+            ));
+        };
+        let schema = mdbtools(&["mdb-schema", "-T", table, &spec.path])?;
+        let types = mdb_schema_types(&schema);
+        // -T is the one that formats a date/time: -D alone left them in the C
+        // locale's "09/24/26 10:11:12", two-digit year and all. -B spells a
+        // yes/no TRUE/FALSE, and -b hex keeps an OLE field's bytes from landing
+        // raw in the CSV. mdbtools reads a zero-length text as NULL, so an empty
+        // string arrives as NULL here (the Windows driver keeps it).
+        let iso = "%Y-%m-%d %H:%M:%S";
+        let csv = mdbtools(&["mdb-export", "-D", iso, "-T", iso, "-B", "-b", "hex", &spec.path, table])?;
+        let tmp = std::env::temp_dir().join(format!(
+            "duckle-access-{}-{}.csv",
+            std::process::id(),
+            spec.node_id.replace(|c: char| !c.is_ascii_alphanumeric(), "_")
+        ));
+        std::fs::write(&tmp, csv)
+            .map_err(|e| EngineError::Query(format!("access: write {}: {}", tmp.display(), e)))?;
+        let read = format!(
+            "read_csv('{}', header = true, all_varchar = true, quote = '\"', escape = '\"')",
+            tmp.to_string_lossy().replace('\\', "/").replace('\'', "''")
+        );
+        let result = (|| {
+            let header = self.run_rows(Some(db), &format!("DESCRIBE SELECT * FROM {read}"))?;
+            let select = header
+                .iter()
+                .filter_map(|c| c.get("column_name").and_then(|v| v.as_str()))
+                .map(|name| {
+                    let ident = plan::quote_ident(name);
+                    match types.get(name) {
+                        Some(ty) => format!("TRY_CAST(NULLIF({ident}, '') AS {ty}) AS {ident}"),
+                        None => format!("{ident} AS {ident}"),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.run(
+                Some(db),
+                &format!(
+                    "CREATE OR REPLACE TABLE {} AS SELECT {} FROM {};",
+                    plan::quote_ident(&spec.node_id),
+                    select,
+                    read
+                ),
+                false,
+            )
+        })();
+        let _ = std::fs::remove_file(&tmp);
+        result?;
+        Ok(format!("access: read table {} through mdbtools into {}", table, spec.node_id))
+    }
+
+    /// Microsoft Access, write: create the table from the upstream column types
+    /// when it is not there, then insert every row in one transaction, so a
+    /// failed load leaves the table as it was. The database file itself is
+    /// created when missing. Values are bound as typed parameters - wide text,
+    /// numbers, timestamps, bits - never spliced into SQL, so an accent, a
+    /// quote or the machine's decimal separator cannot change what lands.
+    #[cfg(all(windows, feature = "odbc"))]
+    pub(crate) fn run_access_sink(
+        &self,
+        db: &Path,
+        spec: &plan::AccessSinkSpec,
+    ) -> Result<String, EngineError> {
+        use odbc_api::parameter::InputParameter;
+        use odbc_api::{ConnectionOptions, Environment};
+
+        let cols = describe_columns(self, db, &spec.from_view);
+        if cols.is_empty() {
+            return Err(EngineError::Query("access: the upstream has no columns".into()));
+        }
+        // Every value as DuckDB's own text for it, so a decimal is exact and a
+        // timestamp is one fixed form; each is parsed back to its type below.
+        let select = cols
+            .iter()
+            .map(|(n, t)| {
+                let q = plan::quote_ident(n);
+                if t.to_uppercase().contains("WITH TIME ZONE") {
+                    format!("CAST(CAST({q} AS TIMESTAMP) AS VARCHAR) AS {q}")
+                } else {
+                    format!("CAST({q} AS VARCHAR) AS {q}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let rows = self.run_rows(
+            Some(db),
+            &format!("SELECT {} FROM {}", select, plan::quote_ident(&spec.from_view)),
+        )?;
+        let text = |row: &JsonValue, name: &str| -> Option<String> {
+            row.get(name).and_then(|v| v.as_str()).map(str::to_string)
+        };
+
+        if !Path::new(&spec.path).exists() {
+            create_access_file(&spec.path)?;
+        }
+        let env = Environment::new()
+            .map_err(|e| EngineError::Query(format!("access: ODBC environment: {}", e)))?;
+        let conn = env
+            .connect_with_connection_string(
+                &access_conn_string(&spec.path, spec.password.as_deref(), true),
+                ConnectionOptions::default(),
+            )
+            .map_err(|e| EngineError::Query(format!("access: connect failed: {}", e)))?;
+
+        let table = access_ident(&spec.table)?;
+        let mut defs = Vec::with_capacity(cols.len());
+        for (name, ty) in &cols {
+            let widest = rows
+                .iter()
+                .filter_map(|r| text(r, name))
+                .map(|s| s.chars().count())
+                .max()
+                .unwrap_or(0);
+            defs.push(format!("{} {}", access_ident(name)?, duckdb_type_to_access(ty, widest)));
+        }
+        // Access has no CREATE TABLE IF NOT EXISTS, and no DDL inside a
+        // transaction, so this runs first and "already exists" is fine.
+        if let Err(e) = conn.execute(&format!("CREATE TABLE {} ({})", table, defs.join(", ")), (), None) {
+            let msg = e.to_string();
+            if !msg.to_lowercase().contains("already exists") {
+                return Err(EngineError::Query(format!("access: create table: {}", msg)));
+            }
+        }
+        // Nothing upstream leaves the table alone, overwrite or not: a source
+        // that produced nothing is not a request to empty the target.
+        if rows.is_empty() {
+            return Ok(format!("access: 0 rows to write into {}", spec.table));
+        }
+        conn.set_autocommit(false)
+            .map_err(|e| EngineError::Query(format!("access: begin: {}", e)))?;
+        let names = cols
+            .iter()
+            .map(|(n, _)| access_ident(n))
+            .collect::<Result<Vec<_>, _>>()?
+            .join(", ");
+        let marks = vec!["?"; cols.len()].join(", ");
+        let written = (|| -> Result<usize, EngineError> {
+            if spec.mode == "overwrite" {
+                conn.execute(&format!("DELETE FROM {}", table), (), None)
+                    .map_err(|e| EngineError::Query(format!("access: clear table: {}", e)))?;
+            }
+            let mut insert = conn
+                .prepare(&format!("INSERT INTO {} ({}) VALUES ({})", table, names, marks))
+                .map_err(|e| EngineError::Query(format!("access: prepare insert: {}", e)))?;
+            let mut count = 0usize;
+            for row in &rows {
+                self.check_cancelled()?;
+                let params = cols
+                    .iter()
+                    .map(|(name, ty)| access_param(text(row, name).as_deref(), ty, name))
+                    .collect::<Result<Vec<Box<dyn InputParameter>>, _>>()?;
+                insert
+                    .execute(params.as_slice())
+                    .map_err(|e| EngineError::Query(format!("access: insert row {}: {}", count + 1, e)))?;
+                count += 1;
+            }
+            Ok(count)
+        })();
+        match written {
+            Ok(count) => {
+                conn.commit()
+                    .map_err(|e| EngineError::Query(format!("access: commit: {}", e)))?;
+                Ok(format!(
+                    "access: {} {} rows into {}",
+                    if spec.mode == "overwrite" { "overwrote with" } else { "inserted" },
+                    count,
+                    spec.table
+                ))
+            }
+            Err(e) => {
+                let _ = conn.rollback();
+                Err(e)
+            }
+        }
+    }
+
+    #[cfg(not(all(windows, feature = "odbc")))]
+    pub(crate) fn run_access_sink(
+        &self,
+        _db: &Path,
+        _spec: &plan::AccessSinkSpec,
+    ) -> Result<String, EngineError> {
+        Err(EngineError::Config(
+            "access: writing an Access database needs Windows and the Microsoft Access ODBC \
+             driver; nothing on this platform can write the file. Reading works here, through \
+             mdbtools"
+                .into(),
         ))
     }
 
@@ -5260,27 +5574,47 @@ impl DuckdbEngine {
         let t_all = plan::quote_ident(&format!("duckle_tumble_all_{}", spec.node_id));
         let t_b = plan::quote_ident(&format!("duckle_tumble_b_{}", spec.node_id));
         let t_late = plan::quote_ident(&format!("duckle_tumble_late_{}", spec.node_id));
+        //
+        // #359: both marks are instants, kept as rendered text with an offset.
+        // They are compared and re-rendered HERE, in SQL, where a literal takes
+        // the time column's type: a mark written in another zone reads as the
+        // moment it was and comes back in this session's zone, which is the zone
+        // the buckets below are cut in. Comparing the TEXT kept a stale mark
+        // written east of this host over a genuinely later batch, and re-reading
+        // it with the offset dropped made its wall clock the threshold here.
+        //
+        // Monotonic: a batch of older data must not drag the watermark back and
+        // re-open windows that already closed. GREATEST skips a NULL, so a run
+        // with no rows keeps the previous mark.
+        let wm_expr = match &prev_watermark {
+            Some(p) => format!("GREATEST(MAX({ts}), {})", lit(p)),
+            None => format!("MAX({ts})"),
+        };
+        let et_expr = match &emitted_through {
+            Some(e) => format!(
+                "CASE WHEN typeof(MAX({ts})) = 'TIMESTAMP WITH TIME ZONE' \
+                 THEN CAST(CAST({e} AS TIMESTAMPTZ) AS VARCHAR) \
+                 ELSE CAST(CAST({e} AS TIMESTAMP) AS VARCHAR) END",
+                e = lit(e)
+            ),
+            None => "CAST(NULL AS VARCHAR)".to_string(),
+        };
         let wm_sql = format!(
             "CREATE OR REPLACE TABLE {t_all} AS {all};
-             SELECT COALESCE(MAX({ts}), NULL)::VARCHAR AS wm FROM {t_all}",
+             SELECT CAST({wm_expr} AS VARCHAR) AS wm, {et_expr} AS et FROM {t_all}",
             t_all = t_all,
             all = all,
-            ts = ts
         );
         let wm_rows = self.run_rows(Some(db), &wm_sql)?;
-        let batch_max = wm_rows
-            .first()
-            .and_then(|r| r.get("wm"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        // Monotonic: a batch of older data must not drag the watermark back and
-        // re-open windows that already closed.
-        let watermark = match (batch_max, prev_watermark.clone()) {
-            (Some(b), Some(p)) => Some(if b > p { b } else { p }),
-            (Some(b), None) => Some(b),
-            (None, p) => p,
+        let marks = wm_rows.first();
+        let text = |key: &str| {
+            marks
+                .and_then(|r| r.get(key))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
         };
-        let watermark = match watermark {
+        let emitted_through = text("et");
+        let watermark = match text("wm") {
             Some(w) => w,
             // Nothing has ever been seen, so nothing can be closed.
             None => {
@@ -5439,25 +5773,55 @@ impl DuckdbEngine {
         } else {
             None
         };
+        if spec.baseline_existing && state_path.is_none() {
+            return Err(EngineError::Config(format!(
+                "changed: firstRun baseline_existing needs a workspace to remember what it \
+                 observed at {}; without one every run would be a first run",
+                spec.uri
+            )));
+        }
         let prior = state_path.as_deref().and_then(crate::read_state_snapshot);
+        let prior_state: Option<JsonValue> =
+            prior.as_deref().and_then(|t| serde_json::from_str(t).ok());
+        let saved_map = |key: &str| -> std::collections::BTreeMap<String, String> {
+            prior_state
+                .as_ref()
+                .and_then(|v| v.get(key).cloned())
+                .and_then(|v| serde_json::from_value::<std::collections::BTreeMap<String, String>>(v).ok())
+                .unwrap_or_default()
+                .into_iter()
+                // A MinIO listing's etag kept its `&#34;` quotes until numeric
+                // references were decoded. The same fingerprint, read as such,
+                // rather than every object in the collection coming out again.
+                .map(|(uri, fingerprint)| (uri, fingerprint.replace("&#34;", "")))
+                .collect()
+        };
         // What has already been processed: uri -> fingerprint.
-        let mut seen: std::collections::BTreeMap<String, String> = prior
-            .as_deref()
-            .and_then(|t| serde_json::from_str::<JsonValue>(t).ok())
-            .and_then(|v| v.get("seen").cloned())
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default();
+        let mut seen = saved_map("seen");
+        // #324: what a baseline recorded as already there. OBSERVED, not
+        // processed, so it is kept apart from `seen` and the state says which
+        // is which. An entry leaves it when a later version is emitted.
+        let mut baseline = saved_map("baseline");
+        // A first run is one with no saved state at all. It lists everything
+        // rather than maxEntries: a capped baseline would leave the rest to be
+        // emitted next run as the very backfill this mode exists to prevent.
+        let baselining = spec.baseline_existing && prior.is_none();
+        let recorded = |uri: &str| seen.get(uri).or_else(|| baseline.get(uri));
+        let limit = if baselining { usize::MAX } else { spec.max_entries };
 
-        let entries = if spec.listing {
-            self.list_remote_entries(spec)?
+        // An S3 listing walks past what is already recorded rather than
+        // returning it, so those come back as a count, not as entries.
+        let (entries, walked_past) = if spec.listing {
+            self.list_remote_entries(spec, &|u: &str, f: &str| recorded(u).is_some_and(|p| p == f), limit)?
         } else {
-            vec![self.probe_remote_entry(spec)?]
+            (vec![self.probe_remote_entry(spec)?], 0)
         };
 
         let mut rows: Vec<JsonValue> = Vec::new();
-        let mut unchanged_count = 0usize;
-        for e in &entries {
-            let status = match seen.get(&e.uri) {
+        let mut unchanged_count = walked_past;
+        // A baseline run emits none of what it lists.
+        for e in entries.iter().filter(|_| !baselining) {
+            let status = match recorded(&e.uri) {
                 Some(prev) if *prev == e.fingerprint => {
                     unchanged_count += 1;
                     continue;
@@ -5469,6 +5833,9 @@ impl DuckdbEngine {
                 "uri": e.uri,
                 "name": e.name,
                 "size": e.size,
+                // #324: the name src.artifact and xf.artifact.copy use. `size`
+                // stays, so no pipeline reading it breaks.
+                "size_bytes": e.size,
                 "modified_at": e.modified_at,
                 "etag": e.etag,
                 "fingerprint": e.fingerprint,
@@ -5488,13 +5855,21 @@ impl DuckdbEngine {
                 r.get("fingerprint").and_then(|v| v.as_str()),
             ) {
                 seen.insert(u.to_string(), f.to_string());
+                baseline.remove(u);
+            }
+        }
+        if baselining {
+            for e in &entries {
+                baseline.insert(e.uri.clone(), e.fingerprint.clone());
             }
         }
 
         // What the run OBSERVED, for the provenance manifest. No sha256: the
         // bytes were deliberately not read, which is the point of the component.
         // The ETag with the size and mtime is what can honestly be claimed.
-        for e in &entries {
+        // None for a baseline run: it consumed none of these, and a baseline
+        // can be the whole collection.
+        for e in entries.iter().filter(|_| !baselining) {
             artifacts.push(crate::ArtifactRef {
                 node: spec.node_id.clone(),
                 role: "input".into(),
@@ -5518,25 +5893,36 @@ impl DuckdbEngine {
         }
 
         if let Some(p) = state_path {
-            pending.push(crate::PendingWrite::state(
-                p,
-                serde_json::json!({ "seen": seen }),
-                prior,
-            ));
+            let mut state = serde_json::json!({ "seen": seen });
+            if !baseline.is_empty() {
+                state["baseline"] = serde_json::json!(baseline);
+            }
+            pending.push(crate::PendingWrite::state(p, state, prior));
         }
 
-        let msg = format!(
-            "changed: {} of {} entr{} changed at {}{}",
-            emitted,
-            entries.len(),
-            if entries.len() == 1 { "y" } else { "ies" },
-            spec.uri,
-            if unchanged_count > 0 {
-                format!(" ({} unchanged)", unchanged_count)
-            } else {
-                String::new()
-            }
-        );
+        let listed = entries.len() + walked_past;
+        let msg = if baselining {
+            format!(
+                "changed: recorded {} entr{} already at {} as a baseline and emitted none; \
+                 later runs emit what is added or replaced",
+                listed,
+                if listed == 1 { "y" } else { "ies" },
+                spec.uri
+            )
+        } else {
+            format!(
+                "changed: {} of {} entr{} changed at {}{}",
+                emitted,
+                listed,
+                if listed == 1 { "y" } else { "ies" },
+                spec.uri,
+                if unchanged_count > 0 {
+                    format!(" ({} unchanged)", unchanged_count)
+                } else {
+                    String::new()
+                }
+            )
+        };
         Ok(if emitted == 0 {
             format!("{}{}", crate::UNCHANGED_MARKER, msg)
         } else {
@@ -5550,7 +5936,8 @@ impl DuckdbEngine {
             Some(db),
             &format!(
                 "CREATE OR REPLACE TABLE {} (uri VARCHAR, name VARCHAR, size BIGINT, \
-                 modified_at VARCHAR, etag VARCHAR, fingerprint VARCHAR, status VARCHAR)",
+                 size_bytes BIGINT, modified_at VARCHAR, etag VARCHAR, fingerprint VARCHAR, \
+                 status VARCHAR)",
                 plan::quote_ident(node_id)
             ),
             false,
@@ -5671,26 +6058,63 @@ impl DuckdbEngine {
         })
     }
 
-    /// Every object under a prefix.
-    fn s3_list(&self, spec: &plan::ChangedSourceSpec) -> Result<Vec<RemoteEntry>, EngineError> {
+    /// The objects under a prefix this run could emit, and how many already
+    /// recorded ones were walked past to find them. `recorded` answers whether
+    /// a uri is recorded at that fingerprint.
+    fn s3_list(
+        &self,
+        spec: &plan::ChangedSourceSpec,
+        recorded: &dyn Fn(&str, &str) -> bool,
+        limit: usize,
+    ) -> Result<(Vec<RemoteEntry>, usize), EngineError> {
         let cfg = self.s3_config(spec)?;
         let (bucket, prefix) = crate::s3::parse_s3_uri(&spec.uri)?;
-        // The cap goes DOWN into the listing rather than being applied after it:
-        // a prefix holding a million objects must not be walked in full to hand
-        // back a hundred. A suffix filter can discard some of what comes back,
-        // so the request asks for enough to still fill the cap afterwards.
-        let want = if spec.suffix.is_some() {
-            spec.max_entries.saturating_mul(4).max(spec.max_entries)
+        // #324: the cap goes down into the listing as a count of what this run
+        // can EMIT. Objects already processed at the same fingerprint are
+        // walked past, not counted: capping what is listed returned the same
+        // first keys every run, so once those were processed nothing after
+        // them was ever reached. The suffix filter is applied the same way.
+        let mut walked_past = 0usize;
+        // By modification time the oldest can sit anywhere in the prefix, so it
+        // is walked to the end - as a steady-state poll is anyway - keeping only
+        // the `limit` oldest candidates: memory is the cap, not the prefix.
+        let by_modified = spec.order_by_modified;
+        let mut oldest: std::collections::BinaryHeap<ByModified> = Default::default();
+        let listed = cfg.list_where(&bucket, &prefix, if by_modified { usize::MAX } else { limit }, |o| {
+            if let Some(sfx) = &spec.suffix {
+                if !o.key.ends_with(sfx.as_str()) {
+                    return false;
+                }
+            }
+            if !globs_admit(below_folder(&o.key, &prefix), &spec.include, &spec.exclude) {
+                return false;
+            }
+            if !inside_window(o.last_modified.as_deref(), spec) {
+                return false;
+            }
+            let uri = format!("s3://{}/{}", bucket, o.key);
+            let fingerprint =
+                remote_fingerprint(o.etag.as_deref(), o.last_modified.as_deref(), o.size);
+            if recorded(&uri, &fingerprint) {
+                walked_past += 1;
+                return false;
+            }
+            if by_modified {
+                oldest.push(ByModified(o.clone()));
+                if oldest.len() > limit {
+                    oldest.pop();
+                }
+                return false;
+            }
+            true
+        })?;
+        let objects = if by_modified {
+            oldest.into_iter().map(|o| o.0).collect()
         } else {
-            spec.max_entries
+            listed
         };
-        let objects = cfg.list(&bucket, &prefix, want)?;
         let mut out: Vec<RemoteEntry> = objects
             .into_iter()
-            .filter(|o| match &spec.suffix {
-                Some(sfx) => o.key.ends_with(sfx.as_str()),
-                None => true,
-            })
             .map(|o| {
                 let name = o.key.rsplit('/').next().unwrap_or(&o.key).to_string();
                 RemoteEntry {
@@ -5707,13 +6131,11 @@ impl DuckdbEngine {
                 }
             })
             .collect();
-        // Oldest first, so a capped run works through a backlog in order rather
-        // than taking an arbitrary slice of it - the same rule the SFTP listing
-        // follows, and for the same reason. S3 returns keys in lexical order
-        // already; sorting by the leaf name matches what the SFTP side does when
-        // a prefix has sub-folders in it.
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(out)
+        // In the order asked for, the same rule the SFTP listing follows. S3
+        // returns keys in lexical order already; sorting by the leaf name
+        // matches what the SFTP side does when a prefix has sub-folders in it.
+        sort_entries(&mut out, spec.order_by_modified);
+        Ok((out, walked_past))
     }
 
     /// xf.artifact.copy: land the bytes named by the upstream rows somewhere
@@ -6085,8 +6507,14 @@ impl DuckdbEngine {
             uri: src.to_string(),
             listing: false,
             suffix: None,
+            include: Vec::new(),
+            exclude: Vec::new(),
+            modified_since: None,
+            modified_before: None,
             max_entries: 1,
             track_state: false,
+            baseline_existing: false,
+            order_by_modified: false,
             user: Some(user.clone()),
             password: auth.password.clone(),
             private_key: auth.private_key.clone(),
@@ -6446,11 +6874,18 @@ impl DuckdbEngine {
             crate::now_nanos(),
             safe_file_name(name)
         ));
-        let mut f = std::fs::File::create(&path)
+        // The guard is taken BEFORE the file is created, not after the copy
+        // succeeds: a download that is cut short - a dropped connection, a 40 GB
+        // corpus on a full temp volume - has already written part of the file,
+        // and returning the error used to leave that part behind for good.
+        // Declared first so it drops LAST, after the handle below is closed:
+        // Windows refuses to remove a file that is still open.
+        let spooled = SpooledInput { path, temp: true };
+        let mut f = std::fs::File::create(&spooled.path)
             .map_err(|e| EngineError::Query(format!("spooling {uri}: {e}")))?;
         std::io::copy(&mut reader, &mut f)
             .map_err(|e| EngineError::Query(format!("fetching {uri}: {e}")))?;
-        Ok(SpooledInput { path, temp: true })
+        Ok(spooled)
     }
 
     /// xf.archive.extract: one archive artifact in, one artifact per member out.
@@ -7086,9 +7521,11 @@ impl DuckdbEngine {
     fn list_remote_entries(
         &self,
         spec: &plan::ChangedSourceSpec,
-    ) -> Result<Vec<RemoteEntry>, EngineError> {
+        recorded: &dyn Fn(&str, &str) -> bool,
+        limit: usize,
+    ) -> Result<(Vec<RemoteEntry>, usize), EngineError> {
         if spec.uri.starts_with("s3://") || spec.uri.starts_with("s3a://") {
-            return self.s3_list(spec);
+            return self.s3_list(spec, recorded, limit);
         }
         if !spec.uri.starts_with("sftp://") {
             return Err(EngineError::Config(format!(
@@ -7099,7 +7536,9 @@ impl DuckdbEngine {
         }
         let (host, port, user, path) = parse_sftp_uri(&spec.uri)?;
         let user = spec.user.clone().or(user).unwrap_or_default();
-        self.sftp_list(spec, &host, port, &user, &path)
+        // A directory listing is one response with every entry in it, so there
+        // is nothing to walk past: the caller compares each one.
+        Ok((self.sftp_list(spec, &host, port, &user, &path)?, 0))
     }
 
     /// Connect, run `f` against the SFTP session, disconnect. Shared by the
@@ -7253,6 +7692,8 @@ impl DuckdbEngine {
                 Some(s) => name.ends_with(s.as_str()),
                 None => true,
             })
+            .filter(|(name, _, _)| globs_admit(name, &spec.include, &spec.exclude))
+            .filter(|(_, _, mtime)| inside_window(mtime.map(|m| m.to_string()).as_deref(), spec))
             .map(|(name, size, mtime)| {
                 let modified = mtime.map(|m| m.to_string());
                 RemoteEntry {
@@ -7265,9 +7706,9 @@ impl DuckdbEngine {
                 }
             })
             .collect();
-        // Oldest first, so a capped run works through a backlog in order
-        // rather than taking an arbitrary slice of it.
-        out.sort_by(|a, b| a.name.cmp(&b.name));
+        // In a fixed order, so a capped run works through a backlog in that
+        // order rather than taking an arbitrary slice of it.
+        sort_entries(&mut out, spec.order_by_modified);
         Ok(out)
     }
 
@@ -7352,6 +7793,30 @@ impl DuckdbEngine {
             None => 0,
         };
         if consumed == 0 {
+            // Two different situations end up here, and only one of them is
+            // worth waiting for.
+            //
+            // If the read was CAPPED - it stopped at max_bytes rather than at
+            // the end of the file - then the record is already complete on disk
+            // and the cap is what cut it. Nothing will ever arrive that helps:
+            // every later run reads the same first max_bytes, finds no newline,
+            // reports "waiting for the rest" and leaves the offset where it was.
+            // Measured: a 1,030-byte NDJSON of five 206-byte records with
+            // maxBytes 100 gave four consecutive green runs, "0 rows" each, the
+            // sink rewritten with a header and nothing else, and no message
+            // anywhere naming the cap.
+            //
+            // If the read reached the end of the file, the last line genuinely
+            // has no newline yet and the writer is mid-record, which is what
+            // this path is for.
+            if take == spec.max_bytes && start + take < len {
+                return Err(EngineError::Query(format!(
+                    "spool: the next record in {} is longer than maxBytes ({} bytes), so no \
+                     whole line can ever be read and the position will never advance. Raise \
+                     maxBytes above the size of one record.",
+                    spec.path, spec.max_bytes
+                )));
+            }
             self.spool_empty_relation(db, &spec.node_id, path)?;
             return Ok(format!(
                 "spool: {} has a partial record and no complete one; waiting for the rest",
@@ -11650,7 +12115,12 @@ impl DuckdbEngine {
         // durably written (persist-then-ack), so a materialize failure can't
         // leave senders thinking a never-stored event was delivered.
         let mut pending: Vec<std::net::TcpStream> = Vec::new();
-        while (rows.len() as u64) < spec.max_requests {
+        // Requests, not rows. One array body is ONE request however many rows it
+        // unfolds into, so bounding this on `rows` closed the listener after
+        // ceil(max_requests / rows_per_body) of them and left every later sender
+        // hitting a closed port.
+        let mut accepted: u64 = 0;
+        while accepted < spec.max_requests {
             self.check_cancelled()?;
             if Instant::now() >= deadline {
                 break;
@@ -11730,6 +12200,9 @@ impl DuckdbEngine {
                     rows.push(JsonValue::Object(row));
                 }
             }
+            // Counted here, at the end: a malformed body and a path-filter 404
+            // both `continue` above, and specs.rs promises they do not count.
+            accepted += 1;
             // Hold the connection open; answer it after the batch is persisted.
             pending.push(stream);
         }
@@ -11741,8 +12214,8 @@ impl DuckdbEngine {
         if let (Some(acks), true) = (&self.webhook_acks, materialized.is_ok()) {
             acks.lock().unwrap_or_else(|p| p.into_inner()).extend(pending);
             return Ok(format!(
-                "webhook: collected {} request(s) on :{} -> {}",
-                count, spec.port, spec.node_id
+                "webhook: collected {} request(s) ({} row(s)) on :{} -> {}",
+                accepted, count, spec.port, spec.node_id
             ));
         }
         // Persist-then-ack: 200 once the rows are durably written; 503 on
@@ -11760,8 +12233,8 @@ impl DuckdbEngine {
         }
         materialized?;
         Ok(format!(
-            "webhook: collected {} request(s) on :{} -> {}",
-            count, spec.port, spec.node_id
+            "webhook: collected {} request(s) ({} row(s)) on :{} -> {}",
+            accepted, count, spec.port, spec.node_id
         ))
     }
 
@@ -12887,8 +13360,25 @@ impl DuckdbEngine {
             materialize_empty_like_view(&self.bin, db, &spec.node_id, &spec.from_view)?;
             return Ok(format!("ai.classify: 0 upstream rows -> {}", spec.node_id));
         }
-        let endpoint = Self::ai_endpoint(&spec.base_url, &spec.endpoint_path, "/v1/chat/completions");
+        // Jev is an evaluation model and is not on the chat-completions
+        // surface at all, so the route moves with the provider.
+        let jev = spec.provider == "jev";
+        let endpoint = Self::ai_endpoint(
+            &spec.base_url,
+            &spec.endpoint_path,
+            if jev { "/v1/evaluate" } else { "/v1/chat/completions" },
+        );
         let cat_list = spec.categories.join(", ");
+        // A `choice` question's criteria are REQUIRED and are the options
+        // themselves, which is what makes the answer in-set by construction
+        // rather than by matching prose back to the list afterwards.
+        let jev_criteria: serde_json::Map<String, JsonValue> = spec
+            .categories
+            .iter()
+            .map(|c| (c.clone(), JsonValue::Null))
+            .collect();
+        let jev_instructions =
+            format!("Classify the text into exactly one of these categories: {}.", cat_list);
         let system_prompt = format!(
             "You are a strict classifier. Pick exactly one of these categories: {}. \
              Reply with only the category name and nothing else.",
@@ -12956,14 +13446,28 @@ impl DuckdbEngine {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let body = serde_json::json!({
-                "model": spec.model,
-                "temperature": 0.0,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": text},
-                ],
-            });
+            let body = if jev {
+                serde_json::json!({
+                    "model": spec.model,
+                    "state": text,
+                    "questions": {
+                        "category": {
+                            "type": "choice",
+                            "instructions": jev_instructions,
+                            "criteria": jev_criteria,
+                        }
+                    },
+                })
+            } else {
+                serde_json::json!({
+                    "model": spec.model,
+                    "temperature": 0.0,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": text},
+                    ],
+                })
+            };
             let response = engine.ai_send_with_retry(
                 &|| Self::ai_post(&endpoint, &spec.headers, &spec.api_key),
                 &body.to_string(),
@@ -12979,15 +13483,36 @@ impl DuckdbEngine {
                 stopped.store(true, std::sync::atomic::Ordering::SeqCst);
                 return Ok(row.clone());
             };
-            let raw = response
-                .pointer("/choices/0/message/content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
+            // An evaluation answer carries the decision and, optionally, how
+            // sure it was. `probabilities` is documented as optional on a
+            // choice, so a missing one is a null confidence, not a failure.
+            let (raw, confidence) = if jev {
+                let answer = response.pointer("/answers/category");
+                let choice = answer
+                    .and_then(|a| a.get("choice"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                let p = answer
+                    .and_then(|a| a.get("probabilities"))
+                    .and_then(|v| v.get(&choice))
+                    .and_then(|v| v.as_f64());
+                (choice, p)
+            } else {
+                let raw = response
+                    .pointer("/choices/0/message/content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                (raw, None)
+            };
             // Constrain to the supplied category list; anything not
             // in it becomes UNKNOWN so downstream pipelines don't
-            // see surprise values.
+            // see surprise values. On the evaluation path this can only
+            // re-spell the answer in the user's own casing, because the model
+            // was never offered anything else.
             let chosen = spec
                 .categories
                 .iter()
@@ -12999,6 +13524,18 @@ impl DuckdbEngine {
                 _ => serde_json::Map::new(),
             };
             obj.insert(spec.output_column.clone(), JsonValue::String(chosen));
+            // Only the evaluation path has a probability to report. Writing the
+            // column unconditionally would put an always-null column into every
+            // existing pipeline's output.
+            if jev {
+                obj.insert(
+                    format!("{}_confidence", spec.output_column),
+                    confidence
+                        .and_then(serde_json::Number::from_f64)
+                        .map(JsonValue::Number)
+                        .unwrap_or(JsonValue::Null),
+                );
+            }
             let produced = JsonValue::Object(obj);
             // Recorded as this item finishes, not when the stage does: a
             // failure on the next row keeps everything already bought.
@@ -14428,7 +14965,7 @@ impl DuckdbEngine {
         // &Path is Copy; capture it for the async block (block_on is scoped,
         // so this never outlives &self).
         let bin = self.binary();
-        let count: usize = rt
+        let count = rt
             .block_on(async move {
                 use futures_util::TryStreamExt;
                 use tiberius::QueryItem;
@@ -14459,6 +14996,7 @@ impl DuckdbEngine {
                     .await
                     .map_err(|e| format!("query: {}", e))?;
                 let mut count = 0_usize;
+                let mut typed: Vec<(String, &'static str)> = Vec::new();
                 while let Some(item) = stream
                     .try_next()
                     .await
@@ -14466,7 +15004,18 @@ impl DuckdbEngine {
                 {
                     let row = match item {
                         QueryItem::Row(r) => r,
-                        QueryItem::Metadata(_) => continue,
+                        QueryItem::Metadata(meta) => {
+                            if typed.is_empty() {
+                                typed = meta
+                                    .columns()
+                                    .iter()
+                                    .filter_map(|c| {
+                                        sqlserver_column_type(c.column_type()).map(|t| (c.name().to_string(), t))
+                                    })
+                                    .collect();
+                            }
+                            continue;
+                        }
                     };
                     let mut obj = serde_json::Map::new();
                     for (i, col) in row.columns().iter().enumerate() {
@@ -14481,9 +15030,30 @@ impl DuckdbEngine {
                 writer
                     .finalize_into_table(bin, db, &spec.node_id)
                     .map_err(|e| format!("finalize: {}", e))?;
-                Ok::<usize, String>(count)
+                Ok::<(usize, Vec<(String, &'static str)>), String>((count, typed))
             })
             .map_err(|e| EngineError::Query(format!("sqlserver source: {}", e)))?;
+        let (count, typed) = count;
+        // The date/time columns take the type the server reported rather than
+        // one guessed from their text, which a guess got wrong (#362). CAST,
+        // not TRY_CAST: the text is written above in the one shape each type
+        // parses, so a value that fails is a bug to see, not a NULL to hide.
+        if count > 0 && !typed.is_empty() {
+            let replace = typed
+                .iter()
+                .map(|(name, ty)| {
+                    let q = plan::quote_ident(name);
+                    format!("CAST({q} AS {ty}) AS {q}")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let node = plan::quote_ident(&spec.node_id);
+            self.run(
+                Some(db),
+                &format!("CREATE OR REPLACE TABLE {node} AS SELECT * REPLACE ({replace}) FROM {node};"),
+                false,
+            )?;
+        }
         Ok(format!(
             "sqlserver: materialized {} rows into {}",
             count, spec.node_id
@@ -14824,6 +15394,27 @@ impl DuckdbEngine {
         );
         self.run(Some(db), &copy, false)?;
 
+        // Replace drops the collection, and a drop takes every index on it as
+        // well, so it is not done on an empty upstream. The rule is the one
+        // `run_oracle_sink` states and every clearing sink follows: a run that
+        // produced nothing leaves the target alone rather than emptying it on
+        // the strength of an upstream that may simply have failed to produce -
+        // a late file, a filter that matched nothing, an empty API page.
+        //
+        // Asked of the STAGED rows, after the COPY, not of a `SELECT 1` before
+        // it. A constant projection cannot fail the way the real read can, so
+        // the guard would say "there are rows" about a read that then produced
+        // none - which is how the Oracle sink came to empty a table and write
+        // nothing back. The staged file is exactly what the insert loop reads:
+        // the COPY writes one line per row, so no bytes means no rows.
+        let no_rows = std::fs::metadata(&ndjson).map(|m| m.len() == 0).unwrap_or(false);
+        if no_rows {
+            return Ok(format!(
+                "mongodb: 0 rows upstream, left {}.{} as it was",
+                spec.database, spec.collection
+            ));
+        }
+
         let cancel = self.cancel.clone();
         // Multi-threaded on purpose. serde_json -> BSON is CPU work, and on a
         // current-thread runtime it serialized behind the network waits; giving
@@ -14860,15 +15451,14 @@ impl DuckdbEngine {
                 for chunk in mongo_ndjson_batches(&ndjson, spec.batch_size)
                     .map_err(|e| format!("reading staged rows: {}", e))?
                 {
+                    let chunk = chunk?;
                     let chunk = &chunk;
                     if cancel.load(Ordering::Relaxed) {
                         return Err("cancelled".into());
                     }
                     for v in chunk {
-                        let mut doc = match mongodb::bson::to_document(v) {
-                            Ok(d) => d,
-                            Err(_) => continue,
-                        };
+                        let mut doc = mongodb::bson::to_document(v)
+                            .map_err(|e| format!("row cannot be stored as a document: {}", e))?;
                         let mut filter = mongodb::bson::Document::new();
                         for k in &spec.upsert_keys {
                             if let Some(val) = doc.get(k) {
@@ -14918,6 +15508,7 @@ impl DuckdbEngine {
             for chunk in mongo_ndjson_batches(&ndjson, spec.batch_size)
                 .map_err(|e| format!("reading staged rows: {}", e))?
             {
+                let chunk = chunk?;
                 if cancel.load(Ordering::Relaxed) {
                     return Err("cancelled".into());
                 }
@@ -14927,10 +15518,16 @@ impl DuckdbEngine {
                 }
                 let coll = collection.clone();
                 pending.push(tokio::spawn(async move {
+                    // A row that cannot become a document used to be dropped
+                    // here as well, so the count and the collection disagreed
+                    // with the upstream and nothing said so.
                     let docs: Vec<mongodb::bson::Document> = chunk
                         .iter()
-                        .filter_map(|v| mongodb::bson::to_document(v).ok())
-                        .collect();
+                        .map(|v| {
+                            mongodb::bson::to_document(v)
+                                .map_err(|e| format!("row cannot be stored as a document: {}", e))
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
                     if docs.is_empty() {
                         return Ok(0);
                     }
@@ -15690,33 +16287,36 @@ impl DuckdbEngine {
                     Some(dest)
                 };
                 let (rows, response): (Vec<JsonValue>, JsonValue) = match spec.response_format {
-                    RestResponseFormat::Json => {
-                        let response: JsonValue =
-                            serde_json::from_str(&page_body).map_err(|e| {
-                                EngineError::Query(format!("REST response not JSON: {}", e))
-                            })?;
-                        // Locate the rows: the whole response when no responsePath
-                        // is set, else the JSON pointer target. A located ARRAY is
-                        // the row set; a single OBJECT is one row (issue #13: APIs
-                        // like open-meteo return one JSON object, which previously
-                        // yielded zero rows + an empty file with no error). Scalars
-                        // / null / missing pointer are genuinely empty.
-                        let rows = {
-                            let located = if spec.response_path.is_empty() {
-                                Some(&response)
-                            } else {
-                                response.pointer(&spec.response_path)
-                            };
-                            match located {
-                                Some(JsonValue::Array(a)) => a.clone(),
-                                // An empty object means "no data" (like []), not a
-                                // single empty row.
-                                Some(JsonValue::Object(o)) if o.is_empty() => Vec::new(),
-                                Some(v @ JsonValue::Object(_)) => vec![v.clone()],
-                                _ => Vec::new(),
+                    RestResponseFormat::Json | RestResponseFormat::EventStream => {
+                        let documents = if spec.response_format == RestResponseFormat::EventStream {
+                            sse_documents(&page_body)?
+                        } else {
+                            match serde_json::from_str::<JsonValue>(&page_body) {
+                                Ok(response) => vec![response],
+                                // #365: the server says it sent events, and the
+                                // body is not one JSON document, so read the events.
+                                Err(_)
+                                    if page_content_type.as_deref().is_some_and(|t| {
+                                        t.trim().to_ascii_lowercase().starts_with("text/event-stream")
+                                    }) =>
+                                {
+                                    sse_documents(&page_body)?
+                                }
+                                Err(e) => {
+                                    return Err(EngineError::Query(format!(
+                                        "REST response not JSON: {}",
+                                        e
+                                    )))
+                                }
                             }
                         };
-                        (rows, response)
+                        let rows = documents
+                            .iter()
+                            .flat_map(|d| rest_located_rows(d, &spec.response_path))
+                            .collect();
+                        // Pagination reads the last document, which for a single
+                        // JSON response is that response.
+                        (rows, documents.into_iter().last().unwrap_or(JsonValue::Null))
                     }
                     RestResponseFormat::Xml => {
                         let rows =
@@ -16159,6 +16759,17 @@ impl DuckdbEngine {
             &rejects,
             Some(&parent_failure_schema()),
         )?;
+        // #101: the envelope every error-type reject carries. `error` keeps the
+        // human-readable detail; the code is what automation groups on.
+        self.run(
+            Some(db),
+            &plan::reject_envelope_alter_sql(
+                &format!("{}__reject", spec.node_id),
+                &spec.node_id,
+                "request_failed",
+            ),
+            false,
+        )?;
         // #257: queued, not written. The deferred queue flushes only when the
         // WHOLE run succeeds, so a pipeline that fails after this stage does
         // not advance the cursor past rows no sink ever received.
@@ -16420,9 +17031,20 @@ impl DuckdbEngine {
             ).collect()
         };
         content = substitute_into_child(&content, &merged);
-        let sub_doc: plan::PipelineDoc = serde_json::from_str(&content).map_err(|e| {
+        let mut sub_doc: plan::PipelineDoc = serde_json::from_str(strip_bom(&content)).map_err(|e| {
             EngineError::Config(format!("sub-pipeline: parse '{}': {}", path, e))
         })?;
+        // A node may hold only `connectionRef`, the saved connection supplying
+        // its auth. Every surface resolves refs on the document it was handed,
+        // and a child is not that document - it is read from disk right here -
+        // so a child using a saved connection failed for a field the connection
+        // provides. Every child path (runjob, iterate, foreach, batch items,
+        // install fallback) comes through this function, so this is the one
+        // place, and an unresolvable ref fails the child as it fails a run.
+        if let Some(ws) = std::env::var("DUCKLE_WORKSPACE").ok().filter(|w| !w.is_empty()) {
+            duckle_secrets::resolve_connection_refs(std::path::Path::new(&ws), &mut sub_doc.nodes)
+                .map_err(|e| EngineError::Config(format!("sub-pipeline '{}': {}", path, e)))?;
+        }
         // Run it under the CHILD's own name. Unnamed, every sub-pipeline shared
         // one run-log folder and - far worse - one `xf.incremental` watermark
         // file per node id, so three different children driven by ctl.foreach
@@ -16674,6 +17296,424 @@ impl DuckdbEngine {
             "ducklake-cdc: {} change row(s) from snapshot {} to {}",
             rows, last, current
         ))
+    }
+
+    /// src.postgres.cdc: see PgCdcSpec. Peeks the slot, emits the changes into
+    /// the node's table typed as the source declares them, and queues the
+    /// position to save when the run succeeds.
+    pub(crate) fn run_pg_cdc(
+        &self,
+        db: &Path,
+        spec: &plan::PgCdcSpec,
+        pipeline_name: Option<&str>,
+        pending: &mut Vec<crate::PendingWrite>,
+    ) -> Result<String, EngineError> {
+        // Without somewhere to keep the position every run would read from where
+        // the slot stands and nothing would advance it, so PostgreSQL would keep
+        // its WAL forever. Refused rather than run that way.
+        let state_path = incremental_state_path(pipeline_name, &spec.node_id).ok_or_else(|| {
+            EngineError::Config(format!(
+                "src.postgres.cdc: needs a workspace to keep its position in (DUCKLE_WORKSPACE); without one slot '{}' would never advance and PostgreSQL would retain its WAL indefinitely",
+                spec.slot
+            ))
+        })?;
+        let lit = |s: &str| format!("'{}'", s.replace('\'', "''"));
+        let ident = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+        let query = |inner: &str| -> Result<Vec<JsonValue>, EngineError> {
+            self.run_rows(
+                Some(db),
+                &format!(
+                    "{}SELECT * FROM postgres_query('duckle_src', {});",
+                    spec.attach_read,
+                    lit(inner)
+                ),
+            )
+        };
+        let text = |row: &JsonValue, key: &str| -> Option<String> {
+            match row.get(key)? {
+                JsonValue::Null => None,
+                JsonValue::String(s) => Some(s.clone()),
+                other => Some(other.to_string()),
+            }
+        };
+        let config = |m: String| EngineError::Config(format!("src.postgres.cdc: {m}"));
+        let qualified = format!("{}.{}", ident(&spec.schema), ident(&spec.table));
+
+        // The table's columns in order, with the types it declares.
+        let columns: Vec<(String, String)> = query(&format!(
+            "SELECT a.attname::text AS name, format_type(a.atttypid, a.atttypmod) AS type \
+             FROM pg_attribute a WHERE a.attrelid = to_regclass({}) AND a.attnum > 0 \
+             AND NOT a.attisdropped ORDER BY a.attnum",
+            lit(&qualified)
+        ))?
+        .iter()
+        .filter_map(|r| Some((text(r, "name")?, text(r, "type")?)))
+        .collect();
+        if columns.is_empty() {
+            return Err(config(format!("table {}.{} was not found", spec.schema, spec.table)));
+        }
+        if let Some((name, _)) = columns.iter().find(|(n, _)| PG_CDC_META.contains(&n.as_str())) {
+            return Err(config(format!(
+                "column {name} collides with a column this node adds to every change ({})",
+                PG_CDC_META.join(", ")
+            )));
+        }
+
+        // The publication, then the slot.
+        let has_publication = !query(&format!(
+            "SELECT 1 AS x FROM pg_publication WHERE pubname = {}",
+            lit(&spec.publication)
+        ))?
+        .is_empty();
+        let create_publication = format!(
+            "CREATE PUBLICATION {} FOR TABLE {} WITH (publish = 'insert, update, delete')",
+            ident(&spec.publication),
+            qualified
+        );
+        if !has_publication {
+            if !spec.create_if_missing {
+                return Err(config(format!(
+                    "publication {} does not exist - create it with {}, or turn on createIfMissing",
+                    spec.publication, create_publication
+                )));
+            }
+            // A read-only transaction refuses CREATE PUBLICATION, so this one
+            // statement goes through a writable attach. TRUNCATE is left out: it
+            // is not a row change, and the decoder refuses it.
+            self.run(
+                Some(db),
+                &format!(
+                    "{}CALL postgres_execute('duckle_dst', {});",
+                    spec.attach_write,
+                    lit(&create_publication)
+                ),
+                false,
+            )?;
+        }
+        let created_slot = match query(&format!(
+            "SELECT plugin::text AS plugin FROM pg_replication_slots WHERE slot_name = {}",
+            lit(&spec.slot)
+        ))?
+        .first()
+        {
+            Some(row) => {
+                let plugin = text(row, "plugin").unwrap_or_default();
+                if plugin != "pgoutput" {
+                    return Err(config(format!(
+                        "slot {} decodes with '{plugin}' and this node reads pgoutput - give it a slot of its own",
+                        spec.slot
+                    )));
+                }
+                false
+            }
+            None => {
+                if !spec.create_if_missing {
+                    return Err(config(format!(
+                        "slot {} does not exist - create it with SELECT pg_create_logical_replication_slot('{}', 'pgoutput'), or turn on createIfMissing",
+                        spec.slot, spec.slot
+                    )));
+                }
+                // A statement of its own: PostgreSQL will not create a slot in a
+                // transaction that has written anything.
+                query(&format!(
+                    "SELECT slot_name::text AS slot FROM pg_create_logical_replication_slot({}, 'pgoutput')",
+                    lit(&spec.slot)
+                ))?;
+                true
+            }
+        };
+
+        // Advance to what the last successful run delivered. Forward only:
+        // PostgreSQL refuses to move a slot back, and a slot already past the
+        // saved position was advanced by someone else, which was theirs to do.
+        let prior = crate::read_state_snapshot(&state_path);
+        let saved = prior
+            .as_deref()
+            .and_then(|t| serde_json::from_str::<JsonValue>(t).ok())
+            .filter(|v| v.get("slot").and_then(|s| s.as_str()) == Some(spec.slot.as_str()))
+            .and_then(|v| v.get("lsn").and_then(|l| l.as_str()).map(str::to_string));
+        if let Some(lsn) = &saved {
+            if lsn.is_empty() || !lsn.chars().all(|c| c.is_ascii_hexdigit() || c == '/') {
+                return Err(config(format!("the saved position '{lsn}' is not an LSN")));
+            }
+            let behind = query(&format!(
+                "SELECT (confirmed_flush_lsn < {}::pg_lsn) AS behind FROM pg_replication_slots WHERE slot_name = {}",
+                lit(lsn),
+                lit(&spec.slot)
+            ))?;
+            if behind.first().and_then(|r| r.get("behind")).and_then(|b| b.as_bool()) == Some(true) {
+                query(&format!(
+                    "SELECT end_lsn::text AS lsn FROM pg_replication_slot_advance({}, {}::pg_lsn)",
+                    lit(&spec.slot),
+                    lit(lsn)
+                ))?;
+            }
+        }
+
+        // How much WAL the slot holds back, measured after it has advanced.
+        let lag_bytes = query(&format!(
+            "SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), confirmed_flush_lsn)::bigint AS lag \
+             FROM pg_replication_slots WHERE slot_name = {}",
+            lit(&spec.slot)
+        ))?
+        .first()
+        .and_then(|r| r.get("lag").cloned())
+        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+        .unwrap_or(0)
+        .max(0) as u64;
+
+        // Peek: reading consumes nothing.
+        let messages = query(&format!(
+            "SELECT lsn::text AS lsn, encode(data, 'hex') AS data \
+             FROM pg_logical_slot_peek_binary_changes({}, NULL, {}, 'proto_version', '1', 'publication_names', {})",
+            lit(&spec.slot),
+            spec.batch_size,
+            lit(&spec.publication)
+        ))?;
+        let mut decoder = crate::pgoutput::Decoder::default();
+        let mut last_commit: Option<String> = None;
+        let mut rows: Vec<String> = Vec::new();
+        let mut elsewhere = 0usize;
+        for m in &messages {
+            let lsn = text(m, "lsn").unwrap_or_default();
+            let bytes = decode_hex(&text(m, "data").unwrap_or_default())
+                .map_err(|e| EngineError::Query(format!("src.postgres.cdc: {e}")))?;
+            if bytes.first() == Some(&b'C') {
+                last_commit = Some(lsn);
+            }
+            let Some(change) = decoder
+                .decode(&bytes)
+                .map_err(|e| EngineError::Query(format!("src.postgres.cdc: {e}")))?
+            else {
+                continue;
+            };
+            let Some(rel) = decoder.relation(change.relation_oid) else {
+                continue;
+            };
+            if rel.namespace != spec.schema || rel.name != spec.table {
+                elsewhere += 1;
+                continue;
+            }
+            let mut row = serde_json::Map::new();
+            row.insert("_op".into(), JsonValue::from(change.op.as_str()));
+            row.insert("_lsn".into(), JsonValue::from(crate::pgoutput::format_lsn(change.commit_lsn)));
+            row.insert("_xid".into(), JsonValue::from(change.xid.to_string()));
+            row.insert("_commit_ts".into(), JsonValue::from(pg_epoch_micros_to_text(change.commit_ts_micros)));
+            for (col, value) in rel.columns.iter().zip(change.values) {
+                row.insert(col.name.clone(), value.map(JsonValue::from).unwrap_or(JsonValue::Null));
+            }
+            rows.push(JsonValue::Object(row).to_string());
+        }
+
+        // Materialize, typed as the table declares. Every value arrives as
+        // text, so each column is read as VARCHAR and cast once, in one place.
+        let mut raw_cols: Vec<String> = PG_CDC_META.iter().map(|m| m.to_string()).collect();
+        raw_cols.extend(columns.iter().map(|(n, _)| n.clone()));
+        let mut select = vec![
+            "_op".to_string(),
+            "_lsn".to_string(),
+            "CAST(_xid AS BIGINT) AS _xid".to_string(),
+            "CAST(_commit_ts AS TIMESTAMPTZ) AS _commit_ts".to_string(),
+        ];
+        for (name, pg_type) in &columns {
+            let q = plan::quote_ident(name);
+            select.push(format!("{} AS {}", pg_text_cast(&q, pg_type), q));
+        }
+        let node_q = plan::quote_ident(&spec.node_id);
+        let ndjson = crate::unique_rest_tmp_path(&spec.node_id).with_extension("ndjson");
+        let from = if rows.is_empty() {
+            let nulls: Vec<String> = raw_cols
+                .iter()
+                .map(|c| format!("NULL::VARCHAR AS {}", plan::quote_ident(c)))
+                .collect();
+            format!("(SELECT {}) WHERE false", nulls.join(", "))
+        } else {
+            std::fs::write(&ndjson, rows.join("\n"))
+                .map_err(|e| EngineError::Query(format!("src.postgres.cdc: write changes: {e}")))?;
+            let types: Vec<String> = raw_cols
+                .iter()
+                .map(|c| format!("'{}': 'VARCHAR'", c.replace('\'', "''")))
+                .collect();
+            format!(
+                "read_json('{}', format='newline_delimited', columns={{{}}})",
+                ndjson.display().to_string().replace('\\', "/").replace('\'', "''"),
+                types.join(", ")
+            )
+        };
+        let materialized = self.run(
+            Some(db),
+            &format!("CREATE OR REPLACE TABLE {node_q} AS SELECT {} FROM {from};", select.join(", ")),
+            false,
+        );
+        let _ = std::fs::remove_file(&ndjson);
+        materialized?;
+
+        if let Some(lsn) = &last_commit {
+            pending.push(crate::PendingWrite::state(
+                state_path,
+                serde_json::json!({ "slot": spec.slot, "lsn": lsn }),
+                prior,
+            ));
+        }
+
+        let mut note = format!(
+            "postgres-cdc: {} change(s) from slot {}{}; the slot holds {:.1} MB of WAL",
+            rows.len(),
+            spec.slot,
+            if created_slot { " (created now, so it captures changes from this moment on)" } else { "" },
+            lag_bytes as f64 / (1024.0 * 1024.0)
+        );
+        if elsewhere > 0 {
+            note.push_str(&format!(
+                "; {elsewhere} change(s) to other tables in publication {} were passed over",
+                spec.publication
+            ));
+        }
+        if lag_bytes > spec.max_lag_mb.saturating_mul(1024 * 1024) {
+            note.push_str(&format!(
+                " - past maxLagMb ({}): PostgreSQL keeps WAL until this slot is consumed, so run the pipeline more often, raise the limit, or drop the slot with SELECT pg_drop_replication_slot('{}') if nothing uses it any more",
+                spec.max_lag_mb, spec.slot
+            ));
+        }
+        Ok(note)
+    }
+
+    /// snk.delta: see DeltaSinkSpec. Creates the table from the input's columns
+    /// when it is missing, checks the columns match by name, then appends
+    /// through the delta extension.
+    pub(crate) fn run_delta_sink(&self, db: &Path, spec: &plan::DeltaSinkSpec) -> Result<String, EngineError> {
+        let config = |m: String| EngineError::Config(format!("snk.delta: {m}"));
+        let table_dir = std::path::Path::new(&spec.path);
+        let log_dir = table_dir.join("_delta_log");
+        let path_sql = spec.path.replace('\\', "/").replace('\'', "''");
+        let columns_of = |sql: &str| -> Result<Vec<(String, String)>, EngineError> {
+            Ok(self
+                .run_rows(Some(db), sql)?
+                .iter()
+                .filter_map(|r| {
+                    Some((
+                        r.get("column_name")?.as_str()?.to_string(),
+                        r.get("column_type")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect())
+        };
+        let input = columns_of(&format!("DESCRIBE SELECT * FROM {};", plan::quote_ident(&spec.from_view)))?;
+
+        let dir_existed = table_dir.exists();
+        let mut created = false;
+        let table: Vec<String> = if log_dir.is_dir() {
+            columns_of(&format!("LOAD delta; DESCRIBE SELECT * FROM delta_scan('{path_sql}');"))?
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect()
+        } else {
+            if !spec.create_if_missing {
+                return Err(config(format!(
+                    "there is no Delta table at {} (no _delta_log) and createIfMissing is off",
+                    spec.path
+                )));
+            }
+            // Every column is checked before anything is written, so a type
+            // Delta cannot hold leaves no half-made table behind.
+            let mut fields = Vec::new();
+            let mut unsupported = Vec::new();
+            let mut naive_timestamps = false;
+            for (name, ty) in &input {
+                match duckdb_type_to_delta(ty) {
+                    Some(delta) => {
+                        naive_timestamps |= delta == "timestamp_ntz";
+                        fields.push(serde_json::json!({ "name": name, "type": delta, "nullable": true, "metadata": {} }));
+                    }
+                    None => unsupported.push(format!("{name} ({ty})")),
+                }
+            }
+            if !unsupported.is_empty() {
+                return Err(config(format!(
+                    "Delta has no column type for {} - cast it upstream (to VARCHAR, for example) before this node",
+                    unsupported.join(", ")
+                )));
+            }
+            // A naive timestamp is only legal under the timestampNtz table
+            // feature, which needs reader 3 / writer 7 to declare it.
+            let protocol = if naive_timestamps {
+                serde_json::json!({ "protocol": { "minReaderVersion": 3, "minWriterVersion": 7,
+                    "readerFeatures": ["timestampNtz"], "writerFeatures": ["timestampNtz"] } })
+            } else {
+                serde_json::json!({ "protocol": { "minReaderVersion": 1, "minWriterVersion": 2 } })
+            };
+            let metadata = serde_json::json!({ "metaData": {
+                "id": uuid::Uuid::new_v4().to_string(),
+                "format": { "provider": "parquet", "options": {} },
+                "schemaString": serde_json::json!({ "type": "struct", "fields": fields }).to_string(),
+                "partitionColumns": [],
+                "configuration": {},
+                "createdTime": chrono::Utc::now().timestamp_millis(),
+            } });
+            std::fs::create_dir_all(&log_dir)
+                .map_err(|e| config(format!("create {}: {e}", log_dir.display())))?;
+            // create_new: of two runs creating one table, only one may believe
+            // it wrote version 0.
+            let first = log_dir.join("00000000000000000000.json");
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&first)
+                .map_err(|e| config(format!("create {}: {e}", first.display())))?;
+            use std::io::Write as _;
+            writeln!(f, "{protocol}\n{metadata}").map_err(|e| config(format!("write {}: {e}", first.display())))?;
+            created = true;
+            input.iter().map(|(name, _)| name.clone()).collect()
+        };
+
+        // By name, both ways. A column the table lacks would have nowhere to go,
+        // and one the input lacks would be written as NULL; neither is chosen
+        // silently.
+        let missing: Vec<&str> = table
+            .iter()
+            .map(String::as_str)
+            .filter(|c| !input.iter().any(|(n, _)| n == c))
+            .collect();
+        let extra: Vec<&str> = input
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .filter(|c| !table.iter().any(|t| t == c))
+            .collect();
+        if !missing.is_empty() || !extra.is_empty() {
+            let mut why = Vec::new();
+            if !extra.is_empty() {
+                why.push(format!("the table has no column {}", extra.join(", ")));
+            }
+            if !missing.is_empty() {
+                why.push(format!("the input has no column {}", missing.join(", ")));
+            }
+            return Err(config(format!(
+                "the input does not match the table at {}: {}. Rename, drop or add columns upstream so they match",
+                spec.path,
+                why.join("; ")
+            )));
+        }
+
+        // The table's own column order, named. The extension's INSERT ... BY
+        // NAME fails an internal assertion, so the ordering is done here.
+        let cols = table.iter().map(|c| plan::quote_ident(c)).collect::<Vec<_>>().join(", ");
+        let insert = format!(
+            "LOAD delta; ATTACH '{path_sql}' AS duckle_delta (TYPE delta); INSERT INTO duckle_delta SELECT {cols} FROM {};",
+            plan::quote_ident(&spec.from_view)
+        );
+        if let Err(e) = self.run(Some(db), &insert, false) {
+            // A table this run created and could not fill is removed, so the
+            // next attempt is a clean create rather than an append to a stub.
+            if created {
+                let _ = if dir_existed {
+                    std::fs::remove_dir_all(&log_dir)
+                } else {
+                    std::fs::remove_dir_all(table_dir)
+                };
+            }
+            return Err(e);
+        }
+        Ok(format!("delta: appended to {}{}", spec.path, if created { " (created it)" } else { "" }))
     }
 
     /// Best-effort type of a column from a sample non-null row, e.g.
@@ -18381,6 +19421,604 @@ fn odbc_type_to_duckdb(dt: &odbc_api::DataType) -> Option<String> {
     }
 }
 
+/// The rows in one REST response document: the whole document when no
+/// responsePath is set, else the JSON pointer target. A located ARRAY is the row
+/// set; a single OBJECT is one row (issue #13: APIs like open-meteo return one
+/// JSON object, which previously yielded zero rows + an empty file with no
+/// error). Scalars / null / missing pointer are genuinely empty.
+fn rest_located_rows(response: &JsonValue, response_path: &str) -> Vec<JsonValue> {
+    let located = if response_path.is_empty() {
+        Some(response)
+    } else {
+        response.pointer(response_path)
+    };
+    match located {
+        Some(JsonValue::Array(a)) => a.clone(),
+        // An empty object means "no data" (like []), not a single empty row.
+        Some(JsonValue::Object(o)) if o.is_empty() => Vec::new(),
+        Some(v @ JsonValue::Object(_)) => vec![v.clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// #365: the JSON documents in a server-sent-events body, one per event.
+///
+/// Read as the HTML spec's event-stream format: a line ends in CRLF, LF or CR;
+/// a blank line ends an event; a line starting `:` is a comment; each `data:`
+/// line adds to the event's data, one leading space dropped and several lines
+/// joined by a newline; `event`, `id` and `retry` say nothing about the rows.
+/// An event with no data, such as a ping, is not a document. Unlike a live
+/// stream, this body has ended, so a last event the server did not close with a
+/// blank line is still read - if it was cut short, its JSON fails to parse and
+/// says so, rather than the event being dropped.
+fn sse_documents(body: &str) -> Result<Vec<JsonValue>, EngineError> {
+    let body = body.strip_prefix('\u{feff}').unwrap_or(body).replace("\r\n", "\n").replace('\r', "\n");
+    let mut payloads: Vec<String> = Vec::new();
+    let mut data: Option<String> = None;
+    for line in body.split('\n') {
+        if line.is_empty() {
+            payloads.extend(data.take());
+            continue;
+        }
+        if line.starts_with(':') {
+            continue;
+        }
+        let (field, value) = match line.split_once(':') {
+            Some((f, v)) => (f, v.strip_prefix(' ').unwrap_or(v)),
+            None => (line, ""),
+        };
+        if field == "data" {
+            match data.as_mut() {
+                Some(d) => {
+                    d.push('\n');
+                    d.push_str(value);
+                }
+                None => data = Some(value.to_string()),
+            }
+        }
+    }
+    payloads.extend(data);
+    payloads
+        .iter()
+        .filter(|p| !p.trim().is_empty())
+        .enumerate()
+        .map(|(i, p)| {
+            serde_json::from_str(p).map_err(|e| {
+                EngineError::Query(format!(
+                    "REST event-stream event {} is not JSON ({}): {}",
+                    i + 1,
+                    e,
+                    p.chars().take(200).collect::<String>()
+                ))
+            })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod sse_tests {
+    use super::sse_documents;
+    use serde_json::json;
+
+    #[test]
+    fn each_event_is_one_document_and_comments_and_pings_are_not() {
+        let body = "\u{feff}: hello\r\nevent: message\r\nid: 7\r\ndata: {\"a\": 1}\r\n\r\n\
+                    event: ping\n\ndata:{\"a\":\ndata: 2}\n\ndata: {\"a\": 3}\r\rdata\n\n";
+        assert_eq!(
+            sse_documents(body).unwrap(),
+            vec![json!({"a": 1}), json!({"a": 2}), json!({"a": 3})]
+        );
+    }
+
+    /// The body has ended, so a last event without its blank line is read.
+    #[test]
+    fn a_last_event_without_its_blank_line_is_read() {
+        assert_eq!(sse_documents("data: [1,2]").unwrap(), vec![json!([1, 2])]);
+        assert_eq!(sse_documents("").unwrap(), Vec::<serde_json::Value>::new());
+    }
+
+    #[test]
+    fn data_that_is_not_json_is_named() {
+        let err = sse_documents("data: {}\n\ndata: [DONE]\n\n").unwrap_err().to_string();
+        assert!(err.contains("event 2") && err.contains("[DONE]"), "{err}");
+    }
+}
+
+/// #364: the ClickHouse expression that sends `column` as what it is, given
+/// the type ClickHouse's DESCRIBE reports for it. None leaves the column as
+/// ClickHouse's Arrow export sends it.
+fn clickhouse_arrow_cast(column: &str, ch_type: &str) -> Option<String> {
+    // Nullable(...) and LowCardinality(...) wrap the type without changing what
+    // Arrow does with it, and a NULL stays NULL through both casts below.
+    let mut t = ch_type.trim();
+    loop {
+        let inner = ["Nullable(", "LowCardinality("]
+            .iter()
+            .find_map(|w| t.strip_prefix(w).and_then(|r| r.strip_suffix(')')));
+        match inner {
+            Some(i) => t = i.trim(),
+            None => break,
+        }
+    }
+    let q = format!("`{}`", column.replace('\\', "\\\\").replace('`', "\\`"));
+    // DateTime reaches Arrow as UInt32 seconds; DateTime64 as a real timestamp.
+    // Milliseconds, not seconds: Parquet has no seconds unit, so a seconds
+    // timestamp is written as a bare integer and reads back as BIGINT. A
+    // DateTime is whole seconds, so milliseconds hold it exactly. Its own time
+    // zone, when it has one, is kept.
+    if t == "DateTime" {
+        return Some(format!("toDateTime64({}, 3)", q));
+    }
+    if let Some(tz) = t.strip_prefix("DateTime(").and_then(|r| r.strip_suffix(')')) {
+        return Some(format!("toDateTime64({}, 3, {})", q, tz.trim()));
+    }
+    let text = matches!(t, "UUID" | "IPv4" | "IPv6" | "Int128" | "UInt128" | "Int256" | "UInt256")
+        || ["Enum8(", "Enum16(", "Enum(", "FixedString("].iter().any(|p| t.starts_with(p));
+    text.then(|| format!("toString({})", q))
+}
+
+/// #364: each result column's name and ClickHouse type, from `DESCRIBE` over
+/// the same connection. None when ClickHouse will not describe the query.
+fn clickhouse_described(conn: &mut impl adbc_core::Connection, query: &str) -> Option<Vec<(String, String)>> {
+    use adbc_core::Statement;
+    use arrow_array::cast::AsArray;
+    let mut stmt = conn.new_statement().ok()?;
+    stmt.set_sql_query(&format!("DESCRIBE TABLE ({})", clickhouse_inner(query))).ok()?;
+    let reader = stmt.execute().ok()?;
+    // A column arrives as text, or as bytes with output_string_as_string off.
+    let text = |col: &dyn arrow_array::Array, i: usize| -> Option<String> {
+        if let Some(a) = col.as_string_opt::<i32>() {
+            return Some(a.value(i).to_string());
+        }
+        col.as_binary_opt::<i32>().map(|a| String::from_utf8_lossy(a.value(i)).into_owned())
+    };
+    let mut out = Vec::new();
+    for batch in reader {
+        let batch = batch.ok()?;
+        let (names, types) = (batch.column_by_name("name")?, batch.column_by_name("type")?);
+        for i in 0..batch.num_rows() {
+            out.push((text(names.as_ref(), i)?, text(types.as_ref(), i)?));
+        }
+    }
+    Some(out)
+}
+
+/// #364: `query` with the columns that need it cast by ClickHouse, asking for
+/// String as Arrow text. `SELECT * REPLACE` keeps every name and the column
+/// order.
+///
+/// The setting is on every query, not only one with a cast: before 24.3
+/// ClickHouse sent String as Arrow Binary by default, and a profile can still
+/// say so, which turns every text column - and each one cast to text here -
+/// into bytes.
+fn clickhouse_arrow_query(query: &str, columns: &[(String, String)]) -> String {
+    let casts: Vec<String> = columns
+        .iter()
+        .filter_map(|(name, ty)| {
+            let q = format!("`{}`", name.replace('\\', "\\\\").replace('`', "\\`"));
+            clickhouse_arrow_cast(name, ty).map(|e| format!("{} AS {}", e, q))
+        })
+        .collect();
+    let replace = if casts.is_empty() {
+        String::new()
+    } else {
+        format!(" REPLACE ({})", casts.join(", "))
+    };
+    format!(
+        "SELECT *{} FROM ({}) SETTINGS output_format_arrow_string_as_string = 1",
+        replace,
+        clickhouse_inner(query)
+    )
+}
+
+/// A query ready to sit inside parentheses: a trailing `;` would end it early.
+fn clickhouse_inner(query: &str) -> &str {
+    query.trim().trim_end_matches(';').trim_end()
+}
+
+#[cfg(test)]
+mod clickhouse_arrow_tests {
+    use super::{clickhouse_arrow_cast, clickhouse_arrow_query};
+
+    /// ClickHouse's Arrow export sends these as a number, a code or raw bytes
+    /// (DateTime as UInt32 seconds, Enum as its Int8 code, IPv4 as UInt32,
+    /// UUID / FixedString / 128- and 256-bit integers as fixed-size binary), so
+    /// each is cast in ClickHouse to a type Arrow carries faithfully.
+    #[test]
+    fn the_types_clickhouse_flattens_are_cast_to_what_they_are() {
+        let cast = |t: &str| clickhouse_arrow_cast("c", t);
+        assert_eq!(cast("DateTime").as_deref(), Some("toDateTime64(`c`, 3)"));
+        assert_eq!(cast("Nullable(DateTime)").as_deref(), Some("toDateTime64(`c`, 3)"));
+        assert_eq!(
+            cast("DateTime('Asia/Kolkata')").as_deref(),
+            Some("toDateTime64(`c`, 3, 'Asia/Kolkata')"),
+            "the column's own time zone is kept"
+        );
+        for t in [
+            "UUID", "IPv4", "IPv6", "Enum8('a' = 1, 'b' = 2)", "Enum16('x' = 300)", "FixedString(3)",
+            "Int128", "UInt128", "Int256", "UInt256", "Nullable(UUID)", "LowCardinality(FixedString(2))",
+        ] {
+            assert_eq!(cast(t).as_deref(), Some("toString(`c`)"), "{t}");
+        }
+    }
+
+    /// What Arrow already carries is left alone.
+    #[test]
+    fn a_type_arrow_carries_is_not_touched() {
+        for t in [
+            "String", "LowCardinality(Nullable(String))", "UInt64", "Int32", "Float64", "Decimal(18, 2)",
+            "Date", "Date32", "DateTime64(3)", "DateTime64(3, 'UTC')", "Bool", "Array(String)",
+            "Map(String, UInt32)", "Tuple(a String, b UInt8)",
+        ] {
+            assert_eq!(clickhouse_arrow_cast("c", t), None, "{t}");
+        }
+    }
+
+    /// Names and order stay as the query had them; a trailing `;` would end
+    /// the wrapped query early, so it goes; a name is quoted for ClickHouse.
+    /// Every query asks for String as Arrow text: before 24.3 ClickHouse sent
+    /// it as Binary by default, and a profile can still say so, which would
+    /// turn every text column - and every column cast to text above - into
+    /// bytes.
+    #[test]
+    fn the_query_asks_for_text_and_casts_what_needs_it() {
+        let cols = |v: &[(&str, &str)]| v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect::<Vec<_>>();
+        assert_eq!(
+            clickhouse_arrow_query(
+                "SELECT * FROM ch_tb LIMIT 5; ",
+                &cols(&[("id", "UInt64"), ("ts", "DateTime"), ("u", "UUID")])
+            ),
+            "SELECT * REPLACE (toDateTime64(`ts`, 3) AS `ts`, toString(`u`) AS `u`) FROM (SELECT * FROM ch_tb LIMIT 5) \
+             SETTINGS output_format_arrow_string_as_string = 1"
+        );
+        assert_eq!(
+            clickhouse_arrow_query("SELECT 'a' AS s", &cols(&[("s", "String")])),
+            "SELECT * FROM (SELECT 'a' AS s) SETTINGS output_format_arrow_string_as_string = 1"
+        );
+        assert_eq!(
+            clickhouse_arrow_cast("we`ird", "UUID").as_deref(),
+            Some("toString(`we\\`ird`)")
+        );
+    }
+}
+
+/// The character unit ODBC text is fetched in: UTF-16 on Windows, whose narrow
+/// buffers are in the ANSI code page, and UTF-8 bytes elsewhere.
+#[cfg(all(windows, feature = "odbc"))]
+type OdbcChar = u16;
+#[cfg(all(not(windows), feature = "odbc"))]
+type OdbcChar = u8;
+
+#[cfg(all(windows, feature = "odbc"))]
+fn odbc_text(chars: &[u16]) -> String {
+    String::from_utf16_lossy(chars)
+}
+#[cfg(all(not(windows), feature = "odbc"))]
+fn odbc_text(chars: &[u8]) -> String {
+    String::from_utf8_lossy(chars).into_owned()
+}
+
+/// The ODBC driver that ships with the Access Database Engine (Office, or the
+/// free redistributable). It reads and writes both .accdb and .mdb.
+#[cfg(all(windows, feature = "odbc"))]
+const ACCESS_DRIVER: &str = "Microsoft Access Driver (*.mdb, *.accdb)";
+
+/// One ODBC connection-string value, braced when it holds a character that
+/// would otherwise end or open one: a path or a password with a `;` in it.
+#[cfg(all(windows, feature = "odbc"))]
+fn odbc_value(v: &str) -> String {
+    if v.contains([';', '{', '}']) || v.starts_with(' ') || v.ends_with(' ') {
+        format!("{{{}}}", v.replace('}', "}}"))
+    } else {
+        v.to_string()
+    }
+}
+
+/// The connection string for an Access file. It carries the password, so it
+/// is never logged.
+#[cfg(all(windows, feature = "odbc"))]
+///
+/// `ansi92` switches the driver to ANSI-92 SQL, without which it refuses
+/// DECIMAL in a CREATE TABLE ("Syntax error in field definition"). Only the
+/// sink asks for it: ANSI-92 also changes LIKE's wildcards from `*` to `%`,
+/// which would quietly change what a query a user wrote for Access returns.
+fn access_conn_string(path: &str, password: Option<&str>, ansi92: bool) -> String {
+    let mut s = format!("Driver={{{}}};Dbq={};", ACCESS_DRIVER, odbc_value(&path.replace('/', "\\")));
+    if let Some(p) = password {
+        s.push_str(&format!("PWD={};", odbc_value(p)));
+    }
+    if ansi92 {
+        s.push_str("ExtendedAnsiSQL=1;");
+    }
+    s
+}
+
+/// An Access name in brackets. Access has no escape for a bracket inside one,
+/// so a name that holds one is refused rather than mangled.
+#[cfg(all(windows, feature = "odbc"))]
+fn access_ident(name: &str) -> Result<String, EngineError> {
+    if name.trim().is_empty() || name.contains(['[', ']']) {
+        return Err(EngineError::Config(format!(
+            "access: {:?} cannot be an Access name: it is empty or holds a bracket",
+            name
+        )));
+    }
+    Ok(format!("[{}]", name))
+}
+
+/// The Access column type for a DuckDB one, when the sink creates the table.
+/// `widest` is the longest text the column holds in this load: up to 255
+/// characters is a TEXT column, longer is LONGTEXT (a Memo field).
+#[cfg(all(windows, feature = "odbc"))]
+fn duckdb_type_to_access(ty: &str, widest: usize) -> String {
+    let t = ty.trim().to_uppercase();
+    if let Some(inner) = t.strip_prefix("DECIMAL(").and_then(|r| r.strip_suffix(')')) {
+        let mut it = inner.split(',').map(|x| x.trim().parse::<u32>().unwrap_or(0));
+        // Access holds at most 28 digits.
+        let p = it.next().unwrap_or(18).clamp(1, 28);
+        let s = it.next().unwrap_or(0).min(p);
+        return format!("DECIMAL({},{})", p, s);
+    }
+    match t.as_str() {
+        "BOOLEAN" => "YESNO".into(),
+        "TINYINT" | "SMALLINT" | "UTINYINT" => "SMALLINT".into(),
+        // INTEGER in Access DDL is a Long Integer, 32 bits.
+        "USMALLINT" | "INTEGER" => "INTEGER".into(),
+        // Past 32 bits Access has no integer that every file supports, so an
+        // exact decimal rather than a Double that would round the value.
+        "UINTEGER" | "BIGINT" | "UBIGINT" | "HUGEINT" | "UHUGEINT" => "DECIMAL(28,0)".into(),
+        "FLOAT" | "REAL" => "REAL".into(),
+        "DOUBLE" => "DOUBLE".into(),
+        "DATE" | "TIME" => "DATETIME".into(),
+        _ if t.starts_with("TIMESTAMP") => "DATETIME".into(),
+        _ if widest > 255 => "LONGTEXT".into(),
+        _ => "TEXT(255)".into(),
+    }
+}
+
+/// One value, as DuckDB's text for it, bound as the parameter its column type
+/// calls for.
+#[cfg(all(windows, feature = "odbc"))]
+fn access_param(
+    value: Option<&str>,
+    ty: &str,
+    column: &str,
+) -> Result<Box<dyn odbc_api::parameter::InputParameter>, EngineError> {
+    use odbc_api::parameter::{VarWCharBox, WithDataType};
+    use odbc_api::sys::Timestamp;
+    use odbc_api::{Bit, DataType, Nullable};
+    // A timestamp says its SQL type itself; the fixed-size ones infer theirs.
+    let stamp = |value: Nullable<Timestamp>| WithDataType { value, data_type: DataType::Timestamp { precision: 0 } };
+
+    let t = ty.trim().to_uppercase();
+    let unreadable = |v: &str| {
+        EngineError::Query(format!("access: column {}: {:?} is not a {}", column, v, ty))
+    };
+    if t == "BLOB" || t.starts_with("BLOB") {
+        return Err(EngineError::Config(format!(
+            "access: column {} is a BLOB, which this sink does not write; drop or cast it",
+            column
+        )));
+    }
+    if t == "BOOLEAN" {
+        return Ok(match value {
+            None => Box::new(Nullable::<Bit>::null()),
+            Some(v) => Box::new(Nullable::new(Bit::from_bool(v.eq_ignore_ascii_case("true")))),
+        });
+    }
+    if matches!(t.as_str(), "TINYINT" | "SMALLINT" | "UTINYINT" | "USMALLINT" | "INTEGER") {
+        return Ok(match value {
+            None => Box::new(Nullable::<i32>::null()),
+            Some(v) => Box::new(Nullable::new(v.parse::<i32>().map_err(|_| unreadable(v))?)),
+        });
+    }
+    if matches!(t.as_str(), "FLOAT" | "REAL" | "DOUBLE") {
+        return Ok(match value {
+            None => Box::new(Nullable::<f64>::null()),
+            Some(v) => Box::new(Nullable::new(v.parse::<f64>().map_err(|_| unreadable(v))?)),
+        });
+    }
+    if matches!(t.as_str(), "DATE" | "TIME") || t.starts_with("TIMESTAMP") {
+        let Some(v) = value else { return Ok(Box::new(stamp(Nullable::null()))) };
+        // DATE is "2026-01-02", TIMESTAMP "2026-01-02 10:11:12[.ffffff]", TIME
+        // "10:11:12[.ffffff]", which Access keeps on its zero date 1899-12-30.
+        // Access stores whole seconds, so a fraction is not sent.
+        let (date, time) = match (t.as_str(), v.split_once(' ')) {
+            ("TIME", _) => ("1899-12-30", v),
+            (_, Some((d, tm))) => (d, tm),
+            (_, None) => (v, "00:00:00"),
+        };
+        let num = |s: Option<&str>| s.and_then(|x| x.parse::<u16>().ok()).ok_or_else(|| unreadable(v));
+        let mut d = date.split('-');
+        let mut hms = time.split('.').next().unwrap_or("").split(':');
+        return Ok(Box::new(stamp(Nullable::new(Timestamp {
+            year: num(d.next())? as i16,
+            month: num(d.next())?,
+            day: num(d.next())?,
+            hour: num(hms.next())?,
+            minute: num(hms.next())?,
+            second: num(hms.next())?,
+            fraction: 0,
+        }))));
+    }
+    // Text, and the exact numbers (decimals, and integers past 32 bits) as
+    // their digits: the driver converts a numeric literal, whose decimal
+    // separator is always a dot, whatever the machine's locale.
+    Ok(match value {
+        None => Box::new(VarWCharBox::null()),
+        Some(v) => Box::new(VarWCharBox::from_str_slice(v)),
+    })
+}
+
+/// Make an empty Access database at `path`, the way the Access ODBC driver's
+/// own setup does. The format follows the extension: `CREATE_DBV4` makes an
+/// .mdb (Jet 4) and `CREATE_DBV12` an .accdb. Plain `CREATE_DB` is not used:
+/// it always makes an .mdb and appends ".mdb" to whatever name it is given,
+/// so "new.accdb" became "new.accdb.mdb".
+#[cfg(all(windows, feature = "odbc"))]
+fn create_access_file(path: &str) -> Result<(), EngineError> {
+    use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    type ConfigDataSource =
+        unsafe extern "system" fn(*mut std::ffi::c_void, u16, *const u16, *const u16) -> i32;
+    type InstallerError = unsafe extern "system" fn(u16, *mut u32, *mut u16, u16, *mut u16) -> i16;
+    // The ODBC installer DLL, loaded here rather than through the SDK's
+    // odbccp32.lib. That library is a stub that loads the DLL itself and, when
+    // it cannot, shows a message box: a dialog nobody can answer in a headless
+    // `serve`. Loaded by hand, a missing piece is an error the run reports.
+    let missing = |what: &str| {
+        EngineError::Query(format!(
+            "access: could not create {}: the ODBC installer ({}) is not available",
+            path, what
+        ))
+    };
+    let dll: Vec<u16> = "odbccp32.dll".encode_utf16().chain([0]).collect();
+    // SAFETY: a NUL-terminated UTF-16 name; the module stays loaded for the
+    // process, so the function pointers below never dangle.
+    let module = unsafe { LoadLibraryW(dll.as_ptr()) };
+    if module.is_null() {
+        return Err(missing("odbccp32.dll"));
+    }
+    // SAFETY: each name is NUL-terminated ASCII, and each pointer is cast to
+    // the signature the ODBC installer API documents for that function.
+    let (config, installer_error) = unsafe {
+        let config = GetProcAddress(module, b"SQLConfigDataSourceW\0".as_ptr())
+            .ok_or_else(|| missing("SQLConfigDataSourceW"))?;
+        let error = GetProcAddress(module, b"SQLInstallerErrorW\0".as_ptr())
+            .ok_or_else(|| missing("SQLInstallerErrorW"))?;
+        (
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, ConfigDataSource>(config),
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, InstallerError>(error),
+        )
+    };
+    const ODBC_ADD_DSN: u16 = 1;
+    let native = path.replace('/', "\\");
+    if let Some(parent) = Path::new(&native).parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| EngineError::Query(format!("access: create {}: {}", parent.display(), e)))?;
+    }
+    let driver: Vec<u16> = ACCESS_DRIVER.encode_utf16().chain([0]).collect();
+    // A list of attributes, each NUL-terminated, the list ended by one more.
+    let verb = if native.to_lowercase().ends_with(".mdb") { "CREATE_DBV4" } else { "CREATE_DBV12" };
+    let attributes: Vec<u16> = format!("{}=\"{}\" General", verb, native)
+        .encode_utf16()
+        .chain([0, 0])
+        .collect();
+    // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call,
+    // and a null window handle means no dialog.
+    let ok = unsafe {
+        config(std::ptr::null_mut(), ODBC_ADD_DSN, driver.as_ptr(), attributes.as_ptr())
+    };
+    if ok != 0 {
+        return Ok(());
+    }
+    let (mut code, mut len) = (0u32, 0u16);
+    let mut message = [0u16; 512];
+    // SAFETY: the buffer and its length agree, and the out-pointers are live.
+    let rc = unsafe { installer_error(1, &mut code, message.as_mut_ptr(), message.len() as u16, &mut len) };
+    let why = if rc >= 0 {
+        String::from_utf16_lossy(&message[..(len as usize).min(message.len())])
+    } else {
+        "the driver gave no reason".to_string()
+    };
+    Err(EngineError::Query(format!("access: could not create {}: {}", path, why)))
+}
+
+/// Run an mdbtools command and return its stdout. It is how Access is read
+/// where the Access ODBC driver does not exist.
+#[cfg(not(all(windows, feature = "odbc")))]
+fn mdbtools(args: &[&str]) -> Result<String, EngineError> {
+    let mut cmd = std::process::Command::new(args[0]);
+    cmd.args(&args[1..]);
+    let out = cmd.output().map_err(|e| {
+        EngineError::Config(format!(
+            "access: {} did not start ({}). Reading Access outside Windows needs mdbtools: \
+             apt install mdbtools, or brew install mdbtools",
+            args[0], e
+        ))
+    })?;
+    if !out.status.success() {
+        return Err(EngineError::Query(format!(
+            "access: {} failed: {}",
+            args[0],
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Column name -> DuckDB type, from `mdb-schema`'s Access-dialect DDL, whose
+/// column lines read `\t[Name]\t\t\tLong Integer,`. A column whose type is not
+/// one listed here is left as text, which loses nothing.
+#[cfg_attr(all(windows, feature = "odbc"), allow(dead_code))]
+fn mdb_schema_types(ddl: &str) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for line in ddl.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix('[') else { continue };
+        let Some((name, ty)) = rest.split_once(']') else { continue };
+        let ty = ty.trim().trim_end_matches(',').trim().to_lowercase();
+        // A required column reads "Boolean NOT NULL".
+        let ty = ty.trim_end_matches("not null").trim();
+        let duck = if ty.starts_with("text") || ty.starts_with("memo") {
+            continue;
+        } else if ty == "boolean" {
+            "BOOLEAN".to_string()
+        } else if ty == "byte" || ty == "integer" {
+            "SMALLINT".to_string()
+        } else if ty == "long integer" {
+            "INTEGER".to_string()
+        } else if ty == "single" {
+            "REAL".to_string()
+        } else if ty == "double" {
+            "DOUBLE".to_string()
+        } else if ty == "currency" {
+            "DECIMAL(19,4)".to_string()
+        } else if ty == "datetime" {
+            "TIMESTAMP".to_string()
+        } else if let Some(ps) = ty.strip_prefix("numeric").map(|s| s.trim()) {
+            let ps = ps.trim_start_matches('(').trim_end_matches(')');
+            let mut it = ps.split(',').map(|x| x.trim().parse::<u32>().unwrap_or(0));
+            let p = it.next().filter(|p| *p > 0).unwrap_or(18).min(38);
+            format!("DECIMAL({},{})", p, it.next().unwrap_or(0).min(p))
+        } else {
+            continue;
+        };
+        out.insert(name.to_string(), duck);
+    }
+    out
+}
+
+#[cfg(test)]
+mod mdb_schema_tests {
+    use super::mdb_schema_types;
+
+    /// What `mdb-schema -T People file.accdb` printed, verbatim, from mdbtools
+    /// 1.0.0 on Ubuntu 24.04 over a file Access made.
+    const PRINTED: &str = "-- That file uses encoding UTF-8\n\nCREATE TABLE [People]\n (\n\
+        \t[ID]\t\t\tLong Integer, \n\t[Name]\t\t\tText (50), \n\t[Code]\t\t\tText (10), \n\
+        \t[Qty]\t\t\tLong Integer, \n\t[Price]\t\t\tDouble, \n\t[Amount]\t\t\tCurrency, \n\
+        \t[Active]\t\t\tBoolean NOT NULL, \n\t[Joined]\t\t\tDateTime, \n\
+        \t[Notes]\t\t\tMemo/Hyperlink (255), \n\t[Small]\t\t\tByte, \n\t[Ratio]\t\t\tSingle, \n\
+        \t[Big]\t\t\tNumeric (20, 4)\n);\n";
+
+    #[test]
+    fn every_access_type_mdbtools_prints_maps_to_its_duckdb_type() {
+        let t = mdb_schema_types(PRINTED);
+        assert_eq!(t["ID"], "INTEGER");
+        assert_eq!(t["Qty"], "INTEGER");
+        assert_eq!(t["Price"], "DOUBLE");
+        assert_eq!(t["Amount"], "DECIMAL(19,4)");
+        // A required yes/no is printed with its constraint after the type.
+        assert_eq!(t["Active"], "BOOLEAN");
+        assert_eq!(t["Joined"], "TIMESTAMP");
+        assert_eq!(t["Small"], "SMALLINT");
+        assert_eq!(t["Ratio"], "REAL");
+        assert_eq!(t["Big"], "DECIMAL(20,4)");
+        // Text stays text, so a code keeps its leading zeros.
+        assert!(!t.contains_key("Name") && !t.contains_key("Code") && !t.contains_key("Notes"));
+    }
+}
+
 /// Return a column name not already present in `used`, suffixing repeats as
 /// `name_1`, `name_2`, ... Result-set cells are positional, so two columns that
 /// share a name (e.g. SELECT * over a join) must be keyed uniquely or the
@@ -18656,6 +20294,62 @@ pub(crate) struct RemoteEntry {
     pub fingerprint: String,
 }
 
+/// #324: the order a listing is taken in, so a capped run works through a
+/// backlog in that order. By modification time it is oldest first, with the
+/// name breaking ties, and an entry whose time is unknown comes last since
+/// nothing says it is old. By name it is oldest first only when the names
+/// carry the date.
+fn sort_entries(entries: &mut [RemoteEntry], by_modified: bool) {
+    if by_modified {
+        entries.sort_by(|a, b| {
+            modified_cmp(a.modified_at.as_deref(), b.modified_at.as_deref())
+                .then_with(|| a.name.cmp(&b.name))
+        });
+    } else {
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+}
+
+/// Two modification times from one listing. SFTP's are epoch seconds and
+/// compare as numbers; S3's are RFC 3339 and compare as text.
+fn modified_cmp(a: Option<&str>, b: Option<&str>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Some(x), Some(y)) => match (x.parse::<i64>(), y.parse::<i64>()) {
+            (Ok(x), Ok(y)) => x.cmp(&y),
+            _ => x.cmp(y),
+        },
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+/// An S3 object ordered by modification time then key, so a max-heap of them
+/// holds the oldest few: the newest is on top, ready to be dropped.
+struct ByModified(crate::s3::S3Object);
+
+impl Ord for ByModified {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        modified_cmp(self.0.last_modified.as_deref(), other.0.last_modified.as_deref())
+            .then_with(|| self.0.key.cmp(&other.0.key))
+    }
+}
+
+impl PartialOrd for ByModified {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for ByModified {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other).is_eq()
+    }
+}
+
+impl Eq for ByModified {}
+
 /// Combine whatever signals the protocol gave into one comparable string.
 ///
 /// Conservative on purpose. None of these are guarantees: an ETag can be
@@ -18772,6 +20466,102 @@ fn read_kafka_offset_state(path: &std::path::Path, topic: &str, partition: i32) 
 
 /// Read a saved DuckLake snapshot id from CDC state. Missing / unreadable
 /// reads as "no prior snapshot".
+/// The Delta column type for a DuckDB type, or None when Delta has none. A
+/// naive TIMESTAMP is `timestamp_ntz`; Delta's `timestamp` is an instant.
+fn duckdb_type_to_delta(ty: &str) -> Option<String> {
+    let t = ty.trim().to_ascii_uppercase();
+    let simple = match t.as_str() {
+        "BOOLEAN" => "boolean",
+        "TINYINT" => "byte",
+        "SMALLINT" => "short",
+        "INTEGER" => "integer",
+        "BIGINT" => "long",
+        "FLOAT" => "float",
+        "DOUBLE" => "double",
+        "VARCHAR" => "string",
+        "BLOB" => "binary",
+        "DATE" => "date",
+        "TIMESTAMP" => "timestamp_ntz",
+        "TIMESTAMP WITH TIME ZONE" => "timestamp",
+        _ => {
+            let inner = t.strip_prefix("DECIMAL(")?.strip_suffix(')')?;
+            let (p, s) = inner.split_once(',')?;
+            let (p, s): (u32, u32) = (p.trim().parse().ok()?, s.trim().parse().ok()?);
+            return (p <= 38).then(|| format!("decimal({p},{s})"));
+        }
+    };
+    Some(simple.to_string())
+}
+
+/// The columns src.postgres.cdc puts before a change's own values.
+const PG_CDC_META: &[&str] = &["_op", "_lsn", "_xid", "_commit_ts"];
+
+/// Bytes from the hex `encode(data, 'hex')` returns.
+fn decode_hex(s: &str) -> Result<Vec<u8>, String> {
+    if s.len() % 2 != 0 {
+        return Err(format!("odd-length hex ({} chars)", s.len()));
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| {
+            s.get(i..i + 2)
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                .ok_or_else(|| format!("not hex at {i}"))
+        })
+        .collect()
+}
+
+/// A pgoutput commit time - microseconds since 2000-01-01 UTC, PostgreSQL's
+/// epoch - as text DuckDB reads straight into a TIMESTAMPTZ.
+fn pg_epoch_micros_to_text(micros: i64) -> String {
+    let epoch = chrono::NaiveDate::from_ymd_opt(2000, 1, 1)
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .expect("2000-01-01 is a date");
+    (epoch + chrono::Duration::microseconds(micros))
+        .format("%Y-%m-%d %H:%M:%S%.6f+00")
+        .to_string()
+}
+
+/// The DuckDB expression that turns a pgoutput text value into the type the
+/// source column declares (`format_type` output). Anything without an exact
+/// DuckDB equivalent stays as PostgreSQL's own text: an unconstrained numeric
+/// has no scale to cast to, and narrowing it to a double would change it.
+fn pg_text_cast(col: &str, pg_type: &str) -> String {
+    let t = pg_type.trim().to_ascii_lowercase();
+    let cast = |ty: &str| format!("CAST({col} AS {ty})");
+    if t.ends_with("[]") {
+        return col.to_string();
+    }
+    match t.as_str() {
+        "smallint" => cast("SMALLINT"),
+        "integer" => cast("INTEGER"),
+        "bigint" => cast("BIGINT"),
+        "real" => cast("FLOAT"),
+        "double precision" => cast("DOUBLE"),
+        "boolean" => cast("BOOLEAN"),
+        "date" => cast("DATE"),
+        "uuid" => cast("UUID"),
+        "json" | "jsonb" => cast("JSON"),
+        // PostgreSQL's text form of bytea is `\x` followed by hex.
+        "bytea" => format!("from_hex(substr({col}, 3))"),
+        _ if t.starts_with("timestamp") && t.ends_with("with time zone") && !t.contains("without") => {
+            cast("TIMESTAMPTZ")
+        }
+        _ if t.starts_with("timestamp") => cast("TIMESTAMP"),
+        _ if t.starts_with("time") && t.contains("without time zone") => cast("TIME"),
+        _ if t.starts_with("numeric(") => {
+            let inner = t.trim_start_matches("numeric(").trim_end_matches(')');
+            let mut parts = inner.split(',').map(|p| p.trim().parse::<u32>());
+            match (parts.next(), parts.next()) {
+                (Some(Ok(p)), Some(Ok(s))) if p <= 38 => cast(&format!("DECIMAL({p},{s})")),
+                (Some(Ok(p)), None) if p <= 38 => cast(&format!("DECIMAL({p},0)")),
+                _ => col.to_string(),
+            }
+        }
+        _ => col.to_string(),
+    }
+}
+
 fn read_snapshot_state(path: &std::path::PathBuf) -> Option<u64> {
     let text = std::fs::read_to_string(path).ok()?;
     let v: JsonValue = serde_json::from_str(&text).ok()?;
@@ -19740,6 +21530,63 @@ mod ftp_tests {
         assert!(!is_sftp_target("files.example.com", 21));
         assert!(!is_sftp_target("ftp://files.example.com", 21));
         assert!(!is_sftp_target("ftps://files.example.com", 990));
+    }
+}
+
+#[cfg(test)]
+mod changed_order_tests {
+    use super::{sort_entries, RemoteEntry};
+
+    fn entry(name: &str, modified: Option<&str>) -> RemoteEntry {
+        RemoteEntry {
+            uri: format!("sftp://h/d/{name}"),
+            name: name.to_string(),
+            size: None,
+            modified_at: modified.map(str::to_string),
+            etag: None,
+            fingerprint: String::new(),
+        }
+    }
+
+    fn names(entries: &[RemoteEntry]) -> Vec<&str> {
+        entries.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    /// #324: oldest first means by time, not by name. SFTP reports epoch
+    /// seconds, which compare as numbers - "999" is older than "1000" - and an
+    /// entry with no time comes last, since nothing says it is old.
+    #[test]
+    fn modified_order_is_oldest_first_with_the_name_breaking_ties() {
+        let mut e = vec![
+            entry("a", Some("1000")),
+            entry("b", None),
+            entry("c", Some("999")),
+            entry("e", Some("1000")),
+            entry("d", Some("1000")),
+        ];
+        sort_entries(&mut e, true);
+        assert_eq!(names(&e), vec!["c", "a", "d", "e", "b"]);
+
+        let mut e = vec![
+            entry("x", Some("2026-01-03T00:00:00.000Z")),
+            entry("y", Some("2026-01-01T00:00:00.000Z")),
+        ];
+        sort_entries(&mut e, true);
+        assert_eq!(names(&e), vec!["y", "x"]);
+
+        sort_entries(&mut e, false);
+        assert_eq!(names(&e), vec!["x", "y"], "name order is still there");
+    }
+
+    /// Both listings' times, read as instants: SFTP's epoch seconds and S3's
+    /// RFC 3339. Something else is not a time, rather than a guess at one.
+    #[test]
+    fn a_listing_time_is_read_as_an_instant() {
+        use super::listed_instant;
+        let at = |s: &str| listed_instant(s).map(|t| t.to_rfc3339());
+        assert_eq!(at("1767225600"), Some("2026-01-01T00:00:00+00:00".into()));
+        assert_eq!(at("2026-01-01T00:00:00.000Z"), Some("2026-01-01T00:00:00+00:00".into()));
+        assert_eq!(at("yesterday"), None);
     }
 }
 
@@ -21021,15 +22868,24 @@ static HF_SINK_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
 /// same memory as a thousand-row one. A line that will not parse is skipped
 /// rather than failing the whole load, matching how the previous in-memory
 /// path treated an unconvertible row.
+/// The staged rows, in batches, or the reason a row could not be read.
+///
+/// A line that does not parse used to be skipped in silence - no counter, no
+/// warning - so the sink reported "inserted N docs" with N quietly smaller than
+/// the upstream, over a collection it had just dropped. DuckDB writes a
+/// non-finite number as a bare `NaN` token, which no JSON reader accepts, so a
+/// single such value in a DOUBLE column silently removed its row; an I/O error
+/// part way through the file did the same to every row after it.
 fn mongo_ndjson_batches(
     path: &Path,
     batch_size: usize,
-) -> std::io::Result<impl Iterator<Item = Vec<JsonValue>>> {
+) -> std::io::Result<impl Iterator<Item = Result<Vec<JsonValue>, String>>> {
     use std::io::BufRead;
     let file = std::fs::File::open(path)?;
     let mut reader = std::io::BufReader::with_capacity(1 << 20, file);
     let size = batch_size.max(1);
     let mut done = false;
+    let mut row = 0_usize;
     Ok(std::iter::from_fn(move || {
         if done {
             return None;
@@ -21044,24 +22900,33 @@ fn mongo_ndjson_batches(
                     break;
                 }
                 Ok(_) => {
+                    row += 1;
                     let t = line.trim();
                     if t.is_empty() {
                         continue;
                     }
-                    if let Ok(v) = serde_json::from_str::<JsonValue>(t) {
-                        batch.push(v);
+                    match serde_json::from_str::<JsonValue>(t) {
+                        Ok(v) => batch.push(v),
+                        Err(e) => {
+                            done = true;
+                            return Some(Err(format!(
+                                "staged row {}: {}",
+                                row,
+                                crate::json_bridge_failure(&e.to_string(), t)
+                            )));
+                        }
                     }
                 }
-                Err(_) => {
+                Err(e) => {
                     done = true;
-                    break;
+                    return Some(Err(format!("reading staged row {}: {}", row + 1, e)));
                 }
             }
         }
         if batch.is_empty() {
             None
         } else {
-            Some(batch)
+            Some(Ok(batch))
         }
     }))
 }
@@ -23468,11 +25333,48 @@ impl<R: std::io::Read> std::io::Read for CappedReader<R> {
 
 /// Does this member pass the include / exclude filters?
 fn member_wanted(name: &str, spec: &plan::ArchiveExtractSpec) -> bool {
+    globs_admit(name, &spec.include, &spec.exclude)
+}
+
+/// Include and exclude globs, as archive members and src.changed listings
+/// both take them: an empty include admits everything, and exclude wins.
+fn globs_admit(name: &str, include: &[String], exclude: &[String]) -> bool {
     let matches = |pat: &String| glob_match(pat, name);
-    if !spec.include.is_empty() && !spec.include.iter().any(matches) {
+    if !include.is_empty() && !include.iter().any(matches) {
         return false;
     }
-    !spec.exclude.iter().any(matches)
+    !exclude.iter().any(matches)
+}
+
+/// A listing's modification time as an instant: SFTP's epoch seconds or S3's
+/// RFC 3339. Anything else is not a time, rather than a guess at one.
+fn listed_instant(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let s = s.trim();
+    match s.parse::<i64>() {
+        Ok(secs) => chrono::DateTime::from_timestamp(secs, 0),
+        Err(_) => chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|t| t.with_timezone(&chrono::Utc)),
+    }
+}
+
+/// #324: inside the modification-time window, `since` inclusive and `before`
+/// exclusive. An entry with no readable time is kept: nothing says it falls
+/// outside, and skipping data on a missing signal loses it.
+fn inside_window(modified: Option<&str>, spec: &plan::ChangedSourceSpec) -> bool {
+    let Some(t) = modified.and_then(listed_instant) else {
+        return true;
+    };
+    spec.modified_since.map_or(true, |since| t >= since)
+        && spec.modified_before.map_or(true, |before| t < before)
+}
+
+/// An S3 key as a path below the folder a prefix names: `in/` and `in/D2026`
+/// both name the folder `in/`, so a glob reads `D20260901.zip`, or
+/// `archive/old.zip` for a key one level further down.
+fn below_folder<'a>(key: &'a str, prefix: &str) -> &'a str {
+    let folder = &prefix[..prefix.rfind('/').map_or(0, |i| i + 1)];
+    key.strip_prefix(folder).unwrap_or(key)
 }
 
 /// Where a node's accepted profiles live.
@@ -23808,6 +25710,122 @@ mod source_path_of_tests {
         // Only a single-letter prefix is a drive. A key that legitimately
         // contains a colon keeps it.
         assert_eq!(source_path_of("s3://bucket/odd:name/f.txt"), "odd:name/f.txt");
+    }
+}
+
+#[cfg(test)]
+mod mongo_staging_tests {
+    use super::*;
+
+    /// A staged row that cannot be read fails the write instead of vanishing.
+    ///
+    /// The reader skipped such a line in silence - no counter, no warning - so
+    /// the sink reported "inserted N docs" with N quietly smaller than the
+    /// upstream, over a collection it had just dropped in replace mode. DuckDB
+    /// writes a non-finite number as the bare token `NaN`, which no JSON reader
+    /// accepts, so one such value in a DOUBLE column removed its row: exactly
+    /// the shape of `COPY (SELECT * FROM v) TO 'rows.ndjson' (FORMAT JSON)`
+    /// over a column holding one.
+    #[test]
+    fn a_staged_row_that_cannot_be_read_fails_the_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rows.ndjson");
+        std::fs::write(
+            &path,
+            "{\"id\":1,\"v\":1.5}\n{\"id\":2,\"v\":NaN}\n{\"id\":3,\"v\":2.5}\n",
+        )
+        .unwrap();
+
+        let mut it = super::mongo_ndjson_batches(&path, 1).expect("the file opens");
+        let first = it.next().expect("a first batch").expect("the first row reads");
+        assert_eq!(first.len(), 1);
+        let err = it
+            .next()
+            .expect("the bad row is reported rather than skipped")
+            .expect_err("it must be an error");
+        assert!(err.contains("staged row 2"), "and say which row: {err}");
+        assert!(
+            err.contains("non-finite"),
+            "and name the cause, since DuckDB wrote it: {err}"
+        );
+    }
+
+    #[test]
+    fn a_file_of_good_rows_still_batches_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rows.ndjson");
+        std::fs::write(&path, "{\"id\":1}\n{\"id\":2}\n{\"id\":3}\n").unwrap();
+        let batches: Vec<_> = super::mongo_ndjson_batches(&path, 2)
+            .unwrap()
+            .map(|b| b.expect("all rows read").len())
+            .collect();
+        assert_eq!(batches, vec![2, 1]);
+
+        // And an empty staging file yields nothing at all, which is what the
+        // caller reads as "no rows upstream".
+        let empty = dir.path().join("empty.ndjson");
+        std::fs::write(&empty, "").unwrap();
+        assert_eq!(super::mongo_ndjson_batches(&empty, 2).unwrap().count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod spool_cleanup_tests {
+    use super::*;
+
+    /// A fetch that is cut short leaves nothing on the temp volume.
+    ///
+    /// `SpooledInput` exists to remove the spooled file on every exit path -
+    /// its own comment says so - but it was constructed one line too late, after
+    /// the copy. The file is created before the copy, so a dropped connection,
+    /// a truncated response or a full disk returned an error with the partial
+    /// download still on disk and nothing left holding its name. A source that
+    /// retries a flaky endpoint accumulates one per attempt.
+    #[test]
+    fn a_cut_short_fetch_leaves_no_partial_download() {
+        // A server that promises a body and then hangs up part way through it.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().take(1).flatten() {
+                use std::io::Write;
+                let mut stream = stream;
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 65536\r\n\r\n",
+                );
+                let _ = stream.write_all(&[b'x'; 512]);
+                let _ = stream.flush();
+                // and hangs up, 65024 bytes short of what it promised.
+            }
+        });
+
+        let engine = DuckdbEngine::new(std::path::PathBuf::from("duckdb"));
+        let uri = format!("http://127.0.0.1:{port}/partialspoolprobe.bin");
+        let err = engine
+            .local_copy_of_artifact(&plan::ArtifactAuth::default(), &uri)
+            .err()
+            .expect("a truncated body is an error");
+
+        let left: Vec<std::path::PathBuf> = std::fs::read_dir(std::env::temp_dir())
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.file_name()
+                            .map(|n| n.to_string_lossy().ends_with("_partialspoolprobe.bin"))
+                            .unwrap_or(false)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        for p in &left {
+            let _ = std::fs::remove_file(p);
+        }
+        assert!(
+            left.is_empty(),
+            "the cut-short fetch left its partial download behind: {left:?} (error was {err})"
+        );
     }
 }
 

@@ -46,6 +46,11 @@ pub struct PipelineDoc {
     /// compilation and every surface gets the same answer.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parameters: crate::params::Schema,
+    /// #329 / #296: stop the run once it has been going this long, and report
+    /// it as a failure. A typed field, enforced where every surface's run
+    /// passes, so a hung run cannot hold its schedule however it was started.
+    #[serde(default, rename = "maxRunSeconds", skip_serializing_if = "Option::is_none")]
+    pub max_run_seconds: Option<u64>,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -73,6 +78,14 @@ pub struct Stage {
     /// enforce "error if exists" before writing.
     pub sink_path: Option<String>,
     pub sink_mode: Option<String>,
+    /// For a single-file sink that stages: the path its COPY writes to, which
+    /// the executor renames onto `sink_path` once the stage has finished. Set
+    /// from `builders::staged_sink_path`, the same call that pointed the COPY
+    /// there, so the two cannot disagree about whether this sink staged.
+    pub staged_write: Option<String>,
+    /// #367: the staged file starts with a CSV header line, which an append to
+    /// a file that already has one leaves out.
+    pub staged_header: bool,
     /// For a file sink: the compression its COPY will use. A source that can
     /// write the destination itself reads this so the file it produces matches
     /// what the sink would have written.
@@ -333,6 +346,9 @@ pub enum RuntimeSpec {
     RunJob {
         path: String,
         vars: Vec<(String, String)>,
+        /// Hand the stage's upstream rows to the child as ${DUCKLE_INPUT}. The
+        /// executor snapshots `from` to a parquet file just before the child runs.
+        passes_rows: bool,
     },
     InstallFallback(String),
     Iterate { path: String, count: u64 },
@@ -369,6 +385,10 @@ pub enum RuntimeSpec {
     Incremental(IncrementalSpec),
     /// src.ducklake.changes: DuckLake change-data-feed source (see DuckLakeCdcSpec).
     DuckLakeCdc(DuckLakeCdcSpec),
+    /// src.postgres.cdc: log-based PostgreSQL change feed (see PgCdcSpec).
+    PgCdc(PgCdcSpec),
+    /// snk.delta: local Delta Lake append (see DeltaSinkSpec).
+    DeltaSink(DeltaSinkSpec),
     Webhook(WebhookSpec),
     SnowflakeSink(SnowflakeSinkSpec),
     DatabricksSink(DatabricksSinkSpec),
@@ -425,6 +445,10 @@ pub enum RuntimeSpec {
     TursoSink(TursoSinkSpec),
     Db2Source(Db2SourceSpec),
     Db2Sink(Db2SinkSpec),
+    AccessSource(AccessSourceSpec),
+    AccessSink(AccessSinkSpec),
+    SharePointSource(SharePointSourceSpec),
+    SharePointSink(SharePointSinkSpec),
     AttachParquetSource(AttachParquetSourceSpec),
     /// materialize = "duckdb"/"duckdbfile": persist the stage into a DuckDB file.
     MaterializeDuckDb(MaterializeDuckDbSpec),
@@ -731,6 +755,8 @@ pub fn compile_partial(
         // Carried for the same reason: a subgraph of a pipeline is queued in
         // the pool the pipeline chose, not in the default one.
         resource_pool: pipeline.resource_pool.clone(),
+        // And the same limit: a partial run is still a run of this pipeline.
+        max_run_seconds: pipeline.max_run_seconds,
         parameters: Default::default(),
         nodes: pipeline
             .nodes
@@ -1906,6 +1932,8 @@ fn build_stage(
         .cloned()
         .unwrap_or(JsonValue::Null);
     let mut sink_path: Option<String> = None;
+    let mut staged_write: Option<String> = None;
+    let mut staged_header = false;
     let mut sink_compression: Option<String> = None;
     let mut sink_direct = false;
     let mut sink_mode: Option<String> = None;
@@ -1913,7 +1941,7 @@ fn build_stage(
     let mut text_search: Option<TextSearchSpec> = None;
     let mut webhook: Option<WebhookSpec> = None;
     let mut remote_exec: Option<RemoteExecSpec> = None;
-    let mut run_job: Option<(String, Vec<(String, String)>)> = None;
+    let mut run_job: Option<(String, Vec<(String, String)>, bool)> = None;
     let mut install_fallback_path: Option<String> = None;
     let mut iterate_pipeline_path: Option<String> = None;
     let mut iterate_count: Option<u64> = None;
@@ -1927,6 +1955,8 @@ fn build_stage(
     let mut die_spec: Option<(String, String)> = None;
     let mut incremental: Option<IncrementalSpec> = None;
     let mut ducklake_cdc: Option<DuckLakeCdcSpec> = None;
+    let mut pg_cdc: Option<PgCdcSpec> = None;
+    let mut delta_sink: Option<DeltaSinkSpec> = None;
     let mut snowflake_sink: Option<SnowflakeSinkSpec> = None;
     let mut databricks_sink: Option<DatabricksSinkSpec> = None;
     let mut salesforce_sink: Option<SalesforceSinkSpec> = None;
@@ -1973,6 +2003,10 @@ fn build_stage(
     let mut turso_sink: Option<TursoSinkSpec> = None;
     let mut db2_source: Option<Db2SourceSpec> = None;
     let mut db2_sink: Option<Db2SinkSpec> = None;
+    let mut access_source: Option<AccessSourceSpec> = None;
+    let mut access_sink: Option<AccessSinkSpec> = None;
+    let mut sharepoint_source: Option<SharePointSourceSpec> = None;
+    let mut sharepoint_sink: Option<SharePointSinkSpec> = None;
     let mut attach_parquet_source: Option<AttachParquetSourceSpec> = None;
     let mut materialize_duckdb: Option<MaterializeDuckDbSpec> = None;
     let mut redis_sink: Option<RedisSinkSpec> = None;
@@ -2531,13 +2565,19 @@ fn build_stage(
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if (component_id == "snk.sqlserver" || component_id == "snk.synapse")
-        && !props.get("bulk").and_then(|v| v.as_bool()).unwrap_or(true)
+        && (!props.get("bulk").and_then(|v| v.as_bool()).unwrap_or(true)
+            || string_prop(&props, "mode").as_deref() == Some("upsert"))
     {
         // bulk=false: the row-by-row tiberius driver path (works offline, no
         // extension). The DEFAULT (bulk=true, #86) instead falls through to the
         // generic attach-sink path below, which ATTACHes via the DuckDB mssql
         // community extension and bulk-writes through COPY/INSERT (~1.2M rows/s).
         // Synapse rides the SQL Server wire; same tiberius path.
+        //
+        // An upsert always comes here. Through the mssql extension it is an
+        // UPDATE and a DELETE, which that extension refuses on a table with no
+        // primary key - and a table this sink created has none, so every upsert
+        // on the default path failed. The driver upserts with one MERGE.
         let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
         let host = string_prop(&props, "host")
             .filter(|s| !s.is_empty())
@@ -2711,6 +2751,28 @@ fn build_stage(
         vortex_sink = Some(VortexSinkSpec {
             from_view: from_view.to_string(),
             path,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.delta" {
+        // Above the `snk.` catch-all, which would otherwise claim it.
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let path = string_prop(&props, "path")
+            .map(|p| p.trim().trim_end_matches(['/', '\\']).to_string())
+            .filter(|p| !p.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: path required (the table's directory)", component_id)))?;
+        // A table on object storage means writing its first commit there too,
+        // and that has not been run against real storage yet. Refused rather
+        // than shipped untested.
+        if path.contains("://") {
+            return Err(EngineError::Config(format!(
+                "{}: writes to a local table directory for now; '{}' is remote. Write locally and copy, or use the Iceberg or DuckLake sink for object storage",
+                component_id, path
+            )));
+        }
+        delta_sink = Some(DeltaSinkSpec {
+            from_view: from_view.to_string(),
+            path,
+            create_if_missing: props.get("createIfMissing").and_then(|v| v.as_bool()).unwrap_or(true),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.snowflake" {
@@ -3583,12 +3645,57 @@ fn build_stage(
                 .unwrap_or_else(|| "append".to_string()),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.access" {
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        access_sink = Some(AccessSinkSpec {
+            from_view: from_view.to_string(),
+            path: string_prop(&props, "path")
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?,
+            table: string_prop(&props, "tableName")
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| EngineError::Config(format!("{}: tableName required", component_id)))?,
+            password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+            mode: string_prop(&props, "mode")
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "append".to_string()),
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.sharepoint" {
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let need = |key: &str| {
+            string_prop(&props, key)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| EngineError::Config(format!("{}: {} required", component_id, key)))
+        };
+        let write = if string_prop(&props, "mode").as_deref() == Some("file") {
+            SharePointWrite::File {
+                folder: need("folderUrl")?,
+                name: need("fileName")?,
+                format: string_prop(&props, "format").filter(|s| !s.is_empty()),
+                overwrite: props.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(true),
+            }
+        } else {
+            SharePointWrite::List { list: need("listName")? }
+        };
+        sharepoint_sink = Some(SharePointSinkSpec {
+            from_view: from_view.to_string(),
+            site_url: need("siteUrl")?,
+            username: need("username")?,
+            password: string_prop(&props, "password").unwrap_or_default(),
+            write,
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id.starts_with("snk.") {
         let from_view = inputs
             .main()
             .ok_or_else(|| missing_input(node, "main"))?;
         sink_path = string_prop(&props, "path").filter(|s| !s.is_empty());
         sink_mode = string_prop(&props, "mode").filter(|s| !s.is_empty());
+        staged_write = builders::staged_sink_path(component_id, &props);
+        staged_header = staged_write.is_some()
+            && matches!(component_id, "snk.csv" | "snk.tsv")
+            && builders::csv_writes_header(&props);
         sink_compression = string_prop(&props, "compression").filter(|s| !s.is_empty());
         sink_direct = props
             .get("directWrite")
@@ -3941,7 +4048,21 @@ fn build_stage(
         if let Some(file) = &handoff {
             vars.push(("DUCKLE_RETURN".to_string(), file.clone()));
         }
-        run_job = Some((path, vars));
+        // The other direction: the parent hands its input rows to the child as
+        // ${DUCKLE_INPUT}, so one child can be a block several pipelines call.
+        // The file is written by the executor just before the child runs, from
+        // the upstream named in `from`, which is why nothing is named here.
+        let passes_rows = props
+            .get("passesRows")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if passes_rows && inputs.main().is_none() {
+            return Err(EngineError::Config(format!(
+                "{}: passesRows is on but nothing is connected upstream, so there are no rows to pass - connect an input or turn passesRows off",
+                component_id
+            )));
+        }
+        run_job = Some((path, vars, passes_rows));
         let sql = match (&handoff, inputs.main()) {
             (Some(file), _) => format!(
                 "CREATE OR REPLACE VIEW {} AS SELECT * FROM read_parquet('{}')",
@@ -3951,7 +4072,8 @@ fn build_stage(
             (None, Some(from_view)) => passthrough_view_sql(&node.id, from_view),
             (None, None) => passthrough_placeholder_sql(&node.id, "triggered"),
         };
-        (sql, StageKind::View, None)
+        let from = inputs.main().filter(|_| passes_rows).map(str::to_string);
+        (sql, StageKind::View, from)
     } else if component_id == "ctl.parallelize" {
         // The branch sub-pipelines + concurrency are attached by compile() as
         // RuntimeSpec::Parallelize. Here we just set `from` so the executor
@@ -4026,6 +4148,75 @@ fn build_stage(
         });
         (
             passthrough_placeholder_sql(&node.id, "ducklake-cdc"),
+            StageKind::View,
+            None,
+        )
+    } else if component_id == "src.postgres.cdc" {
+        // Log-based PostgreSQL change feed. The executor peeks the slot, emits
+        // the changes, and saves the position only on run success; the SQL
+        // here is a placeholder the RuntimeSpec arm replaces.
+        let attach_read = builders::db_attach(&props, "postgres", 5432, true);
+        if attach_read.is_empty() {
+            return Err(EngineError::Config(format!(
+                "{}: a connection is required (host, or a connection string)",
+                component_id
+            )));
+        }
+        let qualified = string_prop(&props, "table")
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: table required (schema.table)", component_id)))?;
+        let (schema, table) = match qualified.split_once('.') {
+            Some((s, t)) => (s.trim().to_string(), t.trim().to_string()),
+            None => ("public".to_string(), qualified.clone()),
+        };
+        // A slot outlives the pipeline and holds WAL until it is consumed, so
+        // its name is the user's to choose and see, not something derived: two
+        // pipelines sharing one would each advance it past the other's changes.
+        let slot = string_prop(&props, "slotName")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                EngineError::Config(format!(
+                    "{}: slotName required - one replication slot per consuming pipeline",
+                    component_id
+                ))
+            })?;
+        let pg_name_ok = |n: &str| {
+            !n.is_empty()
+                && n.len() <= 63
+                && n.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+        };
+        if !pg_name_ok(&slot) {
+            return Err(EngineError::Config(format!(
+                "{}: slotName '{}' must be 1-63 lowercase letters, digits or underscores, which is what PostgreSQL accepts for a slot",
+                component_id, slot
+            )));
+        }
+        let publication = string_prop(&props, "publication")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("{slot}_pub"));
+        if !pg_name_ok(&publication) {
+            return Err(EngineError::Config(format!(
+                "{}: publication '{}' must be 1-63 lowercase letters, digits or underscores",
+                component_id, publication
+            )));
+        }
+        pg_cdc = Some(PgCdcSpec {
+            node_id: node.id.clone(),
+            attach_write: builders::db_attach(&props, "postgres", 5432, false),
+            attach_read,
+            schema,
+            table,
+            slot,
+            publication,
+            create_if_missing: props.get("createIfMissing").and_then(|v| v.as_bool()).unwrap_or(true),
+            batch_size: props.get("batchSize").and_then(|v| v.as_u64()).filter(|n| *n > 0).unwrap_or(100_000),
+            max_lag_mb: props.get("maxLagMb").and_then(|v| v.as_u64()).unwrap_or(1024),
+        });
+        (
+            passthrough_placeholder_sql(&node.id, "postgres-cdc"),
             StageKind::View,
             None,
         )
@@ -5475,6 +5666,69 @@ fn build_stage(
             .or_else(|| string_prop(&props, "url"))
             .filter(|s| !s.is_empty())
             .ok_or_else(|| EngineError::Config(format!("{}: uri required", component_id)))?;
+        let track_state = props
+            .get("trackState")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        // #324: first-run behaviour is chosen, not implied. A misspelt mode is
+        // refused rather than read as the default, because backfilling years of
+        // drops and skipping them are both expensive wrong guesses.
+        let baseline_existing = match string_prop(&props, "firstRun").as_deref().map(str::trim) {
+            None | Some("") | Some("emit_existing") => false,
+            Some("baseline_existing") => true,
+            Some(other) => {
+                return Err(EngineError::Config(format!(
+                    "{}: firstRun must be emit_existing or baseline_existing, not '{}'",
+                    component_id, other
+                )))
+            }
+        };
+        let order_by_modified = match string_prop(&props, "orderBy").as_deref().map(str::trim) {
+            None | Some("") | Some("name") => false,
+            Some("modified") => true,
+            Some(other) => {
+                return Err(EngineError::Config(format!(
+                    "{}: orderBy must be name or modified, not '{}'",
+                    component_id, other
+                )))
+            }
+        };
+        // #324: a modification-time window. In UTC: the session timezone is
+        // never pinned, so a bare date means midnight UTC rather than midnight
+        // wherever the run happens to be.
+        let bound = |key: &str| -> Result<Option<chrono::DateTime<chrono::Utc>>, EngineError> {
+            let Some(text) = string_prop(&props, key)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+            else {
+                return Ok(None);
+            };
+            chrono::DateTime::parse_from_rfc3339(&text)
+                .map(|t| t.with_timezone(&chrono::Utc))
+                .ok()
+                .or_else(|| {
+                    chrono::NaiveDate::parse_from_str(&text, "%Y-%m-%d")
+                        .ok()
+                        .and_then(|d| d.and_hms_opt(0, 0, 0))
+                        .map(|t| t.and_utc())
+                })
+                .map(Some)
+                .ok_or_else(|| {
+                    EngineError::Config(format!(
+                        "{}: {} must be an RFC 3339 time or a YYYY-MM-DD date, not '{}'",
+                        component_id, key, text
+                    ))
+                })
+        };
+        let modified_since = bound("modifiedSince")?;
+        let modified_before = bound("modifiedBefore")?;
+        if baseline_existing && !track_state {
+            return Err(EngineError::Config(format!(
+                "{}: firstRun baseline_existing needs trackState on. With nothing \
+                 remembered every run is a first run, so nothing would ever be emitted.",
+                component_id
+            )));
+        }
         changed_source = Some(ChangedSourceSpec {
             node_id: node.id.clone(),
             uri,
@@ -5483,15 +5737,19 @@ fn build_stage(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
             suffix: string_prop(&props, "suffix").filter(|s| !s.is_empty()),
+            // The same array-or-comma-separated shape a column list takes.
+            include: column_list(&props, "include"),
+            exclude: column_list(&props, "exclude"),
+            modified_since,
+            modified_before,
             max_entries: props
                 .get("maxEntries")
                 .and_then(|v| v.as_u64())
                 .filter(|n| *n > 0)
                 .unwrap_or(1000) as usize,
-            track_state: props
-                .get("trackState")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
+            track_state,
+            baseline_existing,
+            order_by_modified,
             user: string_prop(&props, "user").filter(|s| !s.is_empty()),
             password: string_prop(&props, "password").filter(|s| !s.is_empty()),
             private_key: string_prop(&props, "privateKey").filter(|s| !s.is_empty()),
@@ -5582,6 +5840,59 @@ fn build_stage(
                 .or_else(|| string_prop(&props, "token"))
                 .filter(|s| !s.is_empty()),
             query,
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.sharepoint" {
+        let need = |key: &str| {
+            string_prop(&props, key)
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| EngineError::Config(format!("{}: {} required", component_id, key)))
+        };
+        let read = if string_prop(&props, "mode").as_deref() == Some("file") {
+            SharePointRead::File {
+                url: need("fileUrl")?,
+                format: string_prop(&props, "format").filter(|s| !s.is_empty()),
+            }
+        } else {
+            SharePointRead::List {
+                list: need("listName")?,
+                select: string_prop(&props, "select").filter(|s| !s.trim().is_empty()),
+                filter: string_prop(&props, "filter").filter(|s| !s.trim().is_empty()),
+            }
+        };
+        sharepoint_source = Some(SharePointSourceSpec {
+            node_id: node.id.clone(),
+            site_url: need("siteUrl")?,
+            username: need("username")?,
+            password: string_prop(&props, "password").unwrap_or_default(),
+            read,
+            page_size: props
+                .get("pageSize")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(1000)
+                .min(5000),
+        });
+        (String::new(), StageKind::View, None)
+    } else if component_id == "src.access" {
+        let query = string_prop(&props, "query").filter(|s| !s.trim().is_empty());
+        let table = string_prop(&props, "tableName").filter(|s| !s.trim().is_empty());
+        if query.is_none() && table.is_none() {
+            return Err(EngineError::Config(format!("{}: tableName or query required", component_id)));
+        }
+        access_source = Some(AccessSourceSpec {
+            node_id: node.id.clone(),
+            path: string_prop(&props, "path")
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| EngineError::Config(format!("{}: path required", component_id)))?,
+            table,
+            query,
+            password: string_prop(&props, "password").filter(|s| !s.is_empty()),
+            batch_rows: props
+                .get("batchSize")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(5000) as usize,
         });
         (String::new(), StageKind::View, None)
     } else if component_id == "src.db2" {
@@ -5875,6 +6186,8 @@ fn build_stage(
             || string_prop(&props, "responseFormat").as_deref() == Some("xml")
         {
             RestResponseFormat::Xml
+        } else if string_prop(&props, "responseFormat").as_deref() == Some("sse") {
+            RestResponseFormat::EventStream
         } else {
             RestResponseFormat::Json
         };
@@ -5884,7 +6197,7 @@ fn build_stage(
             // set only that field located no rows at all. Honoured as an alias
             // rather than ignored, so those pipelines start working.
             .or_else(|| string_prop(&props, "jsonPath"))
-            .map(|s| json_pointer_path(&s, response_format == RestResponseFormat::Json))
+            .map(|s| json_pointer_path(&s, response_format != RestResponseFormat::Xml))
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| {
                 if component_id == "src.odata" {
@@ -6365,7 +6678,14 @@ fn build_stage(
                 component_id
             )));
         }
+        // An evaluation model is a different endpoint, a different body and a
+        // different answer, so the defaults for model and host follow it.
+        let provider = string_prop(&props, "provider")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "openai".into());
+        let jev = provider == "jev";
         ai_classify = Some(AiClassifySpec {
+            provider: provider.clone(),
             budget: AiBudgetSpec::read(&props),
             checkpoint: props
                 .get("checkpoint")
@@ -6383,13 +6703,13 @@ fn build_stage(
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "category".into()),
             categories,
-            model: string_prop(&props, "model")
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "gpt-4o-mini".into()),
+            model: string_prop(&props, "model").filter(|s| !s.is_empty()).unwrap_or_else(|| {
+                if jev { "typesafe-ai/jev".into() } else { "gpt-4o-mini".into() }
+            }),
             api_key,
-            base_url: string_prop(&props, "baseUrl")
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "https://api.openai.com".into()),
+            base_url: string_prop(&props, "baseUrl").filter(|s| !s.is_empty()).unwrap_or_else(|| {
+                if jev { "https://ai-gateway.vercel.sh".into() } else { "https://api.openai.com".into() }
+            }),
             headers: headers_from_props(&props),
             endpoint_path: string_prop(&props, "endpointPath").filter(|s| !s.is_empty()),
             // #258: default 1 keeps every existing pipeline byte-identical.
@@ -6617,9 +6937,11 @@ fn build_stage(
         // otherwise materialized the whole rejected set to disk for nothing
         // (a 10M -> 2M filter wrote 8M rejected rows, ~12s of pure waste).
         let reject_sql = if reject_consumers >= 1 {
-            build_reject_sql(component_id, &props, inputs, node.data.schema.as_deref()).map_err(|e| {
-                EngineError::Config(format!("{} ({} / {}): {}", node.data.label, component_id, node.id, e))
-            })?
+            build_reject_sql(component_id, &props, inputs, node.data.schema.as_deref())
+                .map_err(|e| {
+                    EngineError::Config(format!("{} ({} / {}): {}", node.data.label, component_id, node.id, e))
+                })?
+                .map(|body| builders::with_reject_envelope(component_id, &node.id, body))
         } else {
             None
         };
@@ -6676,8 +6998,28 @@ fn build_stage(
             .and_then(|v| v.as_str())
             .unwrap_or("auto");
         let forced_view = force_views || materialize == "view";
+        // A stage that carries a resource or failure setting has to be the stage
+        // that does the work, or the setting names nothing.
+        //
+        // With one consumer the stage compiled to a VIEW, which computes nothing:
+        // the PRAGMA wrapped a CREATE VIEW that always succeeds, the work was
+        // inlined into the CONSUMER's query and ran under the consumer's limits,
+        // the node's retries never fired because the node never failed, its
+        // failure was reported against the node below it, and that node's
+        // continueOnFailure decided whether the run carried on. Measured: the
+        // same node with `memoryLimitMb: 1` passed with one consumer and hit
+        // "Out of Memory Error" with two, and a `current_setting('memory_limit')`
+        // probe returned the 18.7 GiB default with one consumer and 488 MiB with
+        // two. Materializing is what makes the setting mean what it says.
+        //
+        // Not when views are forced: that is the analysis compile, which binds
+        // schemas without running the work, and an author who asked for a view
+        // outright has said which they want.
+        let stage_owns_its_work =
+            memory_limit_mb.is_some() || retry_attempts > 1 || continue_on_failure;
         let forced_table =
-            matches!(materialize, "table" | "memory" | "disk" | "duckdb" | "duckdbfile");
+            matches!(materialize, "table" | "memory" | "disk" | "duckdb" | "duckdbfile")
+                || (stage_owns_its_work && !forced_view);
         let view_ok = |consumers: usize| {
             !uses_dynamic_pivot
                 && !attach_backed
@@ -6862,7 +7204,7 @@ fn build_stage(
     let runtime: Option<RuntimeSpec> = None
         .or_else(|| upsert.map(RuntimeSpec::Upsert))
         .or_else(|| text_search.map(RuntimeSpec::TextSearch))
-        .or_else(|| run_job.map(|(path, vars)| RuntimeSpec::RunJob { path, vars }))
+        .or_else(|| run_job.map(|(path, vars, passes_rows)| RuntimeSpec::RunJob { path, vars, passes_rows }))
         .or_else(|| install_fallback_path.map(RuntimeSpec::InstallFallback))
         .or_else(|| iterate_pipeline_path
             .map(|path| RuntimeSpec::Iterate { path, count: iterate_count.unwrap_or(0) }))
@@ -6878,6 +7220,8 @@ fn build_stage(
         .or_else(|| die_spec.map(|(message, condition)| RuntimeSpec::Die { message, condition }))
         .or_else(|| incremental.map(RuntimeSpec::Incremental))
         .or_else(|| ducklake_cdc.map(RuntimeSpec::DuckLakeCdc))
+        .or_else(|| pg_cdc.map(RuntimeSpec::PgCdc))
+        .or_else(|| delta_sink.map(RuntimeSpec::DeltaSink))
         .or_else(|| webhook.map(RuntimeSpec::Webhook))
         .or_else(|| remote_exec.map(RuntimeSpec::RemoteExec))
         .or_else(|| snowflake_sink.map(RuntimeSpec::SnowflakeSink))
@@ -6926,6 +7270,10 @@ fn build_stage(
         .or_else(|| turso_sink.map(RuntimeSpec::TursoSink))
         .or_else(|| db2_source.map(RuntimeSpec::Db2Source))
         .or_else(|| db2_sink.map(RuntimeSpec::Db2Sink))
+        .or_else(|| access_source.map(RuntimeSpec::AccessSource))
+        .or_else(|| access_sink.map(RuntimeSpec::AccessSink))
+        .or_else(|| sharepoint_source.map(RuntimeSpec::SharePointSource))
+        .or_else(|| sharepoint_sink.map(RuntimeSpec::SharePointSink))
         .or_else(|| attach_parquet_source.map(RuntimeSpec::AttachParquetSource))
         .or_else(|| materialize_duckdb.map(RuntimeSpec::MaterializeDuckDb))
         .or_else(|| redis_sink.map(RuntimeSpec::RedisSink))
@@ -7078,6 +7426,8 @@ fn build_stage(
         },
         sink_path,
         sink_mode,
+        staged_write,
+        staged_header,
         sink_compression,
         sink_direct,
         runtime,

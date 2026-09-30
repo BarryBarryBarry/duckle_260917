@@ -82,7 +82,13 @@ function placeholderAutodetect(format?: string): (
 // "does not support the encoding" error rather than a fallback. So the list
 // carries the names people actually need, spelled the way DuckDB accepts them,
 // and the field stays typable for the rest. Every value below was checked
-// against DuckDB 1.5.4.
+// against DuckDB 1.5.4 - not only accepted, but read back correctly.
+//
+// BIG5 is NOT offered, and the engine refuses it: 1.5.4 accepts the name and
+// then maps the newline byte to a character, so the whole file arrives as one
+// line - zero rows, with the file's contents as column names, on a green run.
+// Accepted-but-wrong is the dangerous shape here; a wrong spelling is a hard
+// error and therefore safe.
 export const encodingField = (): Field => ({
     key: 'encoding',
     label: 'Encoding',
@@ -112,7 +118,6 @@ export const encodingField = (): Field => ({
         { label: 'Shift-JIS  Japanese', value: 'SHIFT_JIS' },
         { label: 'EUC-JP  Japanese', value: 'EUC_JP' },
         { label: 'EUC-KR  Korean', value: 'EUC_KR' },
-        { label: 'Big5  Traditional Chinese', value: 'BIG5' },
         { label: 'GB18030  Simplified Chinese', value: 'GB18030' },
         { label: 'KOI8-R  Cyrillic', value: 'KOI8_R' },
         { label: 'CP852  DOS Central European', value: 'CP852' },
@@ -150,7 +155,11 @@ export const delimiterField = (defaultValue: string): Field => ({
         'Leave blank to let DuckDB sniff it. Anything not listed can be typed in, including a multi-character delimiter such as || or <=>.',
 });
 
-const writeModeField = (): Field => ({
+// #367: a line-oriented file appends by adding the staged rows to its end
+// (builders.rs append_refusal says where it cannot).
+const APPENDING_FILE_SINKS = new Set(['snk.tsv', 'snk.json', 'snk.jsonl']);
+
+const writeModeField = (componentId?: string): Field => ({
     key: 'mode',
     label: 'Write mode',
     kind: 'select',
@@ -158,8 +167,61 @@ const writeModeField = (): Field => ({
     // "Error if exists" was here and no file-sink builder reads `mode`: a COPY
     // always replaces, so the option that promised to refuse a write silently
     // performed one. build_sink_sql now refuses it rather than replacing.
-    options: [{ label: 'Overwrite', value: 'overwrite' }],
+    options: [
+        { label: 'Overwrite', value: 'overwrite' },
+        ...(componentId && APPENDING_FILE_SINKS.has(componentId)
+            ? [{ label: 'Append (add rows to the end)', value: 'append' }]
+            : []),
+    ],
+    ...(componentId && APPENDING_FILE_SINKS.has(componentId)
+        ? { description: 'Append adds this run\'s rows to the end of the file, and writes the header only when it makes the file; rows whose columns are not the file\'s are refused. A compressed, partitioned or remote path cannot be appended to.' }
+        : {}),
 });
+
+// How a cloud storage node signs in: the keys typed here, or, for S3, the
+// S3-compatible stores and Azure, whatever identity the run has where it runs,
+// with no key in the pipeline. GCS stays keys only: DuckDB 1.5.5 reads it with
+// HMAC keys and has no Google credential chain (its "chain" for GCS is AWS's).
+// Azure's secret is made from an account name and key (lib.rs secret_statement),
+// which is what this offers it; the access/secret pair it used to get was never read.
+export const storageAuthFields = (componentId: string, withSessionToken: boolean): Field[] => {
+    const family = componentId.split('.')[1];
+    const azure = family === 'azureblob';
+    if (family === 'gcs') {
+        return [
+            { key: 'accessKey', label: 'Access key', kind: 'text' },
+            { key: 'secretKey', label: 'Secret key', kind: 'text', placeholder: '••••••••' },
+            ...(withSessionToken ? [{ key: 'sessionToken', label: 'Session token', kind: 'text' } as Field] : []),
+        ];
+    }
+    const keysOnly = { visibleWhen: { key: 'cloudAuth', equals: 'keys' } };
+    const signIn: Field = {
+        key: 'cloudAuth',
+        label: 'Sign in with',
+        kind: 'select',
+        defaultValue: 'keys',
+        options: [
+            { label: azure ? 'Account key' : 'Access keys', value: 'keys' },
+            { label: azure ? 'Managed identity / Azure CLI' : 'IAM role / environment', value: 'environment' },
+        ],
+        description: azure
+            ? 'The environment signs in as the identity the run has where it runs - a managed or workload identity, an Azure CLI login, or AZURE_* variables - with no key in the pipeline.'
+            : 'The environment uses the AWS identity the run has where it runs - an instance or container role, IRSA, SSO, a profile or AWS_* variables - with no key in the pipeline. A run with none stops before it reads anything.',
+    };
+    if (azure) {
+        return [
+            { key: 'accountName', label: 'Storage account', kind: 'text', placeholder: 'mystorageaccount' },
+            signIn,
+            { key: 'accountKey', label: 'Account key', kind: 'text', placeholder: '••••••••', ...keysOnly },
+        ];
+    }
+    return [
+        signIn,
+        { key: 'accessKey', label: 'Access key', kind: 'text', ...keysOnly },
+        { key: 'secretKey', label: 'Secret key', kind: 'text', placeholder: '••••••••', ...keysOnly },
+        ...(withSessionToken ? [{ key: 'sessionToken', label: 'Session token', kind: 'text', ...keysOnly } as Field] : []),
+    ];
+};
 
 // Validate-before-insert / dead-letter for DB sinks (#101): split rows that
 // cannot be cast to the declared column types off to a file instead of failing
@@ -252,9 +314,11 @@ const directWriteField = (): Field => ({
         'Skip the intermediate pass and let a capable upstream source write this file itself. Faster, but the file is usually larger than DuckDB would write for the same compression. Ignored when the upstream cannot do it, in which case the normal path runs.',
 });
 
+// A cloud sink reads Compression for Parquet only (build_cloud_sink strips it
+// before a CSV or JSON write), so it is shown only while the format is Parquet.
 const compressionField = (): Field => ({
     key: 'compression',
-    label: 'Compression',
+    label: 'Compression (Parquet)',
     kind: 'select',
     defaultValue: 'none',
     options: [
@@ -263,6 +327,28 @@ const compressionField = (): Field => ({
         { label: 'Zstd', value: 'zstd' },
         { label: 'Snappy', value: 'snappy' },
     ],
+    visibleWhen: { key: 'format', equals: 'parquet' },
+});
+
+// The codecs a CSV or JSON COPY can write, read by build_csv_sink and
+// build_json_sink. This dropdown used to be offered on every file sink with
+// Snappy among the choices, and no builder read it, so every pick wrote a plain
+// file. Excel, QVD, YAML and TOML have no compression to set, so they no longer
+// show one.
+const TEXT_COMPRESSING_SINKS = new Set(['snk.tsv', 'snk.json', 'snk.jsonl']);
+
+const textCompressionField = (): Field => ({
+    key: 'compression',
+    label: 'Compression',
+    kind: 'select',
+    defaultValue: 'none',
+    options: [
+        { label: 'None', value: 'none' },
+        { label: 'Gzip', value: 'gzip' },
+        { label: 'Zstd', value: 'zstd' },
+    ],
+    description:
+        'Gzip or Zstd compresses the file whatever it is called. None leaves it to the name: a path ending .gz or .zst is still compressed. A compressed file cannot be appended to.',
 });
 
 // Map a database component to the saved-connection kind its picker should
@@ -401,7 +487,7 @@ const dbConnectionFields = (componentId: string): Field[] => [
 // #161). All of these ATTACH through the DuckDB postgres extension, so the same
 // sslmode / cert / connect_timeout / options params flow through to libpq.
 const PG_ADVANCED_IDS = new Set([
-    'src.postgres', 'snk.postgres',
+    'src.postgres', 'snk.postgres', 'src.postgres.cdc',
     'src.cockroach', 'snk.cockroach',
     'src.redshift', 'snk.redshift',
     'src.pgvector', 'snk.pgvector',
@@ -1718,7 +1804,7 @@ function synthFileSink(comp: ComponentDef): ComponentManifest {
                             { name: 'All files', extensions: ['*'] },
                         ],
                     },
-                    writeModeField(),
+                    writeModeField(comp.id),
                     // No encoding here. DuckDB refuses it on the way out -
                     // "Option ENCODING is not supported for writing - only for
                     // reading" - and no sink builder has ever read the property,
@@ -1726,7 +1812,7 @@ function synthFileSink(comp: ComponentDef): ComponentManifest {
                     // A control that cannot do what it offers is worse than a
                     // missing one, and widening it to the full encoding list
                     // would only have made the promise bigger.
-                    compressionField(),
+                    ...(TEXT_COMPRESSING_SINKS.has(comp.id) ? [textCompressionField()] : []),
                     ...(comp.id === 'snk.parquet' ? [directWriteField()] : []),
                 ],
             },
@@ -2116,7 +2202,126 @@ function fileFormatSection(comp: ComponentDef): FormSection[] {
     return [];
 }
 
+/**
+ * src.postgres.cdc: the PostgreSQL source's own connection section, taken from
+ * it rather than copied, so a saved connection behaves exactly as it does
+ * there. Its SSL section arrives the same way every Postgres node's does, from
+ * PG_ADVANCED_IDS. Then what a change feed needs.
+ */
+function synthPostgresCdc(comp: ComponentDef): ComponentManifest {
+    const pg = synthDbSource({ ...comp, id: 'src.postgres' });
+    const connection = pg.sections.filter(s => s.label === 'Connection');
+    return base(comp, [
+        ...connection,
+        {
+            label: 'Change feed',
+            fields: [
+                { key: 'table', label: 'Table', kind: 'text', required: true, placeholder: 'public.orders', description: 'The table to capture, as schema.table (public when no schema is given). Each change arrives as one row: _op (insert / update / delete), _lsn, _xid and _commit_ts, then the row itself, typed as the table declares it.' },
+                { key: 'slotName', label: 'Replication slot', kind: 'text', required: true, placeholder: 'duckle_orders', description: "One slot per pipeline that reads this table. PostgreSQL keeps WAL until the slot is consumed, so a slot nothing reads any more should be dropped: SELECT pg_drop_replication_slot('name'). Lowercase letters, digits and underscores." },
+                { key: 'publication', label: 'Publication', kind: 'text', placeholder: '<slot>_pub', description: 'Defaults to the slot name with _pub. The one Duckle creates publishes insert, update and delete for this table only.' },
+                { key: 'createIfMissing', label: 'Create the publication and slot if missing', kind: 'bool', defaultValue: true, description: 'Needs a role allowed to create publications and replication slots, and wal_level = logical on the server. A new slot captures changes from the moment it is made: load the existing rows once with the PostgreSQL source.' },
+                { key: 'connString', label: 'Connection string (optional)', kind: 'text', placeholder: 'host=... port=5432 dbname=... user=...', description: 'A libpq key-value string or postgresql:// URL. When set it replaces the host, port and credentials above.' },
+            ],
+        },
+        {
+            label: 'Limits',
+            fields: [
+                { key: 'batchSize', label: 'Changes per run', kind: 'integer', defaultValue: 100000, description: 'Reading stops at the first transaction boundary past this, so a transaction is never split across runs. The rest arrive on the next run.' },
+                { key: 'maxLagMb', label: 'Warn when the slot holds more than (MB)', kind: 'integer', defaultValue: 1024, description: 'How much WAL the slot keeps on the server is reported on every run, with a warning past this. Consider max_slot_wal_keep_size on the server as a hard cap.' },
+            ],
+        },
+    ]);
+}
+
+/**
+ * src.iceberg / snk.iceberg: a table directory, or a table in a REST catalog
+ * (Polaris, Lakekeeper, Nessie, Gravitino and the Iceberg REST fixture). The
+ * catalog's own credentials and the object store's are separate: `catalogUri`
+ * is the catalog, `endpoint` belongs to the S3 keys every S3 node shares, so a
+ * saved S3 connection fills them.
+ */
+function icebergSections(sink: boolean): FormSection[] {
+    const rest: FieldCondition = { key: 'catalog', equals: 'rest' };
+    const oauth: FieldCondition[] = [rest, { key: 'authType', equals: 'oauth2' }];
+    const token: FieldCondition[] = [rest, { key: 'authType', equals: 'token' }];
+    return [
+        {
+            label: 'Table',
+            fields: [
+                {
+                    key: 'catalog', label: 'Where the table lives', kind: 'select', defaultValue: 'path',
+                    options: [
+                        { label: 'A table directory', value: 'path' },
+                        { label: 'A REST catalog', value: 'rest' },
+                    ],
+                },
+                { key: 'path', label: 'Table directory', kind: 'text', placeholder: '/data/lake/orders', visibleWhen: { key: 'catalog', equals: 'path' }, description: sink ? 'The directory the table is written to (data/ and metadata/).' : 'The table directory, holding metadata/.' },
+                { key: 'catalogUri', label: 'Catalog URI', kind: 'text', placeholder: 'https://catalog.example.com/api/catalog', visibleWhen: rest, description: 'The REST catalog endpoint.' },
+                { key: 'warehouse', label: 'Warehouse', kind: 'text', placeholder: 'warehouse', visibleWhen: rest, description: 'The warehouse the catalog serves, as it names it.' },
+                { key: 'namespace', label: 'Namespace', kind: 'text', placeholder: 'sales', visibleWhen: rest, description: sink ? 'Created when it does not exist.' : undefined },
+                { key: 'table', label: 'Table', kind: 'text', placeholder: 'orders', visibleWhen: rest },
+                ...(sink
+                    ? [{
+                        key: 'mode', label: 'Write mode', kind: 'select' as const, defaultValue: 'append', visibleWhen: rest,
+                        options: [
+                            { label: 'Append (create the table if missing)', value: 'append' },
+                            { label: 'Overwrite (drop and recreate)', value: 'overwrite' },
+                        ],
+                        description: "Append matches columns by name. Overwrite drops the table and creates it again from this run's rows, as two catalog commits: the catalog cannot replace a table in one.",
+                    }]
+                    : []),
+            ],
+        },
+        {
+            label: 'Catalog sign-in',
+            fields: [
+                {
+                    key: 'authType', label: 'Authentication', kind: 'select', defaultValue: 'none', visibleWhen: rest,
+                    options: [
+                        { label: 'None', value: 'none' },
+                        { label: 'OAuth2 client credentials', value: 'oauth2' },
+                        { label: 'Bearer token', value: 'token' },
+                    ],
+                },
+                { key: 'clientId', label: 'Client ID', kind: 'text', visibleWhen: oauth },
+                { key: 'clientSecret', label: 'Client secret', kind: 'text', placeholder: 'secret', visibleWhen: oauth },
+                { key: 'oauth2ServerUri', label: 'Token endpoint', kind: 'text', placeholder: '<catalog URI>/v1/oauth/tokens', visibleWhen: oauth, description: 'Leave blank for the catalog default.' },
+                { key: 'oauth2Scope', label: 'Scope', kind: 'text', placeholder: 'PRINCIPAL_ROLE:ALL', visibleWhen: oauth },
+                { key: 'token', label: 'Token', kind: 'text', placeholder: 'token', visibleWhen: token },
+            ],
+        },
+        {
+            label: 'Object storage (for the data files)',
+            fields: [
+                { ...connectionRefField('s3'), visibleWhen: rest },
+                { key: 'accessKey', label: 'S3 access key', kind: 'text', visibleWhen: rest, description: 'Only when the catalog does not hand out storage credentials itself.' },
+                { key: 'secretKey', label: 'S3 secret key', kind: 'text', placeholder: 'secret', visibleWhen: rest },
+                { key: 'sessionToken', label: 'S3 session token', kind: 'text', placeholder: 'token', visibleWhen: rest },
+                { key: 'region', label: 'S3 region', kind: 'text', placeholder: 'us-east-1', visibleWhen: rest },
+                { key: 'endpoint', label: 'S3 endpoint', kind: 'text', placeholder: 'minio.internal:9000', visibleWhen: rest, description: 'For MinIO and other S3-compatible stores.' },
+                {
+                    key: 'urlStyle', label: 'S3 URL style', kind: 'select', defaultValue: '', visibleWhen: rest,
+                    options: [
+                        { label: 'Default', value: '' },
+                        { label: 'Path (host/bucket/key)', value: 'path' },
+                        { label: 'Virtual host (bucket.host/key)', value: 'vhost' },
+                    ],
+                },
+                {
+                    key: 'useSsl', label: 'S3 use TLS', kind: 'select', defaultValue: '', visibleWhen: rest,
+                    options: [
+                        { label: 'Default (from the endpoint scheme)', value: '' },
+                        { label: 'Yes', value: 'true' },
+                        { label: 'No (local MinIO)', value: 'false' },
+                    ],
+                },
+            ],
+        },
+    ];
+}
+
 function synthLakehouseSource(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'src.iceberg') return base(comp, icebergSections(false));
     if (comp.id === 'src.ducklake.changes') {
         // DuckLake change-data-feed: reads table_changes() incrementally,
         // tracking the consumed snapshot in workspace state.
@@ -2217,6 +2422,20 @@ function synthLakehouseSource(comp: ComponentDef): ComponentManifest {
 }
 
 function synthLakehouseSink(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'snk.iceberg') return base(comp, icebergSections(true));
+    if (comp.id === 'snk.delta') {
+        // Append-only: DuckDB's delta extension appends to a table but cannot
+        // replace one, so there is no overwrite mode to offer.
+        return base(comp, [
+            {
+                label: 'Table',
+                fields: [
+                    { key: 'path', label: 'Table directory', kind: 'text', required: true, placeholder: '/data/lake/orders', description: 'The Delta table directory, the one holding _delta_log. Local paths for now: a table on object storage is refused until writing there has been tested.' },
+                    { key: 'createIfMissing', label: 'Create the table if missing', kind: 'bool', defaultValue: true, description: 'Creates the table from the input columns and their types on the first run. Off, a missing table is an error, so a mistyped path cannot quietly start a new table.' },
+                ],
+            },
+        ]);
+    }
     if (comp.id === 'snk.ducklake') {
         return base(comp, [
             {
@@ -3024,10 +3243,30 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
                       description: 'Off: watch one object and emit a row when its fingerprint moves. On: list the directory or prefix and emit the files that are new or changed since the last successful run. s3:// and sftp://; HTTP has no standard listing and is refused rather than guessed at.' },
                     { key: 'suffix', label: 'Only names ending with', kind: 'text', placeholder: '.zip',
                       description: 'Listing mode. Skips anything else in the directory.' },
+                    { key: 'include', label: 'Only paths matching', kind: 'text', placeholder: '*.zip, 2026/*/part-*.csv',
+                      description: 'Listing mode. Comma-separated globs, matched against the path below the directory or prefix: * matches any run of characters, including /, and ? one character. Blank takes everything.' },
+                    { key: 'exclude', label: 'Never paths matching', kind: 'text', placeholder: '*.tmp, archive/*',
+                      description: 'Listing mode. Applied after the include filter, so a partial upload or an archive folder never comes out. A filtered file is not part of the collection at all.' },
+                    { key: 'modifiedSince', label: 'Modified since', kind: 'text', placeholder: '2026-09-01  or  2026-09-01T06:00:00Z',
+                      description: 'Listing mode. Only files modified at or after this time, in UTC: a bare date is midnight UTC. A file whose time the server does not report is kept, since nothing says it is outside the window.' },
+                    { key: 'modifiedBefore', label: 'Modified before', kind: 'text', placeholder: '2026-10-01',
+                      description: 'Listing mode. Only files modified before this time, in UTC. With "Modified since" it makes a window that includes its start and excludes its end.' },
                     { key: 'maxEntries', label: 'Max files per run', kind: 'number', defaultValue: 1000,
-                      description: 'Bounds the first run against a directory holding years of drops. What is left over is taken by the next run, oldest first - only what was emitted is recorded as processed.' },
+                      description: 'Bounds the first run against a directory holding years of drops. What is left over is taken by the next run, in the order below - only what was emitted is recorded as processed.' },
+                    { key: 'orderBy', label: 'Take files in', kind: 'select', defaultValue: 'name',
+                      options: [
+                          { label: 'Name order', value: 'name' },
+                          { label: 'Oldest first (modification time)', value: 'modified' },
+                      ],
+                      description: 'The order a capped run works through a backlog in. Name order is oldest first only when the names carry the date, like D20260901.zip. Oldest first goes by each file\'s modification time, the name breaking ties; on S3 it reads the whole prefix to find them, holding only "Max files per run" of them at a time.' },
                     { key: 'trackState', label: 'Remember what was processed', kind: 'bool', defaultValue: true,
                       description: 'Advances only when the whole run succeeds, so a failure downstream re-offers the same files rather than losing them. Off means every run treats everything as changed.' },
+                    { key: 'firstRun', label: 'On the first run', kind: 'select', defaultValue: 'emit_existing',
+                      options: [
+                          { label: 'Emit what is already there (a backfill)', value: 'emit_existing' },
+                          { label: 'Record what is already there, emit only what arrives later', value: 'baseline_existing' },
+                      ],
+                      description: 'What a first run - one with nothing remembered yet - does with what is already there. Emit treats all of it as new, which is a backfill. Record lists all of it, not just "Max files per run", remembers it as already there without claiming it was processed, and emits nothing; later runs emit what is added, and anything already there that is replaced. Needs "Remember what was processed" on.' },
                 ],
             },
             {
@@ -3199,6 +3438,180 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
                 ],
             },
         ]);
+    }
+    if (comp.id === 'src.sharepoint' || comp.id === 'snk.sharepoint') {
+        const isSource = comp.id === 'src.sharepoint';
+        const list = { key: 'mode', equals: 'list' };
+        const file = { key: 'mode', equals: 'file' };
+        const format: Field = {
+            key: 'format',
+            label: 'Format',
+            kind: 'select',
+            defaultValue: '',
+            options: [
+                { label: 'From the file name', value: '' },
+                { label: 'CSV', value: 'csv' },
+                { label: 'TSV', value: 'tsv' },
+                { label: 'Parquet', value: 'parquet' },
+                { label: 'JSON', value: 'json' },
+                { label: 'Excel (.xlsx)', value: 'xlsx' },
+            ],
+            visibleWhen: file,
+        };
+        return base(
+            comp,
+            [
+                {
+                    label: 'SharePoint site',
+                    fields: [
+                        {
+                            key: 'siteUrl',
+                            label: 'Site URL',
+                            kind: 'text',
+                            required: true,
+                            placeholder: 'https://sharepoint.contoso.local/sites/team',
+                            description: 'SharePoint Server on premises (2016, 2019, Subscription Edition), over its REST API.',
+                        },
+                        {
+                            key: 'username',
+                            label: 'User',
+                            kind: 'text',
+                            required: true,
+                            placeholder: 'CONTOSO\\alice',
+                            description: 'Windows authentication (NTLM): DOMAIN\\user or user@domain.',
+                        },
+                        { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
+                    ],
+                },
+                {
+                    label: isSource ? 'Read' : 'Write',
+                    fields: [
+                        {
+                            key: 'mode',
+                            label: isSource ? 'Read from' : 'Write to',
+                            kind: 'select',
+                            defaultValue: 'list',
+                            options: [
+                                { label: isSource ? 'A list (its items as rows)' : 'A list (each row a new item)', value: 'list' },
+                                { label: isSource ? 'A file in a document library' : 'A file in a document library', value: 'file' },
+                            ],
+                        },
+                        // Not `required`: the editor's check does not see visibleWhen, so the field
+                        // the other mode hides would be demanded. The engine names a missing one.
+                        { key: 'listName', label: 'List', kind: 'text', placeholder: 'Orders', visibleWhen: list },
+                        ...(isSource
+                            ? ([
+                                  {
+                                      key: 'select',
+                                      label: 'Columns ($select)',
+                                      kind: 'text',
+                                      placeholder: 'ID,Title,Amount',
+                                      description: 'Internal column names, comma separated. Empty reads every column.',
+                                      visibleWhen: list,
+                                  },
+                                  {
+                                      key: 'filter',
+                                      label: 'Filter ($filter)',
+                                      kind: 'text',
+                                      placeholder: "Region eq 'North'",
+                                      description: 'An OData filter, applied by SharePoint before anything is sent.',
+                                      visibleWhen: list,
+                                  },
+                                  { key: 'pageSize', label: 'Items per page', kind: 'number', defaultValue: 1000, visibleWhen: list },
+                                  {
+                                      key: 'fileUrl',
+                                      label: 'File',
+                                      kind: 'text',
+                                      placeholder: '/sites/team/Shared Documents/orders.csv',
+                                      description: 'Server-relative path of the file.',
+                                      visibleWhen: file,
+                                  },
+                                  format,
+                              ] as Field[])
+                            : ([
+                                  {
+                                      key: 'folderUrl',
+                                      label: 'Folder',
+                                      kind: 'text',
+                                      placeholder: '/sites/team/Shared Documents',
+                                      description: 'Server-relative path of the library folder.',
+                                      visibleWhen: file,
+                                  },
+                                  { key: 'fileName', label: 'File name', kind: 'text', placeholder: 'orders.csv', visibleWhen: file },
+                                  format,
+                                  {
+                                      key: 'overwrite',
+                                      label: 'Replace a file that is already there',
+                                      kind: 'bool',
+                                      defaultValue: true,
+                                      description: 'Off, the run fails rather than replace it. A run whose upstream produced no rows leaves the file as it was.',
+                                      visibleWhen: file,
+                                  },
+                              ] as Field[])),
+                    ],
+                },
+            ],
+            isSource ? 'autodetect' : 'upstream',
+        );
+    }
+    if (comp.id === 'src.access' || comp.id === 'snk.access') {
+        const isSource = comp.id === 'src.access';
+        const filters = [
+            { name: 'Access database', extensions: ['accdb', 'mdb'] },
+            { name: 'All files', extensions: ['*'] },
+        ];
+        return base(
+            comp,
+            [
+                {
+                    label: 'Access database',
+                    fields: [
+                        {
+                            key: 'path',
+                            label: 'Database file',
+                            kind: isSource ? 'file-path' : 'save-path',
+                            required: true,
+                            filters,
+                            description: isSource
+                                ? 'An .accdb or .mdb file. On Windows it is read through the Microsoft Access ODBC driver (installed with Office, or the free Access Database Engine). On Linux and macOS it is read through mdbtools, one table at a time.'
+                                : 'An .accdb or .mdb file; one that is not there is created. Writing needs Windows and the Microsoft Access ODBC driver (installed with Office, or the free Access Database Engine).',
+                        },
+                        { key: 'password', label: 'Database password', kind: 'text', placeholder: '••••••••' },
+                    ],
+                },
+                {
+                    label: isSource ? 'Read' : 'Write',
+                    fields: isSource
+                        ? ([
+                              { key: 'tableName', label: 'Table', kind: 'text', placeholder: 'Customers' },
+                              {
+                                  key: 'query',
+                                  label: 'Or a query in Access SQL',
+                                  kind: 'expression',
+                                  rows: 4,
+                                  placeholder: 'SELECT * FROM [Customers] WHERE [Country] = \'UK\'',
+                                  description: 'Windows only: a query needs the Access ODBC driver. Elsewhere name a table.',
+                              },
+                              { key: 'batchSize', label: 'Fetch batch rows', kind: 'number', defaultValue: 5000 },
+                          ] as Field[])
+                        : ([
+                              { key: 'tableName', label: 'Table', kind: 'text', required: true, placeholder: 'Customers' },
+                              {
+                                  key: 'mode',
+                                  label: 'Write mode',
+                                  kind: 'select',
+                                  defaultValue: 'append',
+                                  options: [
+                                      { value: 'append', label: 'Append (create if missing)' },
+                                      { value: 'overwrite', label: 'Overwrite (clear first)' },
+                                  ],
+                                  description: 'A run whose upstream produced no rows leaves the table as it was, in either mode.',
+                              },
+                          ] as Field[]),
+                },
+            ],
+            isSource ? 'autodetect' : 'upstream',
+        );
     }
     if (comp.id === 'src.db2' || comp.id === 'snk.db2') {
         const isSource = comp.id === 'src.db2';
@@ -3538,7 +3951,7 @@ function synthDbSink(comp: ComponentDef): ComponentManifest {
                     { key: 'encrypt', label: 'Encrypt connection', kind: 'bool', defaultValue: true,
                       description: 'On by default. Uncheck for legacy servers (SQL Server 2014 and older) that only speak old TLS and fail the handshake; the connection then runs unencrypted.' },
                     { key: 'bulk', label: 'Bulk write (fast)', kind: 'bool', defaultValue: true,
-                      description: 'Fast bulk load via the DuckDB mssql extension (TDS COPY, ~1.2M rows/s). Turn off to use the row-by-row driver (works fully offline; no extension fetch).' },
+                      description: 'Fast bulk load via the DuckDB mssql extension (TDS COPY, ~1.2M rows/s) for append and overwrite. An upsert always goes through the driver as one MERGE, because the extension cannot update a table that has no primary key. Turn off to use the row-by-row driver for every write (works fully offline; no extension fetch).' },
                 ],
             },
             {
@@ -4158,9 +4571,7 @@ function synthStorageSource(comp: ComponentDef): ComponentManifest {
         {
             label: 'Credentials',
             fields: [
-                { key: 'accessKey', label: 'Access key', kind: 'text' },
-                { key: 'secretKey', label: 'Secret key', kind: 'text', placeholder: '••••••••' },
-                { key: 'sessionToken', label: 'Session token', kind: 'text' },
+                ...storageAuthFields(comp.id, true),
                 {
                     key: 'connectionRef',
                     label: 'Or use saved connection',
@@ -4238,8 +4649,7 @@ function synthStorageSink(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Credentials',
                 fields: [
-                    { key: 'accessKey', label: 'Access key', kind: 'text' },
-                    { key: 'secretKey', label: 'Secret key', kind: 'text', placeholder: '••••••••' },
+                    ...storageAuthFields(comp.id, false),
                     {
                         key: 'connectionRef',
                         label: 'Or use saved connection',
@@ -4806,8 +5216,9 @@ function synthApiSource(comp: ComponentDef): ComponentManifest {
                           options: [
                               { label: 'JSON', value: 'json' },
                               { label: 'XML', value: 'xml' },
+                              { label: 'Server-sent events', value: 'sse' },
                           ],
-                          description: 'Pick XML for an API that answers in XML rather than JSON.',
+                          description: 'Pick XML for an API that answers in XML rather than JSON. Server-sent events reads each event\'s data: lines as one JSON document and applies the response path to each; a response labelled text/event-stream is read that way under JSON too.',
                       }] as Field[])
                     : []),
                 ...(comp.id === 'src.soap'
@@ -7118,6 +7529,15 @@ function synthPipelineControl(comp: ComponentDef): ComponentManifest {
                         description: 'Off, a child runs for its side effects and hands nothing back. On, the parent passes it a handoff file as ${DUCKLE_RETURN} and reads the rows the child writes there. The child always runs to completion either way.',
                     },
                     {
+                        // The other direction of the same handoff. With both on,
+                        // a child is a reusable block: rows in, rows out.
+                        key: 'passesRows',
+                        label: 'Pass this node\'s input rows to the child',
+                        kind: 'bool',
+                        defaultValue: false,
+                        description: 'On, the rows arriving at this node are written to a handoff file the child reads as ${DUCKLE_INPUT} (for example a Parquet source with path ${DUCKLE_INPUT}). Needs an input connected. With "Take the rows the child returns" as well, the child works as a reusable transform.',
+                    },
+                    {
                         key: isJob ? 'contextVariables' : 'parameters',
                         label: isJob ? 'Context variables' : 'Parameters',
                         kind: 'key-value',
@@ -7291,7 +7711,7 @@ function synthLoggingControl(comp: ComponentDef): ComponentManifest {
                         kind: 'text',
                         required: true,
                         placeholder: 'Rejected rows present - failing the run',
-                        description: 'Use {rows} for the upstream row count.',
+                        description: 'Use {rows} for the upstream row count, and {column} for that column of the first input row, e.g. {reason}. A name that is not a column stays as typed.',
                     },
                     {
                         key: 'condition',
@@ -8793,10 +9213,21 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
                     // A `strategy` select (sentence / recursive / semantic) was here.
                     // AiChunkSpec has no strategy member and the arm never looks for
                     // one - the splitter is fixed-size only.
-                    { key: 'chunkSize', label: 'Chunk size (tokens)', kind: 'integer', defaultValue: 512 },
+                    // Characters, not tokens: `chunk_text` windows `text.chars()`
+                    // and nothing in the workspace tokenizes. The defaults are the
+                    // ENGINE's own fallbacks, because a defaultValue is only shown
+                    // and never written into the node, so an untouched node ran
+                    // 1000/100 while the form displayed 512/64.
+                    {
+                        key: 'chunkSize',
+                        label: 'Chunk size (characters)',
+                        kind: 'integer',
+                        defaultValue: 1000,
+                        description: 'Characters, not tokens - the splitter is a plain character window. English runs about 4 characters per token, so 1000 characters is roughly 250 tokens.',
+                    },
                     // The engine reads `chunkOverlap`, which is also the name used
                     // everywhere else; `overlap` reached nothing.
-                    { key: 'chunkOverlap', label: 'Overlap (tokens)', kind: 'integer', defaultValue: 64 },
+                    { key: 'chunkOverlap', label: 'Overlap (characters)', kind: 'integer', defaultValue: 100 },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'chunk' },
                     // The arm reads `mode` and it decides the SHAPE of the
                     // output, which every downstream node has to match. With
@@ -8864,10 +9295,21 @@ function synthAiTransform(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Classify',
                 fields: [
+                    {
+                        key: 'provider',
+                        label: 'Decision engine',
+                        kind: 'select',
+                        defaultValue: 'openai',
+                        options: [
+                            { label: 'Chat model (OpenAI-compatible)', value: 'openai' },
+                            { label: 'Jev evaluation model (Vercel AI Gateway)', value: 'jev' },
+                        ],
+                        description: 'A chat model is asked for the label and its prose is matched back to your list, so an off-list reply becomes UNKNOWN. Jev is asked a typed choice question whose options ARE your labels, so it cannot answer off-list, and it also writes <output column>_confidence with the probability it gave the label it picked.',
+                    },
                     { key: 'inputColumn', label: 'Text column', kind: 'column', required: true },
                     { key: 'categories', label: 'Labels', kind: 'text', required: true, placeholder: 'positive, neutral, negative', description: 'Comma-separated candidate labels.' },
-                    { key: 'model', label: 'Model', kind: 'text', defaultValue: 'gpt-4o-mini' },
-                    { key: 'apiKey', label: 'API key', kind: 'text', placeholder: '••••••••' },
+                    { key: 'model', label: 'Model', kind: 'text', defaultValue: 'gpt-4o-mini', description: 'Left empty, a chat provider uses gpt-4o-mini and Jev uses typesafe-ai/jev.' },
+                    { key: 'apiKey', label: 'API key', kind: 'text', placeholder: '••••••••' , description: 'For Jev this is a Vercel AI Gateway API key, sent as a bearer token.' },
                     { key: 'outputColumn', label: 'Output column', kind: 'text', defaultValue: 'category' },
                     ...aiCustomEndpointFields(),
                     ...aiThroughputFields(),
@@ -9400,6 +9842,9 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
         const m = synthWrongFamilyForm(comp);
         if (m) return m;
     }
+    // Sits in the databases group, whose generic synth would give it a query
+    // form; routed by id ahead of the group checks.
+    if (comp.id === 'src.postgres.cdc') return synthPostgresCdc(comp);
     if (comp.id === 'src.model') return synthModelSource(comp);
     if (comp.id === 'snk.model') return synthModelSink(comp);
     if (groupId === 'src.files') return synthFileSource(comp);

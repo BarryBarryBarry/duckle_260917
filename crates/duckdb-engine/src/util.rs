@@ -52,15 +52,18 @@ pub fn is_secret_prop_key(key: &str) -> bool {
     if NAMES_SOMETHING_PUBLIC.contains(&k.as_str()) {
         return false;
     }
-    [
-        "password", "passwd", "passphrase", "secret", "token", "apikey", "api_key",
-        "privatekey", "private_key", "accesskey", "access_key",
-        "clientsecret", "client_secret", "connectionstring", "connection_string",
-        "sas", "credential",
-    ]
-    .iter()
-    .any(|needle| k.contains(needle))
+    SECRET_NEEDLES.iter().any(|needle| k.contains(needle))
 }
+
+/// What a lowercased property key contains when it holds a credential. Public
+/// so the build bundler refines this list rather than keeping its own copy:
+/// its copy had lost `passphrase`, and bundled an SSH key's passphrase as typed.
+pub const SECRET_NEEDLES: [&str; 18] = [
+    "password", "passwd", "passphrase", "secret", "token", "apikey", "api_key",
+    "privatekey", "private_key", "accesskey", "access_key", "accountkey",
+    "clientsecret", "client_secret", "connectionstring", "connection_string",
+    "sas", "credential",
+];
 
 /// Every secret-keyed property in a pipeline whose value is a literal rather than a
 /// placeholder, named as `node label / property key`.
@@ -314,7 +317,7 @@ fn replace_delimited(haystack: &str, needle: &str, placeholder: &str) -> String 
 /// complete + self-documenting instead of emitting a bare empty stage.
 pub(crate) fn procedural_note(s: &plan::Stage) -> String {
     let cid = s.component_id.as_str();
-    let body = if let Some(RuntimeSpec::RunJob { path, vars }) = s.runtime.as_ref() {
+    let body = if let Some(RuntimeSpec::RunJob { path, vars, .. }) = s.runtime.as_ref() {
         if vars.is_empty() {
             format!("control step: runs sub-pipeline '{}' as a side effect", path)
         } else {

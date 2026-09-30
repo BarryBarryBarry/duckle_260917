@@ -15,6 +15,7 @@
 //! Execution takes the runner as a closure. Deciding what runs next is the part worth
 //! testing, and it should be testable without a DuckDB binary, a workspace or a clock.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,34 @@ pub struct Step {
     /// It only decides whether the steps after it run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continue_on_failure: Option<bool>,
+    /// #317: parameter values for each pipeline in this step, keyed the way
+    /// `pipelines` names it. Each pipeline's own contract checks its own values,
+    /// so two pipelines with different parameters can share a step - which one
+    /// plan-wide set could not do, since a declared contract refuses a name it
+    /// does not declare.
+    ///
+    /// Absent means "this save did not say": the values already stored for the
+    /// step's pipelines are kept (see [`keep_unmentioned_values`]). Empty clears.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<BTreeMap<String, BTreeMap<String, String>>>,
+}
+
+impl Step {
+    /// The values this step gives `pipeline`, however either of them spelled it.
+    pub fn values_for(&self, pipeline: &str) -> BTreeMap<String, String> {
+        let Some(params) = &self.params else {
+            return BTreeMap::new();
+        };
+        if let Some(values) = params.get(pipeline) {
+            return values.clone();
+        }
+        let id = step_pipeline_id(pipeline);
+        params
+            .iter()
+            .find(|(named, _)| step_pipeline_id(named) == id)
+            .map(|(_, values)| values.clone())
+            .unwrap_or_default()
+    }
 }
 
 /// Several pipelines, in an order somebody chose.
@@ -101,8 +130,117 @@ impl Plan {
                 }
             }
         }
+        // #317: values for a pipeline the step does not run would never be used -
+        // a typo, or a pipeline taken out and its values left behind.
+        for (i, step) in self.steps.iter().enumerate() {
+            for named in step.params.iter().flat_map(|p| p.keys()) {
+                let id = step_pipeline_id(named);
+                if !step.pipelines.iter().any(|p| step_pipeline_id(p) == id) {
+                    out.push(format!(
+                        "step {} has parameter values for {}, which it does not run",
+                        i + 1,
+                        named
+                    ));
+                }
+            }
+        }
         out
     }
+}
+
+/// #317: step values the pipelines' own contracts would refuse, found when the
+/// plan is saved rather than when a scheduled run fails in the night.
+///
+/// The same check a run makes, on the same boundary - except a missing required
+/// value, which a run started by hand can still supply. Reads only the pipelines
+/// that are given values.
+pub fn contract_problems(workspace: &Path, plan: &Plan) -> Vec<String> {
+    let mut out = Vec::new();
+    for (i, step) in plan.steps.iter().enumerate() {
+        for (named, values) in step.params.iter().flatten() {
+            if values.is_empty() {
+                continue;
+            }
+            let file = workspace.join(step_pipeline_file(named));
+            let doc = std::fs::read_to_string(&file)
+                .map_err(|e| e.to_string())
+                .and_then(|text| {
+                    serde_json::from_str::<crate::PipelineDoc>(crate::format::strip_bom(&text))
+                        .map_err(|e| e.to_string())
+                });
+            let doc = match doc {
+                Ok(doc) => doc,
+                Err(e) => {
+                    out.push(format!(
+                        "step {}: cannot read {} to check its values: {}",
+                        i + 1,
+                        named,
+                        e
+                    ));
+                    continue;
+                }
+            };
+            let values: std::collections::HashMap<String, String> =
+                values.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            if let Err(errors) = crate::context::validate_params(&doc, &values) {
+                for e in errors.into_iter().filter(|e| e.code != "param:missing") {
+                    out.push(format!("step {}, {}: {}", i + 1, named, e.message));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// #317: a step that says nothing about values keeps the ones stored for its
+/// pipelines, however the stored plan grouped them.
+///
+/// The console's plan form does not show parameter values, and saving it must
+/// not wipe what the desktop editor or an API client bound. An empty set still
+/// clears, and a pipeline taken out of the step takes its values with it.
+pub fn carry_values(plan: &mut Plan, stored: Option<&Plan>) {
+    let Some(stored) = stored else { return };
+    let mut by_pipeline: BTreeMap<&str, &BTreeMap<String, String>> = BTreeMap::new();
+    for (named, values) in stored.steps.iter().flat_map(|s| s.params.iter().flatten()) {
+        by_pipeline.entry(step_pipeline_id(named)).or_insert(values);
+    }
+    for step in plan.steps.iter_mut().filter(|s| s.params.is_none()) {
+        let carried: BTreeMap<String, BTreeMap<String, String>> = step
+            .pipelines
+            .iter()
+            .filter_map(|p| by_pipeline.get(step_pipeline_id(p)).map(|v| (p.clone(), (*v).clone())))
+            .collect();
+        if !carried.is_empty() {
+            step.params = Some(carried);
+        }
+    }
+}
+
+/// Everything a save does before a plan is written, in one place so the desktop
+/// app, the console's form and the web editor cannot disagree (#317): the
+/// structural check, the stored values kept for a form that does not show them,
+/// and those values against each pipeline's own contract.
+pub fn prepare_for_save(workspace: &Path, plan: &mut Plan) -> Result<(), String> {
+    let problems = plan.problems();
+    if !problems.is_empty() {
+        return Err(problems.join("; "));
+    }
+    keep_unmentioned_values(workspace, plan)?;
+    let problems = contract_problems(workspace, plan);
+    if !problems.is_empty() {
+        return Err(problems.join("; "));
+    }
+    Ok(())
+}
+
+/// [`carry_values`] against the plan as it is stored now.
+pub fn keep_unmentioned_values(workspace: &Path, plan: &mut Plan) -> Result<(), String> {
+    if plan.steps.iter().all(|s| s.params.is_some()) {
+        return Ok(());
+    }
+    let stored = load(workspace)?.into_iter().find(|p| p.id == plan.id);
+    carry_values(plan, stored.as_ref());
+    Ok(())
 }
 
 /// The bare pipeline id a plan step names, however the step was spelled.
@@ -177,9 +315,12 @@ impl PlanRun {
 /// Pipelines within a step are handed over together and in order, which is the contract the
 /// caller sees. Whether the caller actually runs them at the same time is its business:
 /// this decides what may overlap, not how.
+/// Each pipeline is handed the values its step binds for it (#317), so every
+/// caller has to decide what to do with them - a runner that ignored them would
+/// be the same gap as a surface that skipped the parameter boundary.
 pub fn execute<F>(plan: &Plan, mut run: F) -> PlanRun
 where
-    F: FnMut(&str) -> Result<(), String>,
+    F: FnMut(&str, &BTreeMap<String, String>) -> Result<(), String>,
 {
     let mut out = PlanRun {
         plan_id: plan.id.clone(),
@@ -201,7 +342,7 @@ where
                 });
                 continue;
             }
-            match run(pipeline) {
+            match run(pipeline, &step.values_for(pipeline)) {
                 Ok(()) => results.push(PipelineOutcome {
                     pipeline: pipeline.clone(),
                     status: "ok".into(),
@@ -274,9 +415,9 @@ mod tests {
             name: "Nightly load".into(),
             stop_on_failure: stop,
             steps: vec![
-                Step { name: "Extract".into(), pipelines: vec!["orders".into(), "customers".into()], continue_on_failure: None },
-                Step { name: "Transform".into(), pipelines: vec!["dbt".into()], continue_on_failure: None },
-                Step { name: "Publish".into(), pipelines: vec!["export".into()], continue_on_failure: None },
+                Step { name: "Extract".into(), pipelines: vec!["orders".into(), "customers".into()], continue_on_failure: None, params: None },
+                Step { name: "Transform".into(), pipelines: vec!["dbt".into()], continue_on_failure: None, params: None },
+                Step { name: "Publish".into(), pipelines: vec!["export".into()], continue_on_failure: None, params: None },
             ],
         }
     }
@@ -284,7 +425,7 @@ mod tests {
     #[test]
     fn a_plan_runs_its_steps_in_order() {
         let mut seen = Vec::new();
-        let out = execute(&plan(true), |p| {
+        let out = execute(&plan(true), |p, _| {
             seen.push(p.to_string());
             Ok(())
         });
@@ -298,7 +439,7 @@ mod tests {
     #[test]
     fn a_failure_stops_the_steps_after_it() {
         let mut seen = Vec::new();
-        let out = execute(&plan(true), |p| {
+        let out = execute(&plan(true), |p, _| {
             seen.push(p.to_string());
             if p == "customers" {
                 return Err("connection refused".into());
@@ -323,7 +464,7 @@ mod tests {
     #[test]
     fn a_failure_does_not_cancel_the_rest_of_its_own_step() {
         let mut seen = Vec::new();
-        execute(&plan(true), |p| {
+        execute(&plan(true), |p, _| {
             seen.push(p.to_string());
             if p == "orders" {
                 return Err("nope".into());
@@ -342,7 +483,7 @@ mod tests {
         p.steps[1].continue_on_failure = Some(true);
 
         let mut seen = Vec::new();
-        let out = execute(&p, |name| {
+        let out = execute(&p, |name, _| {
             seen.push(name.to_string());
             if name == "dbt" { Err("boom".into()) } else { Ok(()) }
         });
@@ -365,7 +506,7 @@ mod tests {
         p.steps[1].continue_on_failure = Some(true);
 
         let mut seen = Vec::new();
-        let out = execute(&p, |name| {
+        let out = execute(&p, |name, _| {
             seen.push(name.to_string());
             if name == "orders" { Err("boom".into()) } else { Ok(()) }
         });
@@ -378,7 +519,7 @@ mod tests {
     #[test]
     fn a_plan_can_be_told_to_carry_on() {
         let mut seen = Vec::new();
-        let out = execute(&plan(false), |p| {
+        let out = execute(&plan(false), |p, _| {
             seen.push(p.to_string());
             if p == "customers" {
                 return Err("nope".into());
@@ -387,6 +528,156 @@ mod tests {
         });
         assert_eq!(seen, ["orders", "customers", "dbt", "export"]);
         assert!(out.failed(), "carrying on does not make a failed plan a good one");
+    }
+
+    /// #317: each pipeline in a step is handed its OWN values, so two pipelines
+    /// with different contracts can share a step. One plan-wide set would hand
+    /// every pipeline every name, and a declared contract refuses a name it does
+    /// not declare.
+    #[test]
+    fn each_pipeline_in_a_step_is_handed_its_own_values() {
+        let mut p = plan(true);
+        p.steps[0].params = Some(BTreeMap::from([
+            ("orders".to_string(), BTreeMap::from([("region".to_string(), "BE".to_string())])),
+            ("customers".to_string(), BTreeMap::from([("level".to_string(), "full".to_string())])),
+        ]));
+        let mut seen: Vec<(String, BTreeMap<String, String>)> = Vec::new();
+        let out = execute(&p, |pipeline, values| {
+            seen.push((pipeline.to_string(), values.clone()));
+            Ok(())
+        });
+        assert_eq!(out.status, "ok");
+        assert_eq!(seen[0].0, "orders");
+        assert_eq!(seen[0].1.get("region").map(String::as_str), Some("BE"));
+        assert!(!seen[0].1.contains_key("level"), "orders was handed customers' values: {seen:?}");
+        assert_eq!(seen[1].1.get("level").map(String::as_str), Some("full"));
+        assert!(seen[2].1.is_empty() && seen[3].1.is_empty(), "no values, none handed: {seen:?}");
+    }
+
+    /// A step may name a pipeline as a bare id or as a workspace file, and its
+    /// values are found either way - the same tolerance the step itself gets.
+    #[test]
+    fn values_are_found_however_the_step_spells_the_pipeline() {
+        let mut p = plan(true);
+        p.steps[1].pipelines = vec!["pipelines/dbt.json".into()];
+        p.steps[1].params = Some(BTreeMap::from([(
+            "dbt".to_string(),
+            BTreeMap::from([("target".to_string(), "prod".to_string())]),
+        )]));
+        let mut handed = BTreeMap::new();
+        execute(&p, |pipeline, values| {
+            if pipeline.contains("dbt") {
+                handed = values.clone();
+            }
+            Ok(())
+        });
+        assert_eq!(handed.get("target").map(String::as_str), Some("prod"));
+    }
+
+    /// Values for a pipeline the step does not run would never be used: a typo
+    /// or a stale edit, refused before the plan is saved rather than ignored at
+    /// run time.
+    #[test]
+    fn values_for_a_pipeline_the_step_does_not_run_are_refused() {
+        let mut p = plan(true);
+        p.steps[0].params = Some(BTreeMap::from([(
+            "ordrs".to_string(),
+            BTreeMap::from([("region".to_string(), "BE".to_string())]),
+        )]));
+        let problems = p.problems();
+        assert!(problems.iter().any(|m| m.contains("ordrs")), "{problems:?}");
+        p.steps[0].params = Some(BTreeMap::from([(
+            "orders".to_string(),
+            BTreeMap::from([("region".to_string(), "BE".to_string())]),
+        )]));
+        assert!(p.problems().is_empty(), "{:?}", p.problems());
+    }
+
+    /// The console's plan form does not show values, and saving it must not wipe
+    /// them. A step that says nothing keeps what is stored for its pipelines; an
+    /// empty set clears; a pipeline taken out of the step takes its values with it.
+    #[test]
+    fn a_save_that_says_nothing_about_values_keeps_the_stored_ones() {
+        let mut stored = plan(true);
+        stored.steps[0].params = Some(BTreeMap::from([
+            ("orders".to_string(), BTreeMap::from([("region".to_string(), "BE".to_string())])),
+            ("customers".to_string(), BTreeMap::from([("level".to_string(), "full".to_string())])),
+        ]));
+
+        // The console's form: the same steps, no values, customers moved out.
+        let mut saved = plan(true);
+        saved.steps[0].pipelines = vec!["pipelines/orders.json".into()];
+        carry_values(&mut saved, Some(&stored));
+        assert_eq!(saved.steps[0].values_for("orders").get("region").map(String::as_str), Some("BE"));
+        assert!(saved.problems().is_empty(), "a carried value must fit the step: {:?}", saved.problems());
+        assert!(saved.steps[0].values_for("customers").is_empty(), "customers left the step");
+
+        // An editor that says "no values" means it.
+        let mut cleared = plan(true);
+        cleared.steps[0].params = Some(BTreeMap::new());
+        carry_values(&mut cleared, Some(&stored));
+        assert!(cleared.steps[0].values_for("orders").is_empty());
+    }
+
+    /// #317: a value the pipeline's own contract refuses is refused when the plan
+    /// is saved - the same check the run makes, on the same boundary. A missing
+    /// required value is not, since a run started by hand can still supply it.
+    #[test]
+    fn step_values_are_checked_against_each_pipelines_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(
+            ws.join("pipelines").join("orders.json"),
+            r#"{"parameters":{"region":{"type":"string","enum":["eu","us"]},"day":{"type":"date","required":true}},"nodes":[],"edges":[]}"#,
+        )
+        .unwrap();
+        let with = |values: &[(&str, &str)]| {
+            let mut p = plan(true);
+            p.steps[0].params = Some(BTreeMap::from([(
+                "pipelines/orders.json".to_string(),
+                values.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            )]));
+            contract_problems(ws, &p)
+        };
+        let typo = with(&[("regin", "eu")]);
+        assert!(typo.iter().any(|m| m.contains("regin")), "an unknown name: {typo:?}");
+        let off_list = with(&[("region", "mars")]);
+        assert!(off_list.iter().any(|m| m.contains("mars") || m.contains("region")), "{off_list:?}");
+        assert!(with(&[("region", "us")]).is_empty(), "a good value, day still to come: {:?}", with(&[("region", "us")]));
+    }
+
+    /// The three parts of a save, together and in order: a stored value is kept
+    /// by a save that does not mention it, and a value the contract refuses is
+    /// refused - whichever of the two surfaces wrote it.
+    #[test]
+    fn a_save_keeps_stored_values_and_refuses_what_the_contract_refuses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(
+            ws.join("pipelines").join("orders.json"),
+            r#"{"parameters":{"region":{"type":"string","enum":["eu","us"]}},"nodes":[],"edges":[]}"#,
+        )
+        .unwrap();
+        let mut stored = plan(true);
+        stored.steps[0].params = Some(BTreeMap::from([(
+            "orders".to_string(),
+            BTreeMap::from([("region".to_string(), "us".to_string())]),
+        )]));
+        update(ws, |list| list.push(stored)).unwrap();
+
+        let mut from_console = plan(true);
+        prepare_for_save(ws, &mut from_console).expect("a save without values is fine");
+        assert_eq!(from_console.steps[0].values_for("orders").get("region").map(String::as_str), Some("us"));
+
+        let mut typo = plan(true);
+        typo.steps[0].params = Some(BTreeMap::from([(
+            "orders".to_string(),
+            BTreeMap::from([("region".to_string(), "mars".to_string())]),
+        )]));
+        let e = prepare_for_save(ws, &mut typo).expect_err("mars is not a region");
+        assert!(e.contains("region"), "{e}");
     }
 
     #[test]
@@ -400,7 +691,7 @@ mod tests {
             id: "x".into(),
             name: String::new(),
             stop_on_failure: true,
-            steps: vec![Step { name: "s".into(), pipelines: vec!["a".into(), "a".into()], continue_on_failure: None }],
+            steps: vec![Step { name: "s".into(), pipelines: vec!["a".into(), "a".into()], continue_on_failure: None, params: None }],
         };
         assert!(
             dupe.problems().iter().any(|p| p.contains("twice")),

@@ -10,6 +10,11 @@ import {
     type PlanRun,
     type PlanStep,
 } from '../tauri-bridge';
+import type { ParamSpec } from '../run-resolve';
+import { ParamControl, fromParamInput, toParamInput } from './RunParametersModal';
+
+/** A workspace pipeline, with the parameters it declares (#317). */
+type PipelineChoice = { id: string; name: string; declared?: Record<string, ParamSpec> };
 
 /**
  * Author a plan: several pipelines in the order they have to run.
@@ -28,7 +33,7 @@ type Props = {
     /** Where plans.json lives. Null while no workspace is open. */
     workspacePath: string | null;
     /** The pipelines in this workspace, offered when building a step. */
-    pipelines: { id: string; name: string }[];
+    pipelines: PipelineChoice[];
     onClose: () => void;
 };
 
@@ -48,6 +53,23 @@ function stepLabel(step: string): string {
     return step
         .replace(/^pipelines[/\\]/, '')
         .replace(/\.json$/, '');
+}
+
+/** The values a step binds for one of its pipelines, however either spelled it. */
+function stepValues(step: PlanStep, pipeline: string): Record<string, string> {
+    const params = step.params ?? {};
+    if (params[pipeline]) return params[pipeline];
+    const key = Object.keys(params).find(k => stepLabel(k) === stepLabel(pipeline));
+    return key ? params[key] : {};
+}
+
+/** The step's values without any entry for `pipeline`, however it was spelled. */
+function withoutValuesFor(step: PlanStep, pipeline: string): Record<string, Record<string, string>> {
+    const params = { ...(step.params ?? {}) };
+    for (const k of Object.keys(params)) {
+        if (stepLabel(k) === stepLabel(pipeline)) delete params[k];
+    }
+    return params;
 }
 
 /**
@@ -257,6 +279,7 @@ export default function PlansModal({ workspacePath, pipelines, onClose }: Props)
                                         <PlanCard
                                             key={plan.id}
                                             plan={plan}
+                                            pipelines={pipelines}
                                             busy={busy}
                                             run={lastRun && lastRun.planId === plan.id ? lastRun : null}
                                             onRun={() => run(plan.id)}
@@ -290,6 +313,7 @@ export default function PlansModal({ workspacePath, pipelines, onClose }: Props)
 
 function PlanCard({
     plan,
+    pipelines,
     busy,
     run,
     onRun,
@@ -297,6 +321,7 @@ function PlanCard({
     onDelete,
 }: {
     plan: Plan;
+    pipelines: PipelineChoice[];
     busy: boolean;
     run: PlanRun | null;
     onRun: () => void;
@@ -340,11 +365,22 @@ function PlanCard({
                         {i > 0 ? <ArrowRight size={13} className="plans-arrow" /> : null}
                         <div className="plans-step-box">
                             <div className="plans-step-name">{step.name || `Step ${i + 1}`}</div>
-                            {step.pipelines.map(p => (
-                                <div className="plans-step-pipe" key={p}>
-                                    {stepLabel(p)}
-                                </div>
-                            ))}
+                            {step.pipelines.map(p => {
+                                const declared = pipelines.find(c => c.id === stepLabel(p))?.declared ?? {};
+                                const bound = Object.entries(stepValues(step, p));
+                                return (
+                                    <div className="plans-step-pipe" key={p}>
+                                        {stepLabel(p)}
+                                        {bound.length > 0 ? (
+                                            <div className="plans-step-values">
+                                                {bound
+                                                    .map(([k, v]) => `${k}=${declared[k]?.type === 'secret' ? '***' : v}`)
+                                                    .join(', ')}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                );
+                            })}
                         </div>
                     </div>
                 ))}
@@ -394,7 +430,7 @@ function PlanForm({
 }: {
     draft: Plan;
     replacing: boolean;
-    pipelines: { id: string; name: string }[];
+    pipelines: PipelineChoice[];
     busy: boolean;
     error: string | null;
     onChange: (p: Plan) => void;
@@ -405,6 +441,21 @@ function PlanForm({
         const steps = draft.steps.slice();
         steps[i] = step;
         onChange({ ...draft, steps });
+    };
+
+    const declaredFor = (pipeline: string): Record<string, ParamSpec> =>
+        pipelines.find(p => p.id === stepLabel(pipeline))?.declared ?? {};
+
+    // #317: stored as the engine takes it, keyed the way the step names the
+    // pipeline. A blank value is dropped, so the pipeline's default applies.
+    const setValue = (i: number, pipeline: string, name: string, input: string, spec: ParamSpec | undefined) => {
+        const step = draft.steps[i];
+        const values = { ...stepValues(step, pipeline) };
+        if (input.trim()) values[name] = spec ? fromParamInput(spec, input.trim()) : input.trim();
+        else delete values[name];
+        const params = withoutValuesFor(step, pipeline);
+        if (Object.keys(values).length > 0) params[pipeline] = values;
+        setStep(i, { ...step, params });
     };
 
     const addPipeline = (i: number, pipelineId: string) => {
@@ -485,24 +536,69 @@ function PlanForm({
                                 time.
                             </div>
                         ) : (
-                            step.pipelines.map(p => (
-                                <div className="plans-step-row" key={p}>
-                                    <span>{stepLabel(p)}</span>
-                                    <button
-                                        type="button"
-                                        className="btn btn-icon btn-icon-danger"
-                                        onClick={() =>
-                                            setStep(i, {
-                                                ...step,
-                                                pipelines: step.pipelines.filter(x => x !== p),
-                                            })
-                                        }
-                                        aria-label={`Remove ${stepLabel(p)} from step ${i + 1}`}
-                                    >
-                                        <Trash2 size={12} />
-                                    </button>
-                                </div>
-                            ))
+                            step.pipelines.map(p => {
+                                const declared = declaredFor(p);
+                                const values = stepValues(step, p);
+                                // A value for a name the pipeline no longer declares is
+                                // refused on save; shown so it can be taken out.
+                                const stale = Object.keys(values).filter(name => !declared[name]);
+                                return (
+                                    <div className="plans-step-pipeline" key={p}>
+                                        <div className="plans-step-row">
+                                            <span>{stepLabel(p)}</span>
+                                            <button
+                                                type="button"
+                                                className="btn btn-icon btn-icon-danger"
+                                                onClick={() =>
+                                                    setStep(i, {
+                                                        ...step,
+                                                        pipelines: step.pipelines.filter(x => x !== p),
+                                                        // Its values leave with it.
+                                                        ...(step.params ? { params: withoutValuesFor(step, p) } : {}),
+                                                    })
+                                                }
+                                                aria-label={`Remove ${stepLabel(p)} from step ${i + 1}`}
+                                            >
+                                                <Trash2 size={12} />
+                                            </button>
+                                        </div>
+                                        {Object.keys(declared).length > 0 || stale.length > 0 ? (
+                                            <div className="plans-step-params">
+                                                {Object.entries(declared).map(([name, spec]) => (
+                                                    <label key={name} className="run-param">
+                                                        <span className="run-param-name">
+                                                            {name}
+                                                            {spec.required ? <span className="run-param-required"> *</span> : null}
+                                                        </span>
+                                                        <ParamControl
+                                                            spec={spec}
+                                                            value={toParamInput(spec, values[name] ?? '')}
+                                                            onChange={v => setValue(i, p, name, v, spec)}
+                                                            autoFocus={false}
+                                                        />
+                                                    </label>
+                                                ))}
+                                                {stale.map(name => (
+                                                    <div key={name} className="plans-step-stale">
+                                                        <span>
+                                                            {name}={values[name]}: {stepLabel(p)} no longer declares{' '}
+                                                            {name}
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-icon btn-icon-danger"
+                                                            onClick={() => setValue(i, p, name, '', undefined)}
+                                                            aria-label={`Remove the value for ${name}`}
+                                                        >
+                                                            <Trash2 size={12} />
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : null}
+                                    </div>
+                                );
+                            })
                         )}
 
                         <select

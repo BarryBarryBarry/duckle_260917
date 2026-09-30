@@ -117,12 +117,15 @@ jobs:
             unixodbc-dev libltdl-dev
           # libltdl-dev provides libltdl.a, needed alongside unixodbc-dev's
           # libodbc.a/libodbcinst.a for the static unixODBC link on Linux (#131).
+          # mdbtools: how src.access reads an Access file off Windows, so
+          # tests/access_mdbtools.rs runs here instead of skipping.
+          sudo apt-get install -y mdbtools
 
       - name: Install DuckDB CLI (for engine tests)
         shell: bash
         run: |
           set -e
-          ver=1.5.4
+          ver=1.5.5
           case "$RUNNER_OS" in
             Linux)   asset=duckdb_cli-linux-amd64.zip;  exe=duckdb ;;
             Windows) asset=duckdb_cli-windows-amd64.zip; exe=duckdb.exe ;;
@@ -165,6 +168,45 @@ jobs:
             cp target/debug/duckle-runner apps/desktop/bin/duckle-runner
             cp target/debug/duckle-mcp apps/desktop/bin/duckle-mcp
           fi
+
+      # #90: the samples under examples/ are runnable workspaces, not
+      # screenshots - validate compiles every pipeline on every OS, and the
+      # Linux leg (which has the runner and a DuckDB binary) runs each
+      # top-level pipeline so a broken sample fails CI instead of a user's
+      # first run. Children (the _-prefixed pipelineRef targets) run through
+      # their parents.
+      - name: Validate the example workspaces compile
+        shell: bash
+        run: |
+          set -e
+          runner=target/debug/duckle-runner
+          [ "$RUNNER_OS" = "Windows" ] && runner=target/debug/duckle-runner.exe
+          for ws in examples/*/; do
+            [ -d "$ws/pipelines" ] || continue
+            "$runner" validate "$ws"pipelines/*.pipeline.json
+          done
+
+      - name: Run the example workspaces
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          for ws in examples/*/; do
+            # starter-workspace's inputs are generated, not committed.
+            if [ -f "$ws/gen_samples.sql" ]; then
+              mkdir -p "$ws/data"
+              sed "s|\${workspace}|$PWD/${ws%/}|g" "$ws/gen_samples.sql" | "$DUCKLE_DUCKDB_BIN" :memory:
+            fi
+            [ -d "$ws/pipelines" ] || continue
+            for p in "$ws"pipelines/*.pipeline.json; do
+              case "$(basename "$p")" in _*) continue ;; esac
+              echo "== $p"
+              target/debug/duckle-runner --pipeline "$p" --workspace "${ws%/}" --log-dir "$RUNNER_TEMP/duckle-logs"
+            done
+          done
+          # A sink that reports rows but writes nowhere would pass the loop
+          # above - check a known output actually landed on disk.
+          test -s examples/flow-control/output/by_region/North.csv
 
       - name: Test
         # Exclude duckle-lance: the LanceDB sidecar pulls lancedb + DataFusion and
@@ -288,7 +330,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.4/duckdb_cli-linux-amd64.zip
+          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
           mkdir -p "$RUNNER_TEMP/duckdb"
           unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -303,8 +345,119 @@ jobs:
           DUCKLE_PG_USER: postgres
           DUCKLE_PG_PASS: pgtest
         run: cargo test -p duckle-duckdb-engine --test execution -- pg_
+      # Logical decoding needs wal_level=logical, which a service container
+      # cannot be started with, so it is set and the container restarted. The
+      # final check fails the step if the setting did not take, rather than
+      # letting the CDC tests fail for a reason that is not theirs.
+      - name: Enable logical decoding for the CDC tests
+        run: |
+          set -e
+          id=${{ job.services.postgres.id }}
+          docker exec "$id" psql -U postgres -c "ALTER SYSTEM SET wal_level = logical"
+          docker restart "$id"
+          for i in $(seq 1 30); do docker exec "$id" pg_isready -U postgres && break; sleep 2; done
+          docker exec "$id" psql -U postgres -tAc "SHOW wal_level" | grep -qx logical
+      - name: Run PostgreSQL CDC tests
+        env:
+          DUCKLE_PG_HOST: localhost
+          DUCKLE_PG_PORT: '5432'
+          DUCKLE_PG_DB: postgres
+          DUCKLE_PG_USER: postgres
+          DUCKLE_PG_PASS: pgtest
+        run: cargo test -p duckle-duckdb-engine --test postgres_cdc
+
+  # Live Iceberg REST catalog tests: the catalog the Iceberg project itself
+  # tests against, with its warehouse on MinIO. Started with docker run rather
+  # than as service containers, because a service cannot be given a command
+  # and MinIO needs `server /data`.
+  iceberg-rest-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install DuckDB CLI
+        run: |
+          set -e
+          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
+      - name: Pre-install extensions
+        run: |
+          "$DUCKLE_DUCKDB_BIN" :memory: -c "INSTALL iceberg; INSTALL httpfs;"
+      - name: Start MinIO and the Iceberg REST catalog
+        run: |
+          set -e
+          # The official MinIO images are gone from Docker Hub and quay.io; this is
+          # the MinIO server as Chainguard builds it, pinned by digest, and the
+          # same one the minio job below uses.
+          MINIO=cgr.dev/chainguard/minio@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
+          for i in 1 2 3; do
+            docker pull "$MINIO" && break
+            echo "docker pull attempt $i failed; retrying in 5s"; sleep 5
+          done
+          docker network create ice
+          docker run -d --name minio --network ice -p 9000:9000 \
+            -e MINIO_ROOT_USER=admin -e MINIO_ROOT_PASSWORD=password \
+            "$MINIO" server /data
+          for i in $(seq 1 30); do curl -sf http://localhost:9000/minio/health/live && break; sleep 2; done
+          # The bucket, with a signed PUT rather than an mc container.
+          curl -fsS -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user admin:password http://localhost:9000/warehouse
+          docker run -d --name rest --network ice -p 8181:8181 \
+            -e AWS_ACCESS_KEY_ID=admin -e AWS_SECRET_ACCESS_KEY=password -e AWS_REGION=us-east-1 \
+            -e CATALOG_WAREHOUSE=s3://warehouse/ \
+            -e CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO \
+            -e CATALOG_S3_ENDPOINT=http://minio:9000 -e CATALOG_S3_PATH__STYLE__ACCESS=true \
+            apache/iceberg-rest-fixture
+          for i in $(seq 1 60); do curl -sf http://localhost:8181/v1/config && break; sleep 2; done
+          curl -sf http://localhost:8181/v1/config > /dev/null
+      - name: Run Iceberg REST tests
+        env:
+          DUCKLE_ICEBERG_REST_URI: http://localhost:8181
+          DUCKLE_ICEBERG_WAREHOUSE: warehouse
+          DUCKLE_ICEBERG_S3_ENDPOINT: localhost:9000
+          DUCKLE_ICEBERG_S3_KEY: admin
+          DUCKLE_ICEBERG_S3_SECRET: password
+        run: cargo test -p duckle-duckdb-engine --test iceberg_rest
 
   # Live MySQL integration tests (also covers MariaDB, same wire).
+  # SharePoint Server has no container, so tests/sharepoint.rs runs against
+  # tests/sharepoint_mock.py: SharePoint's REST shapes behind a real NTLM
+  # acceptor (pyspnego), the same one curl's --ntlm signs in to.
+  sharepoint-ntlm-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install DuckDB CLI
+        run: |
+          set -e
+          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
+      - name: Start the SharePoint mock
+        run: |
+          set -e
+          pip install pyspnego
+          printf 'CONTOSO:alice:P@ssw0rd!\n' > "$RUNNER_TEMP/users.txt"
+          NTLM_USER_FILE="$RUNNER_TEMP/users.txt" nohup python crates/duckdb-engine/tests/sharepoint_mock.py 8765 > "$RUNNER_TEMP/mock.log" 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fs -o /dev/null http://127.0.0.1:8765/_test/state && break
+            sleep 1
+          done
+          # The mock is only a fair judge if an independent client signs in to it.
+          curl -fs --ntlm -u 'CONTOSO\alice:P@ssw0rd!' -o /dev/null http://127.0.0.1:8765/sites/team/_api/web
+      - name: Run SharePoint tests
+        env:
+          DUCKLE_SHAREPOINT_URL: http://127.0.0.1:8765/sites/team
+        run: cargo test -p duckle-duckdb-engine --test sharepoint
+
   mysql-integration:
     runs-on: ubuntu-latest
     services:
@@ -326,7 +479,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.4/duckdb_cli-linux-amd64.zip
+          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
           mkdir -p "$RUNNER_TEMP/duckdb"
           unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -342,6 +495,46 @@ jobs:
           DUCKLE_MYSQL_PASS: mytest
         run: cargo test -p duckle-duckdb-engine --test execution -- mysql_
 
+  # Live SQL Server tests: date/time typing (#362) and the sink's upserts. They
+  # skipped everywhere else, which is how the default bulk path broke every
+  # upsert without a test going red.
+  sqlserver-integration:
+    runs-on: ubuntu-latest
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: 'Y'
+          MSSQL_SA_PASSWORD: 'Duckle!Passw0rd'
+        ports: ['1433:1433']
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P 'Duckle!Passw0rd' -Q 'SELECT 1' -b"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install DuckDB CLI
+        run: |
+          set -e
+          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
+          mkdir -p "$RUNNER_TEMP/duckdb"
+          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
+      - name: Pre-install mssql extension
+        run: |
+          "$DUCKLE_DUCKDB_BIN" :memory: -c "INSTALL mssql FROM community;"
+      - name: Run SQL Server integration tests
+        env:
+          DUCKLE_MSSQL_HOST: 127.0.0.1
+          DUCKLE_MSSQL_PORT: '1433'
+          DUCKLE_MSSQL_PASS: 'Duckle!Passw0rd'
+        run: |
+          cargo test -p duckle-duckdb-engine --test execution -- sqlserver_
+          cargo test -p duckle-duckdb-engine --test sqlserver_types
+
   # Live MinIO integration tests (covers all S3-compatible: MinIO, R2, B2).
   # MinIO needs `server /data` as the container command; GitHub Actions
   # service containers can't override CMD, so we run it as a step.
@@ -354,37 +547,29 @@ jobs:
       - name: Start MinIO + create bucket
         run: |
           set -e
-          # Docker Hub pulls flake intermittently (registry timeouts); retry the
-          # pull before running so a transient hiccup does not fail the job.
+          # The official MinIO images are gone from Docker Hub and quay.io; this is
+          # the MinIO server as Chainguard builds it, pinned by digest. Pulls are
+          # retried so a registry hiccup does not fail the job.
+          MINIO=cgr.dev/chainguard/minio@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
           for i in 1 2 3; do
-            docker pull quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772 && break
+            docker pull "$MINIO" && break
             echo "docker pull attempt $i failed; retrying in 5s"; sleep 5
           done
-          docker run -d --name minio -p 9000:9000 -p 9001:9001 \
+          docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-            quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772 server /data --console-address ":9001"
+            "$MINIO" server /data
           for i in $(seq 1 30); do
             if curl -fs http://localhost:9000/minio/health/live >/dev/null 2>&1; then
               echo "MinIO is up"; break
             fi
             sleep 2
           done
-          # mc isn't in the minio server image. Run the official mc container
-          # instead of downloading the standalone binary: the dl.min.io TLS chain
-          # started failing curl verification (exit 60), and the Docker pull is
-          # already retried. Host networking reaches the mapped localhost:9000,
-          # and MC_HOST_ configures the alias inline without a persisted config.
-          for i in 1 2 3; do
-            docker pull quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z && break
-            echo "mc pull attempt $i failed; retrying in 5s"; sleep 5
-          done
-          docker run --rm --network host \
-            -e MC_HOST_local=http://minioadmin:minioadmin@localhost:9000 \
-            quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z mb --ignore-existing local/duckle-test
+          # The bucket, with a signed PUT: the mc image went with the others.
+          curl -fsS -X PUT --aws-sigv4 "aws:amz:us-east-1:s3" --user minioadmin:minioadmin http://localhost:9000/duckle-test
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.4/duckdb_cli-linux-amd64.zip
+          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
           mkdir -p "$RUNNER_TEMP/duckdb"
           unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
@@ -414,7 +599,9 @@ jobs:
           DUCKLE_MINIO_BUCKET: duckle-test
           DUCKLE_MINIO_ACCESS_KEY: minioadmin
           DUCKLE_MINIO_SECRET_KEY: minioadmin
-        run: cargo test -p duckle-duckdb-engine --test execution -- minio_
+        run: |
+          cargo test -p duckle-duckdb-engine --test execution -- minio_
+          cargo test -p duckle-duckdb-engine --test keyless_cloud
 
   # Live Salesforce integration (#166): runs the credential-free lifecycle
   # suite in docs/salesforce-sink/live-suite against a REAL org - insert ->
@@ -438,7 +625,7 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.4/duckdb_cli-linux-amd64.zip
+          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
           mkdir -p "$RUNNER_TEMP/duckdb"
           unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"

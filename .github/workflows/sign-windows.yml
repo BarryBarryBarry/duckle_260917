@@ -1,0 +1,190 @@
+# Authenticode-sign the Windows release assets through SignPath.
+#
+# Deliberately NOT wired into `release` yet. The SignPath Foundation release
+# certificate is still CSR PENDING: the key lives in their HSM and the CA has
+# not issued the certificate, which is SignPath's side of the process, not ours.
+# The TEST certificate that is valid today is not publicly trusted, and a
+# test-signed exe presents a signature from an untrusted publisher - worse for a
+# user than an unsigned one. So this runs only when asked, and only replaces
+# release assets when explicitly told to.
+#
+# What it does prove, before the real certificate exists: the trusted build
+# system link, the artifact configuration, the API token, the artifact hand-off
+# and signed bytes coming back.
+#
+# WHEN THE RELEASE CERTIFICATE GOES VALID:
+#   1. call this from release.yml between `build` and `checksums`:
+#        sign-windows:
+#          needs: build
+#          uses: ./.github/workflows/sign-windows.yml
+#          with: { release_tag: "${{ needs.prepare-release.outputs.tag }}" }
+#          secrets: inherit
+#   2. add `sign-windows` to the `checksums` job's `needs`. SHA256SUMS.txt must
+#      cover the SIGNED bytes: the self-updater verifies the download against
+#      it, so sums taken before signing would reject every signed asset.
+#   3. note that `checksums` has `if: ${{ !cancelled() }}`, which runs even when
+#      a dependency FAILED - decide whether a failed signing should still
+#      publish sums, and tighten that condition if not.
+#
+# ONE EXE PER SIGNING REQUEST, and nothing is ever zipped. The SignPath project's
+# artifact configuration is typed as a bare Portable Executable, which is exactly
+# what a release asset is, so the exe is handed over as-is: `upload-artifact`
+# gets `archive: false` and the matrix runs one request per architecture. That
+# input permits a single file only, which is why this is a matrix rather than one
+# request for both. No archive wrapper is introduced anywhere - not on the wire,
+# and not in a release.
+#
+# Publishing is a SEPARATE job that needs the whole matrix, so a release never
+# ends up with one architecture signed and the other not.
+#
+# Signing the outer exe does NOT sign the embedded sidecars: duckle-runner.exe,
+# duckle-mcp.exe and duckle-lance.exe are staged into apps/desktop/bin/ and
+# embedded with include_bytes! + zstd, so the copies extracted at run time stay
+# unsigned. Signing those needs a round trip inside each build leg, before the
+# desktop build embeds them.
+
+name: Sign Windows assets
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag whose Windows assets to sign'
+        required: true
+      signing_policy:
+        description: 'SignPath signing policy slug'
+        required: false
+        default: 'test-signing'
+      publish:
+        description: 'Replace the release assets with the signed ones (leave OFF for a test certificate)'
+        type: boolean
+        required: false
+        default: false
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      signing_policy:
+        required: false
+        type: string
+        default: 'release-signing'
+      publish:
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      SIGNPATH_API_TOKEN:
+        required: true
+
+jobs:
+  sign:
+    # Linux on purpose: the signing happens in SignPath's HSM, so nothing here
+    # needs Windows tooling, and this keeps the Node action off the
+    # windows-11-arm runner that the release matrix uses.
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        asset: [Duckle-windows-x64.exe, Duckle-windows-arm64.exe]
+    steps:
+      - name: Download the unsigned asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REL_TAG: ${{ inputs.release_tag }}
+          ASSET: ${{ matrix.asset }}
+        run: |
+          set -e
+          mkdir -p unsigned
+          gh release download "$REL_TAG" --pattern "$ASSET" --dir unsigned
+          # A silent empty download would sail through signing and prove nothing.
+          [ -f "unsigned/$ASSET" ] || { echo "::error::$ASSET is not on $REL_TAG"; exit 1; }
+          sha256sum "unsigned/$ASSET" | tee unsigned.sha256
+
+      # SignPath fetches the artifact from the GitHub API, so it has to be
+      # uploaded first. `archive: false` uploads the exe itself rather than a zip
+      # of it, so SignPath receives a Portable Executable and the project's
+      # artifact configuration has nothing to unwrap.
+      - name: Upload it for SignPath to fetch
+        id: unsigned
+        uses: actions/upload-artifact@v7
+        with:
+          name: duckle-unsigned-${{ matrix.asset }}
+          path: unsigned/${{ matrix.asset }}
+          archive: false
+
+      - name: Submit signing request
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: '${{ secrets.SIGNPATH_API_TOKEN }}'
+          # The organization id is the first GUID in an app.signpath.io/Web/<id>/ URL.
+          organization-id: 'b2937071-f92b-4e09-a7dc-0ead0fcd1267'
+          # Set the repository variable to override this without editing the file.
+          project-slug: '${{ vars.SIGNPATH_PROJECT_SLUG || ''duckle'' }}'
+          signing-policy-slug: '${{ inputs.signing_policy }}'
+          github-artifact-id: '${{ steps.unsigned.outputs.artifact-id }}'
+          wait-for-completion: true
+          output-artifact-directory: 'signed'
+          # What comes back is a signed exe, not an archive, so there is nothing
+          # to extract and an extraction step could only misread it.
+          skip-decompress: true
+
+      - name: Check the bytes actually came back signed
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: |
+          set -e
+          ls -l signed
+          # Count first: a glob or a loop over an empty directory exits 0, so a
+          # request that returned nothing would otherwise report success.
+          have=$(find signed -type f | wc -l)
+          [ "$have" -eq 1 ] || { echo "::error::expected 1 signed file, got $have"; exit 1; }
+          f=$(find signed -type f)
+          before=$(cut -d' ' -f1 unsigned.sha256)
+          after=$(sha256sum "$f" | cut -d' ' -f1)
+          if [ "$before" = "$after" ]; then
+            echo "::error::$ASSET came back byte-identical, so nothing was signed"
+            exit 1
+          fi
+          echo "ok: $ASSET changed ($before -> $after)"
+          # SignPath names the file it returns; the release asset name is ours.
+          mkdir -p out
+          mv "$f" "out/$ASSET"
+
+      - name: Keep the signed asset as a build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: duckle-signed-${{ matrix.asset }}
+          path: out/${{ matrix.asset }}
+          archive: false
+
+  # Off by default from the dispatch form: a test-signed asset must never reach a
+  # release, because an untrusted publisher signature is worse for a user than no
+  # signature at all. `needs: sign` covers the whole matrix, so a release is never
+  # left with one architecture signed and the other not.
+  publish:
+    needs: sign
+    if: ${{ inputs.publish }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Collect the signed assets
+        uses: actions/download-artifact@v8
+        with:
+          pattern: duckle-signed-*
+          merge-multiple: true
+          path: signed
+
+      - name: Replace the release assets with the signed ones
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          REL_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -e
+          have=$(find signed -type f -name '*.exe' | wc -l)
+          [ "$have" -eq 2 ] || { echo "::error::expected 2 signed exe, got $have"; exit 1; }
+          for f in signed/*.exe; do
+            gh release upload "$REL_TAG" "$f" --clobber
+          done

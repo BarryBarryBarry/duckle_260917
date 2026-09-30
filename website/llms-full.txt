@@ -13,8 +13,8 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 411 components, 394 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 194 connectors (121 sources / 73 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 417 components, 400 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 200 connectors (124 sources / 76 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 144 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 29 checks, plus 21 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
@@ -81,8 +81,9 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (130)
+### Sources (read) (133)
 
+- `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
 - `src.airtable` Airtable: Airtable REST. Bearer Personal Access Token. Cursor pagination on `offset` (cursorNextPath /offset, cursorParam `offset`). responsePath /records
 - `src.artifact` Artifacts: One row per FILE described the way a pipeline can reason about it: uri, name, media_type, size_bytes, sha256 and modified_at. For PDFs, images, archives, OCR output and model binaries - an artifact is a reference, not the bytes, so it joins, filters and iterates like any other table. Hashing is off by default because it reads every byte; turn it on when you want reproducibility and can pay for it
@@ -92,7 +93,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.b2` Backblaze B2: Read via S3-compatible endpoint
 - `src.bigquery` BigQuery: Read tables from BigQuery via the duckdb-bigquery community extension - uses standard GCP credential discovery
 - `src.cassandra` Cassandra: Read CQL via the scylla driver (works with both Cassandra and ScyllaDB)
-- `src.changed` Changed? (remote poll): Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size / modified_at / etag / fingerprint / status. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds
+- `src.changed` Changed? (remote poll): Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForEach downstream. Emits uri / name / size_bytes (and size) / modified_at / etag / fingerprint / status. A first run either emits what is already there or records it as a baseline and emits only what arrives later. When nothing changed the node reports `unchanged` rather than a bare success, so a working poll and a broken one are told apart. Fingerprints are conservative: a missing or unreadable signal counts as CHANGED, because re-reading costs compute and skipping loses data. Position advances only when the run succeeds
 - `src.chroma` Chroma [preview]: Reads data from Chroma
 - `src.clickhouse` ClickHouse: Read ClickHouse via the HTTP interface (POST SELECT ... FORMAT JSON). User/password auth via X-ClickHouse-User / X-ClickHouse-Key headers
 - `src.clickup` ClickUp: ClickUp REST. Bearer Personal API token (pk_... from Settings > Apps). Page pagination on `?page=N` (paginationType `page`, pageParam `page`). responsePath /tasks (or whatever resource). Base URL https://api.clickup.com/api/v2
@@ -167,6 +168,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.pipedrive` Pipedrive: Pipedrive REST. URL ?api_token=... or Bearer auth. Cursor pagination on `additional_data.pagination.next_start` (start parameter). responsePath /data
 - `src.pixeltable` Pixeltable: Read a Pixeltable table (#223), the multimodal AI data store. Exchanges through Parquet: Pixeltable exports the table (or a filtered/limited subset) and Duckle ingests it with read_parquet, so no rows cross one at a time. Supports versioned reads via table:N. Needs a Python with pixeltable installed; the desktop app provisions one on first use
 - `src.postgres` PostgreSQL: Read from PostgreSQL via the DuckDB postgres extension
+- `src.postgres.cdc` PostgreSQL CDC: Log-based change data capture: every insert, update and delete from a table, in commit order, read from a replication slot through the built-in pgoutput plugin. No JVM, no Kafka, nothing to install on the server. The position is saved only when the run succeeds, so a failed run re-delivers instead of losing changes
 - `src.pubsub` GCP Pub/Sub: Pull messages via the Pub/Sub REST API (POST /v1/projects/{p}/subscriptions/{s}:pull) - sidesteps the gRPC build dependency. Auto-acks the batch. Auth via a pre-fetched OAuth2 Bearer access token (mint with `gcloud auth print-access-token`). Emits {message_id, publish_time, data} rows
 - `src.pulsar` Apache Pulsar [planned]: Reads data from Apache Pulsar
 - `src.qdrant` Qdrant: Scroll all points in a Qdrant collection via /collections/{id}/points/scroll. Cursor pagination on `result.next_page_offset`; emits {id, ...payload[, vector]} rows. apiKey via api-key header
@@ -188,6 +190,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.scylla` ScyllaDB: Read CQL via the scylla driver. Same wire as src.cassandra
 - `src.segment` Segment: Segment Public API. Bearer access token. Cursor pagination via `pagination.next` + `pagination[cursor]` param. responsePath /data
 - `src.sendgrid` SendGrid: SendGrid REST. Bearer API key. Offset pagination via `offset` + `limit`. responsePath /result for /v3/marketing/* endpoints
+- `src.sharepoint` SharePoint Server: SharePoint Server on premises (2016 / 2019 / Subscription Edition) over REST, signed in with Windows authentication (NTLM). A list reads as rows, every page followed; a document library file reads by its format (CSV, TSV, Parquet, JSON, Excel)
 - `src.shopify` Shopify: Shopify Admin API. Bearer auth via X-Shopify-Access-Token. Link header pagination supported by recent Admin API endpoints. responsePath depends on resource (e.g. /products)
 - `src.slack` Slack: Slack Web API. Bearer Bot User OAuth Token (xoxb-...). Cursor pagination via `response_metadata.next_cursor` + `cursor` param. responsePath depends on endpoint (e.g. /messages for conversations.history). Base URL https://slack.com/api
 - `src.snowflake` Snowflake: Read Snowflake via the SQL API (/api/v2/statements). Supports PAT and JWT RS256 auth; engine materializes inline result sets as a DuckDB table for downstream stages
@@ -214,8 +217,9 @@ marked [planned] or [preview] are not usable yet.
 - `src.yaml` YAML: Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs
 - `src.zendesk` Zendesk: Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource)
 
-### Destinations (write) (78)
+### Destinations (write) (81)
 
+- `snk.access` Microsoft Access: Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver
 - `snk.avro` Avro: Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`)
 - `snk.azureblob` Azure Blob Storage: Write via the azure extension
 - `snk.b2` Backblaze B2: Write via S3-compatible endpoint
@@ -227,6 +231,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.csv` CSV: Write delimited text files
 - `snk.databricks` Databricks SQL: INSERT to a Databricks table via the Statement Execution API with PAT Bearer auth. Multi-row INSERTs batched at 1000 rows; sync wait up to 50s
 - `snk.db2` IBM DB2: Write to IBM DB2 through the IBM Data Server ODBC driver. Creates the table if missing from the upstream column types; Append adds rows, Overwrite clears it first. Booleans land in SMALLINT as 1/0, which DB2 for z/OS also accepts. No upsert
+- `snk.delta` Delta Lake: Append to a local Delta Lake table, creating it from the input columns on first use. Columns are matched by name and a mismatch is refused, never dropped or filled with NULL
 - `snk.dhis2` DHIS2: Import rows into DHIS2. Set url to https://<host>/api/dataValueSets (importType aggregate) or https://<host>/api/tracker (importType tracker + trackerResource trackedEntities/events/enrollments/relationships). Rows are chunked (chunkSize, default 1000) and wrapped in the collection key DHIS2 expects. importStrategy defaults to CREATE_AND_UPDATE, which IS the DHIS2 upsert; dryRun validates without committing. The import summary is parsed, not discarded: conflicts, error reports and a non-zero ignored count fail the run by default (failOnConflict), because DHIS2 answers HTTP 200 even when it rejects every record. Sent synchronously (async=false) so the outcome is known per chunk rather than left in a job queue
 - `snk.duckdb` DuckDB: Write a table into a DuckDB file
 - `snk.ducklake` DuckLake: Write a table into a DuckLake catalog
@@ -279,6 +284,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.salesforce` Salesforce: Write rows into a Salesforce object via the REST sObject Collections API (<=200 records/request). insert / update / upsert (by external Id) / delete; auth is a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app). For migration-scale loads use Salesforce Bulk
 - `snk.salesforce.bulk` Salesforce Bulk: Write rows into a Salesforce object via Bulk API 2.0 - the migration-scale path. DuckDB streams the upstream to CSV on disk and each <=90MB part runs as an async job (insert / update / upsert / delete / hardDelete). Same Bearer / OAuth client-credentials auth as Salesforce. Result sets are written to an optional Results directory
 - `snk.scylla` ScyllaDB: Same wire as snk.cassandra - INSERT via the scylla CQL driver
+- `snk.sharepoint` SharePoint Server: SharePoint Server on premises over REST, signed in with Windows authentication (NTLM). Rows become list items, or the output uploads as a document library file (CSV, TSV, Parquet, JSON, Excel). An upstream with no rows changes nothing
 - `snk.snowflake` Snowflake: INSERT to a Snowflake table via the SQL API (/api/v2/statements) with PAT (Personal Access Token) bearer auth. Multi-row INSERTs batched at 1000 rows by default
 - `snk.spatial` Geospatial (GeoJSON / GeoPackage / ...): Write geospatial files via the spatial extension
 - `snk.sqlite` SQLite: Write a table into a SQLite file

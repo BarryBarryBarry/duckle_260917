@@ -16,7 +16,7 @@ use duckle_duckdb_engine::context::{self, substitute_deep};
 use aes_gcm::aead::Aead;
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::Engine as _;
-use duckle_duckdb_engine::{is_secret_prop_key, PipelineDoc};
+use duckle_duckdb_engine::{is_secret_prop_key, PipelineDoc, SECRET_NEEDLES};
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -211,14 +211,10 @@ fn is_secret_key(key: &str) -> bool {
         return false;
     }
     let k = key.to_ascii_lowercase();
-    // The unambiguous needles (everything except pat/sas). If any matches,
-    // the key is genuinely a credential key regardless of pat/sas.
-    const STRONG: [&str; 14] = [
-        "password", "passwd", "secret", "token", "apikey", "api_key",
-        "privatekey", "private_key", "accesskey", "access_key",
-        "clientsecret", "client_secret", "connectionstring", "connection_string",
-    ];
-    if k.contains("credential") || STRONG.iter().any(|n| k.contains(n)) {
+    // The unambiguous needles: the engine's own list, less `sas` (`pat` is
+    // not on it as a substring). If any matches, the key is genuinely a
+    // credential key regardless of pat/sas.
+    if SECRET_NEEDLES.iter().filter(|n| **n != "sas").any(|n| k.contains(n)) {
         return true;
     }
     // Only pat/sas could have matched: require a delimited word so `path`
@@ -548,6 +544,13 @@ pub fn run() -> Result<(), String> {
         let _ = std::fs::remove_dir_all(&staging);
     }
     std::fs::create_dir_all(&staging).map_err(|e| format!("mkdir {}: {}", staging.display(), e))?;
+    // Bound to a guard here rather than removed at the end, because everything
+    // between this line and the artifact is fallible - the duckdb probe, the
+    // contexts, the leak guards, the stub - and a build that failed used to keep
+    // the whole staged tree, duckdb binary included, in the temp directory for
+    // good. Nothing sweeps `duckle-build-*`, and a build is something an
+    // operator retries.
+    let _staging = StagingDir(staging.clone());
     let root = &staging;
 
     // 3. Redaction (resolve FIRST, redact SECOND).
@@ -771,10 +774,19 @@ pub fn run() -> Result<(), String> {
             .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
     }
     crate::selfextract::write_artifact(&stub, &payload, out_file)?;
-    let _ = std::fs::remove_dir_all(root);
 
     eprintln!("duckle-runner build: wrote {}", out_file.display());
     Ok(())
+}
+
+/// Removes the staging tree when the build returns, by whichever of its
+/// two dozen exits it takes.
+struct StagingDir(PathBuf);
+
+impl Drop for StagingDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// Resolve the stub runner bytes to prepend to the artifact. With --stub,
@@ -1140,11 +1152,35 @@ mod tests {
         for key in [
             "authToken", "sessionToken", "password", "apiKey", "clientSecret",
             "privateKey", "pat", "saslPassword",
+            // The engine's list has always had `passphrase`; this one did not,
+            // so an SSH key's passphrase was bundled as typed.
+            "passphrase", "keyPassphrase",
             // A path that reaches a credential stays redacted on purpose.
             "credentialsPath", "privateKeyPath",
         ] {
             assert!(super::is_secret_key(key), "{key} must not be bundled in the clear");
         }
+    }
+
+    /// The whole path a build takes, on the key it missed: `build` does not
+    /// refuse a literal secret the way a desktop deploy does, so this
+    /// replacement is the only thing between a typed passphrase and the
+    /// pipeline inside the bundle.
+    #[test]
+    fn a_typed_passphrase_is_not_left_in_the_bundled_pipeline() {
+        let mut doc: PipelineDoc = serde_json::from_value(serde_json::json!({
+            "nodes": [{
+                "id": "f", "position": { "x": 0, "y": 0 },
+                "data": { "label": "f", "componentId": "src.sftp",
+                          "properties": { "host": "h", "keyPassphrase": "correct-horse-battery" } }
+            }],
+            "edges": []
+        }))
+        .unwrap();
+        let (_, replacements) = build_key_map(&doc, &[]);
+        redact_doc(&mut doc, &replacements);
+        let bundled = serde_json::to_string(&doc).unwrap();
+        assert!(!bundled.contains("correct-horse-battery"), "bundled as typed: {bundled}");
     }
     use super::*;
     use sha2::{Digest, Sha256};

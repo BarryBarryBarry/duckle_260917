@@ -579,9 +579,17 @@
             compiled.stages[1].sql
         );
         assert_eq!(compiled.stages[2].kind, StageKind::Sink);
+        // The COPY writes the staged file and the executor renames it onto the
+        // destination, so the path in the SQL carries the staging extension.
+        // The destination itself is on the stage, which is what publishes it.
         assert!(compiled.stages[2]
             .sql
-            .contains("TO '/tmp/out.parquet' (FORMAT PARQUET"));
+            .contains("TO '/tmp/out.parquet.duckle-partial' (FORMAT PARQUET"));
+        assert_eq!(compiled.stages[2].sink_path.as_deref(), Some("/tmp/out.parquet"));
+        assert_eq!(
+            compiled.stages[2].staged_write.as_deref(),
+            Some("/tmp/out.parquet.duckle-partial")
+        );
     }
 
     #[test]
@@ -936,6 +944,39 @@
     }
 
     #[test]
+    fn sqlserver_upsert_goes_through_merge_even_when_bulk() {
+        // The bulk path writes through the DuckDB mssql extension, whose UPDATE
+        // and DELETE need a primary key on the target, and a table the sink
+        // created has none - so every upsert on the default path failed "MSSQL:
+        // UPDATE/DELETE requires a table with a primary key". The driver path
+        // upserts with one MERGE and needs no key, which is what the form and the
+        // README promise. Plain writes keep the bulk path.
+        let mk = |extra: &str| pipeline_from_json(&format!(
+            r#"{{"nodes":[
+                {{"id":"s","position":{{"x":0,"y":0}},"data":{{"label":"S","componentId":"src.csv","properties":{{"path":"/tmp/in.csv"}}}}}},
+                {{"id":"k","position":{{"x":0,"y":0}},"data":{{"label":"M","componentId":"snk.sqlserver","properties":{{"host":"h","database":"db","user":"u","password":"p","tableName":"t"{}}}}}}}
+              ],"edges":[{{"id":"e1","source":"s","target":"k","data":{{"connectionType":"main"}}}}]}}"#, extra));
+        // Whether the sink runs on the tiberius driver (MERGE), not the bulk path.
+        let on_driver = |extra: &str| {
+            let c = compile(&mk(extra)).unwrap();
+            matches!(
+                c.stages.iter().find(|s| s.node_id == "k").unwrap().runtime.as_ref(),
+                Some(RuntimeSpec::SqlserverSink(_))
+            )
+        };
+        for extra in [
+            r#","mode":"upsert","conflictColumns":["id"]"#,
+            r#","mode":"upsert","conflictColumns":["id"],"deleteColumn":"op""#,
+            r#","mode":"upsert","conflictColumns":["id"],"bulk":true"#,
+        ] {
+            assert!(on_driver(extra), "upsert takes the MERGE driver: {extra}");
+        }
+        for extra in [r#","mode":"append""#, r#","mode":"overwrite""#, ""] {
+            assert!(!on_driver(extra), "a plain write stays on the bulk path: {extra}");
+        }
+    }
+
+    #[test]
     fn sqlserver_bulk_honours_trust_and_batch() {
         // #86 follow-up: trustCert + batchSize now apply to the bulk (mssql
         // extension) path, not only the legacy driver.
@@ -957,6 +998,200 @@
         // batchSize honoured, and clamped to SQL Server's 1000 ceiling.
         assert!(sql(r#","batchSize":500"#).contains("SET mssql_insert_batch_size = 500"));
         assert!(sql(r#","batchSize":5000"#).contains("SET mssql_insert_batch_size = 1000"), "clamp to 1000");
+    }
+
+    #[test]
+    fn a_single_file_sink_writes_through_a_name_no_glob_matches() {
+        use crate::plan::builders::{build_sink_sql, staged_sink_path};
+        let staged = |id: &str, p: serde_json::Value| staged_sink_path(id, &p);
+
+        // The ordinary case: a local single file, written in overwrite mode.
+        assert_eq!(
+            staged("snk.csv", serde_json::json!({ "path": "/lake/out.csv" })),
+            Some("/lake/out.csv.duckle-partial".to_string())
+        );
+        // And the SQL points there, so the executor's rename has something to
+        // publish. One function decides both.
+        let sql = build_sink_sql("snk.csv", &serde_json::json!({ "path": "/lake/out.csv" }), "v", &[], None).unwrap();
+        assert!(sql.contains("'/lake/out.csv.duckle-partial'"), "{sql}");
+
+        // A partitioned write is a directory, not a file.
+        assert_eq!(
+            staged("snk.parquet", serde_json::json!({ "path": "/lake/o.parquet", "partitionBy": ["day"] })),
+            None
+        );
+        // A rename is a local operation.
+        assert_eq!(staged("snk.csv", serde_json::json!({ "path": "s3://b/o.csv" })), None);
+        // A glob is not a single file.
+        assert_eq!(staged("snk.csv", serde_json::json!({ "path": "/lake/*.csv" })), None);
+        // #367: an append stages too - the executor adds the staged rows to the
+        // end of the destination instead of renaming over it.
+        assert_eq!(
+            staged("snk.csv", serde_json::json!({ "path": "/lake/o.csv", "mode": "append" })),
+            Some("/lake/o.csv.duckle-partial".to_string())
+        );
+        // A sink that does not write one file this way is untouched.
+        assert_eq!(staged("snk.excel", serde_json::json!({ "path": "/lake/o.xlsx" })), None);
+    }
+
+    /// The Compression a CSV or JSON sink's form offers is the one it writes,
+    /// whatever the file is called, and None leaves it to the file name. A codec
+    /// those formats do not have is refused rather than ignored. A cloud sink
+    /// reads it for Parquet only: S3 saves zstd on every node it makes, and a
+    /// CSV object nobody asked to compress has to stay plain.
+    #[test]
+    fn a_text_file_sink_writes_the_compression_it_offers() {
+        use crate::plan::builders::build_sink_sql;
+        let sql = |id: &str, p: serde_json::Value| build_sink_sql(id, &p, "v", &[], None);
+        for (id, c) in [("snk.tsv", "gzip"), ("snk.json", "zstd"), ("snk.jsonl", "gzip"), ("snk.csv", "zstd")] {
+            let s = sql(id, serde_json::json!({ "path": "/lake/o.txt", "compression": c })).unwrap();
+            assert!(s.contains(&format!("COMPRESSION '{c}'")), "{id}: {s}");
+        }
+        let s = sql("snk.tsv", serde_json::json!({ "path": "/lake/o.tsv", "compression": "none" })).unwrap();
+        assert!(!s.contains("COMPRESSION"), "{s}");
+        for id in ["snk.tsv", "snk.json", "snk.jsonl"] {
+            let err = sql(id, serde_json::json!({ "path": "/lake/o.txt", "compression": "snappy" }))
+                .expect_err(id)
+                .to_string();
+            assert!(err.contains("snappy") && err.contains("gzip"), "{id}: {err}");
+        }
+        let csv = sql("snk.gcs", serde_json::json!({ "path": "gs://b/o.csv", "format": "csv", "compression": "zstd" }))
+            .unwrap();
+        assert!(!csv.contains("COMPRESSION"), "{csv}");
+        let pq = sql(
+            "snk.gcs",
+            serde_json::json!({ "path": "gs://b/o.parquet", "format": "parquet", "compression": "zstd" }),
+        )
+        .unwrap();
+        assert!(pq.contains("COMPRESSION 'zstd'"), "{pq}");
+    }
+
+    /// #367: a line-oriented file sink appends; where adding lines to the end
+    /// of the file would not add rows to it, the append is refused, as before,
+    /// rather than replacing the file.
+    #[test]
+    fn a_file_sink_appends_only_where_an_append_is_well_defined() {
+        use crate::plan::builders::build_sink_sql;
+        let sql = |id: &str, p: serde_json::Value| build_sink_sql(id, &p, "v", &[], None);
+        for id in ["snk.csv", "snk.tsv", "snk.json", "snk.jsonl"] {
+            let ok = sql(id, serde_json::json!({ "path": "/lake/o.txt", "mode": "append" }));
+            assert!(
+                ok.as_deref().is_ok_and(|s| s.contains("'/lake/o.txt.duckle-partial'")),
+                "{id}: {ok:?}"
+            );
+        }
+        for (id, props, why) in [
+            ("snk.parquet", serde_json::json!({ "path": "/lake/o.parquet" }), "one file per run"),
+            ("snk.excel", serde_json::json!({ "path": "/lake/o.xlsx" }), "not implemented"),
+            ("snk.csv", serde_json::json!({ "path": "/lake/o.csv.gz" }), "compressed"),
+            ("snk.tsv", serde_json::json!({ "path": "/lake/o.tsv.zst" }), "compressed"),
+            ("snk.json", serde_json::json!({ "path": "/lake/o.json", "format": "array" }), "JSON array"),
+            ("snk.tsv", serde_json::json!({ "path": "/lake/o.tsv", "compression": "gzip" }), "compressed"),
+            ("snk.csv", serde_json::json!({ "path": "/lake/o.csv", "partitionBy": ["d"] }), "partitioned"),
+            ("snk.csv", serde_json::json!({ "path": "s3://b/o.csv" }), "local file"),
+            ("snk.jsonl", serde_json::json!({ "path": "/lake/*.jsonl" }), "local file"),
+        ] {
+            let mut props = props;
+            props["mode"] = "append".into();
+            let err = sql(id, props).expect_err(id).to_string();
+            assert!(err.contains(why), "{id}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_bom_on_a_json_array_is_read_as_an_array() {
+        // Measured on the pinned CLI: `read_json_auto` over a BOM'd array gives
+        // ONE row with a single `json` column, and `format='array'` gives the
+        // rows. The sniff is what the BOM defeats, so the format is named.
+        let dir = tempfile::tempdir().unwrap();
+        let with_bom = dir.path().join("bom.json");
+        std::fs::write(&with_bom, b"\xef\xbb\xbf[{\"id\":1}]").unwrap();
+        let plain = dir.path().join("plain.json");
+        std::fs::write(&plain, b"[{\"id\":1}]").unwrap();
+        let ndjson = dir.path().join("bom.ndjson");
+        std::fs::write(&ndjson, b"\xef\xbb\xbf{\"id\":1}\n").unwrap();
+
+        let props = |p: &std::path::Path| serde_json::json!({ "path": p.to_string_lossy() });
+        let sql = crate::plan::builders::build_json_source(&props(&with_bom));
+        assert!(sql.contains("format='array'"), "{sql}");
+
+        // Nothing else changes: no BOM, and DuckDB's own sniff is right.
+        let sql = crate::plan::builders::build_json_source(&props(&plain));
+        assert!(!sql.contains("format="), "{sql}");
+        // A BOM'd NDJSON reads correctly under auto and FAILS under an explicit
+        // format, so it must be left alone.
+        let sql = crate::plan::builders::build_json_source(&props(&ndjson));
+        assert!(!sql.contains("format="), "{sql}");
+        // And an author who named a format keeps it.
+        let mut named = props(&with_bom);
+        named["format"] = serde_json::json!("jsonl");
+        let sql = crate::plan::builders::build_json_source(&named);
+        assert!(sql.contains("format='newline_delimited'"), "{sql}");
+        assert_eq!(sql.matches("format=").count(), 1, "{sql}");
+    }
+
+    #[test]
+    fn a_relational_truncate_sink_clears_only_when_rows_arrived() {
+        // Same rule as the DuckDB-attached sinks, and the same reason: a run
+        // that produced nothing must leave the target alone rather than empty it
+        // on the strength of an upstream that may simply have failed to produce.
+        // TRUNCATE cannot be made conditional, so these targets get the guarded
+        // DELETE instead - which is the shape the upsert branch already sends
+        // them, so it is supported wherever upsert is.
+        //
+        // Pinned here rather than by a run: these sinks need a live Postgres,
+        // MySQL, DuckLake or SQL Server, and the generated SQL is the part this
+        // change owns.
+        let d = pipeline_from_json(
+            r#"{"nodes":[
+                {"id":"s","position":{"x":0,"y":0},"data":{"label":"S","componentId":"src.csv","properties":{"path":"/tmp/in.csv"}}},
+                {"id":"k","position":{"x":0,"y":0},"data":{"label":"P","componentId":"snk.postgres","properties":{"host":"h","database":"db","user":"u","password":"p","tableName":"orders","mode":"truncate"}}}
+              ],"edges":[{"id":"e1","source":"s","target":"k","data":{"connectionType":"main"}}]}"#,
+        );
+        let c = compile(&d).unwrap();
+        let sql = c.stages.iter().find(|s| s.node_id == "k").unwrap().sql.clone();
+        assert!(
+            !sql.contains("TRUNCATE TABLE"),
+            "an unconditional TRUNCATE empties the target when nothing arrived: {sql}"
+        );
+        assert!(
+            sql.contains("WHERE EXISTS (SELECT 1 FROM"),
+            "the clear must be conditional on the upstream having rows: {sql}"
+        );
+        assert!(sql.contains("INSERT INTO"), "and it still inserts: {sql}");
+    }
+
+    #[test]
+    fn sqlserver_bulk_carries_the_encrypt_toggle() {
+        // #357: "Encrypt connection" was read only on the tiberius driver path,
+        // and `bulk` defaults to true, so on the sink's default path the control
+        // did nothing: a user on SQL Server 2014 followed the field's own advice,
+        // unchecked it, and still failed the handshake unless they also unchecked
+        // "Bulk write", which nothing told them.
+        //
+        // The value is always stated rather than only when false. The extension
+        // has its own default and the form claims one; a connection string that
+        // says what the form says is the only version of this that cannot drift.
+        let mk = |extra: &str| pipeline_from_json(&format!(
+            r#"{{"nodes":[
+                {{"id":"s","position":{{"x":0,"y":0}},"data":{{"label":"S","componentId":"src.csv","properties":{{"path":"/tmp/in.csv"}}}}}},
+                {{"id":"k","position":{{"x":0,"y":0}},"data":{{"label":"M","componentId":"snk.sqlserver","properties":{{"host":"h","database":"db","user":"u","password":"p","tableName":"t"{}}}}}}}
+              ],"edges":[{{"id":"e1","source":"s","target":"k","data":{{"connectionType":"main"}}}}]}}"#, extra));
+        let sql = |extra: &str| {
+            let c = compile(&mk(extra)).unwrap();
+            c.stages.iter().find(|s| s.node_id == "k").unwrap().sql.clone()
+        };
+        // Absent means on, the same default the driver path applies.
+        assert!(
+            sql("").contains("encrypt=true"),
+            "the bulk ATTACH must state the encryption the form claims: {}",
+            sql("")
+        );
+        assert!(sql(r#","encrypt":true"#).contains("encrypt=true"));
+        // Unchecked reaches the extension, which is the whole point.
+        let off = sql(r#","encrypt":false"#);
+        assert!(off.contains("encrypt=false"), "unchecking Encrypt must reach the bulk path: {off}");
+        assert!(!off.contains("encrypt=true"), "{off}");
     }
 
     #[test]
@@ -1788,6 +2023,43 @@
         // Missing file is a loud error.
         assert!(build_rename(&ni, &serde_json::json!({ "mappingFile": "/no/such/file.json" })).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A mapping file written by a Windows tool renames the right column.
+    ///
+    /// A UTF-8 BOM is not whitespace, so `trim` left it on the FIRST old-name.
+    /// The CSV header then stopped being recognised as a header and became a
+    /// rename pair, and the stage asked DuckDB to EXCLUDE a column that does
+    /// not exist - a binder error naming a column that PRINTS as the right one.
+    #[test]
+    fn a_mapping_file_with_a_byte_order_mark_renames_the_right_column() {
+        let mut ni = NodeInputs::default();
+        ni.ports.insert("main".into(), vec!["up".into()]);
+        let dir = tempfile::tempdir().unwrap();
+        let build = |p: &std::path::Path| {
+            build_rename(&ni, &serde_json::json!({ "mappingFile": p.to_string_lossy() }))
+        };
+
+        // CSV, whose header row must still be recognised as one.
+        let csv_path = dir.path().join("map.csv");
+        std::fs::write(&csv_path, b"\xef\xbb\xbfold,new\nx,ex\n").unwrap();
+        let csv = build(&csv_path).unwrap();
+        assert!(!csv.contains('\u{feff}'), "the mark reached the SQL: {csv:?}");
+        assert!(csv.contains("\"x\" AS \"ex\""), "got: {csv}");
+        assert!(!csv.contains("AS \"new\""), "the header row became a rename pair: {csv}");
+        assert!(csv.contains("EXCLUDE (\"x\")"), "only the mapped column is excluded: {csv}");
+
+        // JSON, which serde refuses outright with a message blaming the file.
+        let json_path = dir.path().join("map.json");
+        std::fs::write(&json_path, b"\xef\xbb\xbf{\"a\":\"alpha\"}").unwrap();
+        let json = build(&json_path).expect("a marked JSON map is still valid JSON");
+        assert!(json.contains("\"a\" AS \"alpha\""), "got: {json}");
+
+        // YAML, where the mark rides on the first key.
+        let yaml_path = dir.path().join("map.yaml");
+        std::fs::write(&yaml_path, b"\xef\xbb\xbfa: alpha\n").unwrap();
+        let yaml = build(&yaml_path).unwrap();
+        assert!(yaml.contains("\"a\" AS \"alpha\""), "got: {yaml}");
     }
 
     #[test]
@@ -4545,11 +4817,15 @@
 
     #[test]
     fn a_parquet_sink_without_the_option_is_byte_for_byte_what_it_was() {
+        // The option this pins is the Hilbert ordering: a sink that does not ask
+        // for it gets none of that machinery. USE_TMP_FILE is not part of that
+        // question - it is on every single-file COPY, so that a run killed
+        // mid-write cannot leave a partial file at the real output path.
         let sql = super::builders::build_parquet_sink(
             &serde_json::json!({ "path": "/lake/out.parquet" }),
             "v",
         );
-        assert_eq!(sql, "COPY (SELECT * FROM \"v\") TO '/lake/out.parquet' (FORMAT PARQUET, COMPRESSION 'ZSTD')");
+        assert_eq!(sql, "COPY (SELECT * FROM \"v\") TO '/lake/out.parquet' (FORMAT PARQUET, COMPRESSION 'ZSTD', USE_TMP_FILE true)");
     }
 
     #[test]

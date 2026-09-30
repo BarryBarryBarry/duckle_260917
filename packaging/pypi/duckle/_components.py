@@ -101,12 +101,12 @@ COMPONENTS = {
     'ctl.runjob': {
         'kind': 'control',
         'summary': 'Calls a child pipeline (job) as a side effect, passing parent context variables that are substituted as ${VAR} into the child before it runs. Chain several Run Job nodes to build a Master Job that orchestrates child jobs in sequence. The child runs in its own temp DB; its output is not composed b...',
-        'params': ['pipelineRef', 'returnsRows', 'contextVariables'],
+        'params': ['pipelineRef', 'returnsRows', 'passesRows', 'contextVariables'],
     },
     'ctl.runpipeline': {
         'kind': 'control',
         'summary': 'Reads + executes another pipeline file inline as a side effect, then passes the upstream view through unchanged. Useful for triggering helper pipelines (refresh dimension tables, kick off cleanup) without composing their output into the parent.',
-        'params': ['pipelineRef', 'returnsRows', 'parameters'],
+        'params': ['pipelineRef', 'returnsRows', 'passesRows', 'parameters'],
     },
     'ctl.setvar': {
         'kind': 'control',
@@ -126,7 +126,7 @@ COMPONENTS = {
     'ctl.trigger': {
         'kind': 'control',
         'summary': 'Alias of ctl.runpipeline; same executor branch.',
-        'params': ['pipelineRef', 'returnsRows', 'parameters'],
+        'params': ['pipelineRef', 'returnsRows', 'passesRows', 'parameters'],
     },
     'ctl.try': {
         'kind': 'control',
@@ -288,6 +288,11 @@ COMPONENTS = {
         'summary': 'Pass first per key; duplicates to reject',
         'params': ['columns', 'tieBreak', 'onFail'],
     },
+    'snk.access': {
+        'kind': 'sink',
+        'summary': 'Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver.',
+        'params': ['path', 'password', 'tableName', 'mode'],
+    },
     'snk.avro': {
         'kind': 'sink',
         'summary': "Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`).",
@@ -296,12 +301,12 @@ COMPONENTS = {
     'snk.azureblob': {
         'kind': 'sink',
         'summary': 'Write via the azure extension',
-        'params': ['bucket', 'key', 'region', 'accessKey', 'secretKey', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'mode', 'compression', 'partitionBy'],
+        'params': ['bucket', 'key', 'region', 'accountName', 'cloudAuth', 'accountKey', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'mode', 'compression', 'partitionBy'],
     },
     'snk.b2': {
         'kind': 'sink',
         'summary': 'Write via S3-compatible endpoint',
-        'params': ['bucket', 'key', 'region', 'accessKey', 'secretKey', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'mode', 'compression', 'partitionBy'],
+        'params': ['bucket', 'key', 'region', 'cloudAuth', 'accessKey', 'secretKey', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'mode', 'compression', 'partitionBy'],
     },
     'snk.bigquery': {
         'kind': 'sink',
@@ -316,8 +321,8 @@ COMPONENTS = {
     'snk.chroma': {
         'kind': 'sink',
         'summary': '',
-        'params': ['endpoint', 'apiKey', 'collection', 'connectionRef', 'embeddingColumn', 'idColumn', 'dimension', 'metric', 'mode', 'batchSize'],
-        'unverified': ['metadataColumns', 'createIfMissing'],
+        'params': ['endpoint', 'apiKey', 'collection', 'connectionRef', 'embeddingColumn', 'idColumn', 'dimension', 'metric', 'mode', 'batchSize', 'createIfMissing'],
+        'unverified': ['metadataColumns'],
     },
     'snk.clickhouse': {
         'kind': 'sink',
@@ -343,6 +348,11 @@ COMPONENTS = {
         'kind': 'sink',
         'summary': 'Write to IBM DB2 through the IBM Data Server ODBC driver. Creates the table if missing from the upstream column types; Append adds rows, Overwrite clears it first. Booleans land in SMALLINT as 1/0, which DB2 for z/OS also accepts. No upsert.',
         'params': ['host', 'port', 'database', 'user', 'password', 'useSsl', 'driver', 'dsn', 'connectionString', 'schema', 'tableName', 'mode'],
+    },
+    'snk.delta': {
+        'kind': 'sink',
+        'summary': 'Append to a local Delta Lake table, creating it from the input columns on first use. Columns are matched by name and a mismatch is refused, never dropped or filled with NULL.',
+        'params': ['path', 'createIfMissing'],
     },
     'snk.dhis2': {
         'kind': 'sink',
@@ -372,7 +382,7 @@ COMPONENTS = {
     'snk.excel': {
         'kind': 'sink',
         'summary': 'Write .xlsx via the DuckDB excel extension',
-        'params': ['path', 'mode', 'compression', 'hasHeader'],
+        'params': ['path', 'mode', 'hasHeader'],
     },
     'snk.execsource': {
         'kind': 'sink',
@@ -407,7 +417,7 @@ COMPONENTS = {
     'snk.iceberg': {
         'kind': 'sink',
         'summary': 'Write a full Iceberg table (data/ + metadata/) via DuckDB v1.5',
-        'params': ['path'],
+        'params': ['catalog', 'path', 'catalogUri', 'warehouse', 'namespace', 'table', 'mode', 'authType', 'clientId', 'clientSecret', 'oauth2ServerUri', 'oauth2Scope', 'token', 'connectionRef', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl'],
     },
     'snk.json': {
         'kind': 'sink',
@@ -429,6 +439,11 @@ COMPONENTS = {
         'summary': 'Write rows to a Lance table (create/overwrite or append) via the bundled duckle-lance sidecar.',
         'params': ['uri', 'table', 'mode', 'apiKey', 'region'],
     },
+    'snk.manticore': {
+        'kind': 'sink',
+        'summary': 'Index rows into a Manticore table via the HTTP JSON /bulk API (port 9308). NDJSON, one line per row, with the document nested inside the action ({"insert":{"table":"t","doc":{...}}}) - not Elasticsearch\'s action/doc pair. Insert or replace (upsert by id), batched at 1000 rows. A batch Manticore r...',
+        'params': ['endpoint', 'table', 'username', 'password', 'writeMode', 'batchSize'],
+    },
     'snk.mariadb': {
         'kind': 'sink',
         'summary': 'Write to MariaDB via the DuckDB mysql extension (MariaDB speaks the MySQL wire protocol)',
@@ -442,7 +457,7 @@ COMPONENTS = {
     'snk.minio': {
         'kind': 'sink',
         'summary': 'Write via S3-compatible endpoint',
-        'params': ['bucket', 'key', 'region', 'accessKey', 'secretKey', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'mode', 'compression', 'partitionBy'],
+        'params': ['bucket', 'key', 'region', 'cloudAuth', 'accessKey', 'secretKey', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'mode', 'compression', 'partitionBy'],
     },
     'snk.model': {
         'kind': 'sink',
@@ -527,12 +542,12 @@ COMPONENTS = {
     'snk.qvd': {
         'kind': 'sink',
         'summary': 'Write rows as a Qlik QVD file (.qvd) via a clean-room pure-Rust encoder (no Qlik runtime). Builds the per-column symbol tables + bit-stuffed index; values are typed per cell (int / double / string), nulls preserved. Round-trips with the QVD source and loads in QlikView / Qlik Sense.',
-        'params': ['path', 'mode', 'compression'],
+        'params': ['path', 'mode'],
     },
     'snk.r2': {
         'kind': 'sink',
         'summary': 'Write via S3-compatible endpoint',
-        'params': ['bucket', 'key', 'region', 'accessKey', 'secretKey', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'mode', 'compression', 'partitionBy'],
+        'params': ['bucket', 'key', 'region', 'cloudAuth', 'accessKey', 'secretKey', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'mode', 'compression', 'partitionBy'],
     },
     'snk.rabbit': {
         'kind': 'sink',
@@ -562,7 +577,7 @@ COMPONENTS = {
     'snk.s3': {
         'kind': 'sink',
         'summary': 'Write via DuckDB httpfs',
-        'params': ['path', 'connectionRef', 'format', 'accessKey', 'secretKey', 'region', 'compression', 'compressionLevel', 'parquetVersion', 'rowGroupSize', 'delimiter', 'writeHeader', 'nullValue', 'endpoint', 'urlStyle', 'useSsl'],
+        'params': ['path', 'connectionRef', 'format', 'cloudAuth', 'accessKey', 'secretKey', 'region', 'compression', 'compressionLevel', 'parquetVersion', 'rowGroupSize', 'delimiter', 'writeHeader', 'nullValue', 'endpoint', 'urlStyle', 'useSsl'],
     },
     'snk.salesforce': {
         'kind': 'sink',
@@ -579,6 +594,11 @@ COMPONENTS = {
         'summary': 'Same wire as snk.cassandra - INSERT via the scylla CQL driver.',
         'params': ['contactPoints', 'user', 'password', 'keyspace', 'tableName', 'batchSize'],
     },
+    'snk.sharepoint': {
+        'kind': 'sink',
+        'summary': 'SharePoint Server on premises over REST, signed in with Windows authentication (NTLM). Rows become list items, or the output uploads as a document library file (CSV, TSV, Parquet, JSON, Excel). An upstream with no rows changes nothing.',
+        'params': ['siteUrl', 'username', 'password', 'mode', 'listName', 'folderUrl', 'fileName', 'format', 'overwrite'],
+    },
     'snk.snowflake': {
         'kind': 'sink',
         'summary': 'INSERT to a Snowflake table via the SQL API (/api/v2/statements) with PAT (Personal Access Token) bearer auth. Multi-row INSERTs batched at 1000 rows by default.',
@@ -587,7 +607,7 @@ COMPONENTS = {
     'snk.spatial': {
         'kind': 'sink',
         'summary': 'Write geospatial files via the spatial extension',
-        'params': ['path', 'driver', 'encoding'],
+        'params': ['path', 'driver', 'encoding', 'hilbertColumn'],
     },
     'snk.sqlite': {
         'kind': 'sink',
@@ -612,7 +632,7 @@ COMPONENTS = {
     'snk.toml': {
         'kind': 'sink',
         'summary': 'Write the upstream rows as TOML. TOML disallows a top-level array so the engine wraps under a `rows` key: `[[rows]]` per row.',
-        'params': ['path', 'mode', 'compression'],
+        'params': ['path', 'mode'],
     },
     'snk.tsv': {
         'kind': 'sink',
@@ -652,7 +672,12 @@ COMPONENTS = {
     'snk.yaml': {
         'kind': 'sink',
         'summary': 'Write the upstream rows as a top-level YAML array (`- key: value` per row).',
-        'params': ['path', 'mode', 'compression'],
+        'params': ['path', 'mode'],
+    },
+    'src.access': {
+        'kind': 'source',
+        'summary': 'Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types.',
+        'params': ['path', 'password', 'tableName', 'query', 'batchSize'],
     },
     'src.adbc': {
         'kind': 'source',
@@ -682,12 +707,12 @@ COMPONENTS = {
     'src.azureblob': {
         'kind': 'source',
         'summary': 'Read via the azure extension',
-        'params': ['bucket', 'key', 'region', 'glob', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
+        'params': ['bucket', 'key', 'region', 'glob', 'accountName', 'cloudAuth', 'accountKey', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
     },
     'src.b2': {
         'kind': 'source',
         'summary': 'Read via S3-compatible endpoint',
-        'params': ['bucket', 'key', 'region', 'glob', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
+        'params': ['bucket', 'key', 'region', 'glob', 'cloudAuth', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
     },
     'src.bigquery': {
         'kind': 'source',
@@ -702,7 +727,7 @@ COMPONENTS = {
     'src.changed': {
         'kind': 'source',
         'summary': 'Poll a remote source METADATA and emit a row only for what changed - a HEAD or an SFTP stat costs nothing next to the object it decides about. Object mode watches one URI; listing mode watches an s3:// prefix or an sftp:// directory of immutable files and emits the new and changed ones for a ForE...',
-        'params': ['uri', 'listing', 'suffix', 'maxEntries', 'trackState', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'headers', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl'],
+        'params': ['uri', 'listing', 'suffix', 'include', 'exclude', 'modifiedSince', 'modifiedBefore', 'maxEntries', 'orderBy', 'trackState', 'firstRun', 'user', 'password', 'privateKey', 'keyPassphrase', 'hostFingerprint', 'headers', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl'],
     },
     'src.chroma': {
         'kind': 'source',
@@ -883,7 +908,7 @@ COMPONENTS = {
     'src.iceberg': {
         'kind': 'source',
         'summary': 'Read Iceberg tables via DuckDB iceberg_scan',
-        'params': ['path'],
+        'params': ['catalog', 'path', 'catalogUri', 'warehouse', 'namespace', 'table', 'authType', 'clientId', 'clientSecret', 'oauth2ServerUri', 'oauth2Scope', 'token', 'connectionRef', 'accessKey', 'secretKey', 'sessionToken', 'region', 'endpoint', 'urlStyle', 'useSsl'],
     },
     'src.inline': {
         'kind': 'source',
@@ -935,6 +960,11 @@ COMPONENTS = {
         'summary': 'Mailchimp REST. Bearer API key (the key has a region suffix - the URL is https://{region}.api.mailchimp.com/3.0). Offset pagination via `offset` + `count`. responsePath /lists (or /campaigns / etc).',
         'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responseFormat', 'responsePath', 'jsonPath', 'paginationType', 'nextUrlPath', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'incrementalField', 'incrementalInitial', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
     },
+    'src.manticore': {
+        'kind': 'source',
+        'summary': 'Read rows from a Manticore table via the HTTP JSON /search API (port 9308). Manticore answers in the Elasticsearch response shape but takes its own request: the table is named in the body as `table` (renamed from `index` in 6.0) and paging is limit/offset. A window past the default 1000 best-rank...',
+        'params': ['endpoint', 'table', 'username', 'password', 'query', 'limit', 'maxPages'],
+    },
     'src.mariadb': {
         'kind': 'source',
         'summary': 'Read from MariaDB via the DuckDB mysql extension',
@@ -948,7 +978,7 @@ COMPONENTS = {
     'src.minio': {
         'kind': 'source',
         'summary': 'Read via S3-compatible endpoint',
-        'params': ['bucket', 'key', 'region', 'glob', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
+        'params': ['bucket', 'key', 'region', 'glob', 'cloudAuth', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
     },
     'src.model': {
         'kind': 'source',
@@ -1041,6 +1071,11 @@ COMPONENTS = {
         'summary': 'Read from PostgreSQL via the DuckDB postgres extension',
         'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams', 'mode', 'schemaName', 'tableName', 'sql', 'pushdown', 'readOnly', 'connString'],
     },
+    'src.postgres.cdc': {
+        'kind': 'source',
+        'summary': 'Log-based change data capture: every insert, update and delete from a table, in commit order, read from a replication slot through the built-in pgoutput plugin. No JVM, no Kafka, nothing to install on the server. The position is saved only when the run succeeds, so a failed run re-delivers instea...',
+        'params': ['connectionRef', 'host', 'port', 'database', 'username', 'password', 'sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'connectTimeout', 'options', 'connParams', 'table', 'slotName', 'publication', 'createIfMissing', 'connString', 'batchSize', 'maxLagMb'],
+    },
     'src.pubsub': {
         'kind': 'source',
         'summary': 'Pull messages via the Pub/Sub REST API (POST /v1/projects/{p}/subscriptions/{s}:pull) - sidesteps the gRPC build dependency. Auto-acks the batch. Auth via a pre-fetched OAuth2 Bearer access token (mint with `gcloud auth print-access-token`). Emits {message_id, publish_time, data} rows.',
@@ -1069,7 +1104,7 @@ COMPONENTS = {
     'src.r2': {
         'kind': 'source',
         'summary': 'Read via S3-compatible endpoint',
-        'params': ['bucket', 'key', 'region', 'glob', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
+        'params': ['bucket', 'key', 'region', 'glob', 'cloudAuth', 'accessKey', 'secretKey', 'sessionToken', 'connectionRef', 'endpoint', 'urlStyle', 'useSsl', 'format', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
     },
     'src.rabbit': {
         'kind': 'source',
@@ -1104,7 +1139,7 @@ COMPONENTS = {
     'src.s3': {
         'kind': 'source',
         'summary': 'Read via DuckDB httpfs',
-        'params': ['path', 'connectionRef', 'format', 'accessKey', 'secretKey', 'region', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
+        'params': ['path', 'connectionRef', 'format', 'cloudAuth', 'accessKey', 'secretKey', 'region', 'hasHeader', 'delimiter', 'quoteChar', 'encoding', 'skipLines', 'nullValue', 'nullPadding', 'ignoreErrors', 'readOptions', 'recordsPath', 'flatten', 'keepParentNames'],
     },
     'src.salesforce': {
         'kind': 'source',
@@ -1140,6 +1175,11 @@ COMPONENTS = {
         'kind': 'source',
         'summary': 'SendGrid REST. Bearer API key. Offset pagination via `offset` + `limit`. responsePath /result for /v3/marketing/* endpoints.',
         'params': ['url', 'method', 'body', 'headers', 'connectionRef', 'transportRef', 'authType', 'authToken', 'authHeader', 'tokenUrl', 'clientId', 'clientSecret', 'clientAuth', 'scope', 'responseFormat', 'responsePath', 'jsonPath', 'paginationType', 'nextUrlPath', 'cursorNextPath', 'cursorParam', 'offsetParam', 'pageSize', 'totalCountPath', 'pageParam', 'startPage', 'maxPages', 'incrementalField', 'incrementalInitial', 'responseMetadata', 'rawResponseDestination', 'httpProxy', 'httpUserAgent', 'httpConnectTimeoutSecs', 'httpReadTimeoutSecs'],
+    },
+    'src.sharepoint': {
+        'kind': 'source',
+        'summary': 'SharePoint Server on premises (2016 / 2019 / Subscription Edition) over REST, signed in with Windows authentication (NTLM). A list reads as rows, every page followed; a document library file reads by its format (CSV, TSV, Parquet, JSON, Excel).',
+        'params': ['siteUrl', 'username', 'password', 'mode', 'listName', 'select', 'filter', 'pageSize', 'fileUrl', 'format'],
     },
     'src.shopify': {
         'kind': 'source',
@@ -1284,7 +1324,7 @@ COMPONENTS = {
     'xf.ai.classify': {
         'kind': 'transform',
         'summary': 'Per-row LLM-backed classification. Props: inputColumn (default `text`), outputColumn (default `category`), categories (required, comma-separated list), model (default `gpt-4o-mini`), apiKey, baseUrl. The model is prompted to pick exactly one category; anything outside the list normalizes to `UNKN...',
-        'params': ['inputColumn', 'categories', 'model', 'apiKey', 'outputColumn', 'baseUrl', 'endpointPath', 'headers', 'concurrency', 'checkpoint', 'checkpointKey', 'checkpointFingerprint', 'maxRetries', 'maxRequests', 'maxInputTokens', 'maxOutputTokens', 'maxEstimatedCostUsd', 'inputUsdPerMillionTokens', 'outputUsdPerMillionTokens'],
+        'params': ['provider', 'inputColumn', 'categories', 'model', 'apiKey', 'outputColumn', 'baseUrl', 'endpointPath', 'headers', 'concurrency', 'checkpoint', 'checkpointKey', 'checkpointFingerprint', 'maxRetries', 'maxRequests', 'maxInputTokens', 'maxOutputTokens', 'maxEstimatedCostUsd', 'inputUsdPerMillionTokens', 'outputUsdPerMillionTokens'],
     },
     'xf.ai.dedupe': {
         'kind': 'transform',
@@ -1354,7 +1394,7 @@ COMPONENTS = {
     'xf.arr.explode': {
         'kind': 'transform',
         'summary': '',
-        'params': ['column'],
+        'params': ['column', 'recursive', 'keepParentNames'],
     },
     'xf.arr.length': {
         'kind': 'transform',
@@ -1669,7 +1709,7 @@ COMPONENTS = {
     'xf.json.flatten': {
         'kind': 'transform',
         'summary': '',
-        'params': ['column'],
+        'params': ['column', 'recursive', 'keepParentNames'],
     },
     'xf.json.merge': {
         'kind': 'transform',

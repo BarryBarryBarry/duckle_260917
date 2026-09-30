@@ -55,6 +55,50 @@ pub struct DuckLakeCdcSpec {
     pub inserts_only: bool,
 }
 
+/// src.postgres.cdc: log-based change data capture from PostgreSQL, through
+/// the built-in `pgoutput` plugin read over SQL - no JVM, no Kafka, nothing to
+/// install on the server.
+///
+/// Changes are PEEKED, never consumed by the read. The last commit delivered is
+/// saved to workspace state only when the whole run succeeds, and the slot is
+/// advanced to that saved position at the start of the next run. A failed run
+/// therefore re-delivers instead of losing, and the slot only releases WAL for
+/// changes a successful run has already handed on.
+#[derive(Debug, Clone)]
+pub struct PgCdcSpec {
+    pub node_id: String,
+    /// `LOAD postgres; ATTACH ... AS duckle_src (TYPE POSTGRES, READ_ONLY);`
+    pub attach_read: String,
+    /// The same server attached writable as `duckle_dst`, used only to create
+    /// a missing publication: a read-only transaction refuses CREATE PUBLICATION.
+    pub attach_write: String,
+    pub schema: String,
+    pub table: String,
+    pub slot: String,
+    pub publication: String,
+    /// Create the publication and slot when they do not exist yet.
+    pub create_if_missing: bool,
+    /// Changes read per run. Decoding stops at a transaction boundary past it,
+    /// so a transaction is never split across runs.
+    pub batch_size: u64,
+    /// Warn when the slot holds back more WAL than this.
+    pub max_lag_mb: u64,
+}
+
+/// snk.delta: append to a local Delta Lake table, creating it on first use.
+///
+/// DuckDB's delta extension appends to an existing table but cannot create
+/// one, so a missing table is created by writing its first commit - protocol
+/// and schema, from the input's own columns - and the append goes through the
+/// extension. Columns are matched by name and a mismatch in either direction is
+/// refused, never dropped or NULL-filled.
+#[derive(Debug, Clone)]
+pub struct DeltaSinkSpec {
+    pub from_view: String,
+    pub path: String,
+    pub create_if_missing: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct TextSearchSpec {
     pub from_view: String,
@@ -1404,6 +1448,11 @@ pub struct AiLlmSpec {
 /// not in the category list).
 #[derive(Debug, Clone)]
 pub struct AiClassifySpec {
+    /// Which decision surface answers. `openai` sends a constrained prompt to
+    /// chat completions and matches the reply back to the list; `jev` posts a
+    /// typed `choice` question to an evaluation model, which cannot answer
+    /// outside the criteria and returns a probability for what it picked.
+    pub provider: String,
     /// #258: a hard ceiling on what this stage may spend.
     pub budget: AiBudgetSpec,
     pub node_id: String,
@@ -1807,6 +1856,12 @@ pub enum RestResponseFormat {
     /// Pagination is forced to None for XML (SOAP doesn't define a
     /// cross-envelope pagination convention).
     Xml,
+    /// #365: server-sent events (`text/event-stream`). Each event's `data:` is
+    /// one JSON document and `response_path` is walked in each, so a stream of
+    /// records is a row per event and a JSON-RPC answer is the event that
+    /// carries the result. A JSON response labelled `text/event-stream` is
+    /// read this way too, without the format being set.
+    EventStream,
 }
 
 /// src.rest: generic HTTP-API source. Fetches a URL, parses the JSON
@@ -2377,6 +2432,68 @@ pub struct Db2SinkSpec {
     pub mode: String,
 }
 
+/// src.access: a Microsoft Access database file (.accdb / .mdb). Windows reads
+/// it through the Access ODBC driver; elsewhere, where no such driver exists,
+/// through mdbtools, which reads a table but cannot run a query.
+#[derive(Debug, Clone)]
+pub struct AccessSourceSpec {
+    pub node_id: String,
+    pub path: String,
+    /// A table, or a query in Access SQL. One of the two is set.
+    pub table: Option<String>,
+    pub query: Option<String>,
+    pub password: Option<String>,
+    pub batch_rows: usize,
+}
+
+/// snk.access: create the table from the upstream column types when it is not
+/// there, then insert. Windows only: nothing else can write an Access file.
+#[derive(Debug, Clone)]
+pub struct AccessSinkSpec {
+    pub from_view: String,
+    pub path: String,
+    pub table: String,
+    pub password: Option<String>,
+    /// "append" (default) or "overwrite", which clears the table first.
+    pub mode: String,
+}
+
+/// src.sharepoint: SharePoint Server (on premises) over REST, signed in with
+/// NTLM. A list reads as rows; a document library file reads by its format.
+#[derive(Debug, Clone)]
+pub struct SharePointSourceSpec {
+    pub node_id: String,
+    pub site_url: String,
+    pub username: String,
+    pub password: String,
+    pub read: SharePointRead,
+    /// Items asked for per page (`$top`).
+    pub page_size: u64,
+}
+
+#[derive(Debug, Clone)]
+pub enum SharePointRead {
+    List { list: String, select: Option<String>, filter: Option<String> },
+    /// `url` is server-relative: /sites/team/Shared Documents/orders.csv.
+    File { url: String, format: Option<String> },
+}
+
+/// snk.sharepoint: rows become list items, or the output uploads as a file.
+#[derive(Debug, Clone)]
+pub struct SharePointSinkSpec {
+    pub from_view: String,
+    pub site_url: String,
+    pub username: String,
+    pub password: String,
+    pub write: SharePointWrite,
+}
+
+#[derive(Debug, Clone)]
+pub enum SharePointWrite {
+    List { list: String },
+    File { folder: String, name: String, format: Option<String>, overwrite: bool },
+}
+
 /// src.spool: tail an append-only NDJSON file from where the last successful
 /// run stopped.
 ///
@@ -2461,12 +2578,27 @@ pub struct ChangedSourceSpec {
     pub listing: bool,
     /// Only list entries whose name ends with this (listing mode).
     pub suffix: Option<String>,
+    /// #324: listing mode's globs, matched against the path below the folder
+    /// the uri names. An empty include admits everything; exclude wins.
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+    /// #324: listing mode's modification-time window, `since` inclusive and
+    /// `before` exclusive.
+    pub modified_since: Option<chrono::DateTime<chrono::Utc>>,
+    pub modified_before: Option<chrono::DateTime<chrono::Utc>>,
     /// Most entries to emit in one run, so a first run against a directory
     /// with years of drops does not try to process all of it at once.
     pub max_entries: usize,
     /// Remember what was processed, so the next run only sees what is new.
     /// Off means every run treats everything as changed.
     pub track_state: bool,
+    /// #324: what a first run - one with no saved state - does with what is
+    /// already there. False emits it, which is a backfill. True records it as
+    /// OBSERVED, not processed, and emits only what is added or replaced later.
+    pub baseline_existing: bool,
+    /// #324: the order a listing is taken in. False is by name; true is oldest
+    /// first by modification time, with the name breaking ties.
+    pub order_by_modified: bool,
     // SFTP auth, ignored for https.
     pub user: Option<String>,
     pub password: Option<String>,
