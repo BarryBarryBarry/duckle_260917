@@ -298,12 +298,25 @@ fn new_run_id(pipeline_id: &str) -> String {
     )
 }
 
+/// The workspace as an absolute path, WITHOUT the Windows extended-length
+/// prefix (`\\?\`) that `canonicalize` adds there.
+///
+/// Both servers need this, and only `web` did it. Under `serve` the prefix
+/// reached `${workspace}`, and DuckDB read `\\?\C:\...` as the RELATIVE path
+/// `?\C:\...`: a pipeline whose DuckDB sink was `${workspace}/out/x.duckdb`
+/// ran in the editor and failed on the server with "Cannot open file".
+fn plain_workspace(path: &Path) -> PathBuf {
+    let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let s = canon.to_string_lossy().to_string();
+    match s.strip_prefix(r"\\?\") {
+        Some(plain) => PathBuf::from(plain),
+        None => canon,
+    }
+}
+
 pub fn run() -> Result<(), String> {
     let args = parse_serve_args()?;
-    let workspace = args
-        .workspace
-        .canonicalize()
-        .unwrap_or_else(|_| args.workspace.clone());
+    let workspace = plain_workspace(&args.workspace);
     let duckdb = crate::resolve_duckdb(args.duckdb.clone())?;
 
     // Set the workspace env once for the process; runs are serialized so these
@@ -510,13 +523,9 @@ impl Drop for EditorRun<'_> {
 
 pub fn run_web() -> Result<(), String> {
     let args = parse_web_args()?;
-    let workspace = args.workspace.canonicalize().unwrap_or_else(|_| args.workspace.clone());
-    // Drop the Windows extended-length prefix (\\?\) so the path the browser
-    // sees and echoes back in /api/fs calls stays a plain C:\... path.
-    let workspace = {
-        let s = workspace.to_string_lossy().to_string();
-        PathBuf::from(s.strip_prefix(r"\\?\").map(|x| x.to_string()).unwrap_or(s))
-    };
+    // A plain C:\... path, so the one the browser sees and echoes back in
+    // /api/fs calls is too.
+    let workspace = plain_workspace(&args.workspace);
     let duckdb = crate::resolve_duckdb(args.duckdb.clone())?;
     let dist = args.dist.canonicalize().map_err(|e| format!("--dist {}: {}", args.dist.display(), e))?;
     std::env::set_var("DUCKLE_DUCKDB_BIN", &duckdb);
@@ -3494,7 +3503,12 @@ fn watermark_target(state: &Arc<State>, req: &Request) -> Result<(PathBuf, Strin
 fn resolve_in_workspace(workspace: &Path, file: &str) -> Result<PathBuf, String> {
     let candidate = workspace.join(file);
     let canon = candidate.canonicalize().map_err(|_| format!("not found: {}", file))?;
-    if !canon.starts_with(workspace) {
+    // Canonical on both sides. The workspace is kept without Windows' `\\?\`
+    // prefix (see `plain_workspace`) while `canonicalize` adds it, and paths that
+    // differ only in that prefix share no first component - every file would
+    // read as outside.
+    let root = workspace.canonicalize().unwrap_or_else(|_| workspace.to_path_buf());
+    if !canon.starts_with(&root) {
         return Err("path escapes workspace".into());
     }
     Ok(canon)
@@ -5825,6 +5839,36 @@ mod tests {
 
     /// Whatever else changes, these two do not: script cannot read it, another site cannot
     /// ride it.
+    /// Both servers set `DUCKLE_WORKSPACE` from this, and `${workspace}` expands
+    /// to it. A `\\?\` prefix there reached a DuckDB sink's ATTACH as a relative
+    /// path, so the same pipeline ran in the editor and failed under `serve`.
+    #[test]
+    fn the_workspace_a_server_runs_in_carries_no_extended_length_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = super::plain_workspace(tmp.path());
+        assert!(!ws.to_string_lossy().starts_with(r"\\?\"), "{}", ws.display());
+        assert!(ws.is_absolute() && ws.exists(), "{}", ws.display());
+        // A path that does not exist is handed back rather than refused, as before.
+        let missing = tmp.path().join("not-here");
+        assert_eq!(super::plain_workspace(&missing), missing);
+    }
+
+    /// The workspace a server keeps is plain; the file a run names is resolved
+    /// through `canonicalize`, which prefixes it on Windows. A file inside is
+    /// found, and a path that climbs out is still refused.
+    #[test]
+    fn a_file_in_a_plain_workspace_resolves_and_one_outside_does_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = super::plain_workspace(tmp.path());
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(ws.join("pipelines").join("p.json"), "{}").unwrap();
+        std::fs::write(tmp.path().parent().unwrap().join("duckle-outside.json"), "{}").ok();
+
+        super::resolve_in_workspace(&ws, "pipelines/p.json").expect("a file in the workspace");
+        let e = super::resolve_in_workspace(&ws, "../duckle-outside.json");
+        assert_eq!(e.err().as_deref(), Some("path escapes workspace"));
+    }
+
     #[test]
     fn a_session_cookie_is_always_httponly_and_samesite() {
         for proto in [None, Some("http"), Some("https")] {
