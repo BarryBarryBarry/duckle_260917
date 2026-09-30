@@ -78,7 +78,7 @@ const UNIVERSAL: [&str; 10] = [
 /// the check for the whole component would hide everything else. They are
 /// listed here with the line that reads them so the list can be worked off
 /// rather than grown.
-const ACCEPTED: [(&str, &str, &str); 5] = [
+const ACCEPTED: [(&str, &str, &str); 8] = [
     ("xf.groupby", "materialize", "read at plan/mod.rs:6440 for every component"),
     ("code.sql", "materialize", "read at plan/mod.rs:6440 for every component"),
     // The single-key sort form. The editor now writes `orderBy` and no longer
@@ -91,6 +91,11 @@ const ACCEPTED: [(&str, &str, &str); 5] = [
     ("xf.sort", "sortColumn", "legacy single-key form, read by build_sort"),
     ("xf.sort", "direction", "beside sortColumn"),
     ("xf.sort", "nullsLast", "beside sortColumn"),
+    // What the Visual Mapper saves (App.tsx handleMapperSave): a modal, not a
+    // form field, so no manifest draws them.
+    ("xf.map", "mapper", "outputs and filter, read by build_mapper (builders.rs:4539)"),
+    ("xf.map", "lookups", "the lookup joins, read by build_mapper (builders.rs:4581)"),
+    ("xf.map", "filter", "the top-level spelling of mapper.filter (builders.rs:4571)"),
 ];
 
 /// One property problem, in the shape #298 asked for.
@@ -718,6 +723,30 @@ mod tests {
             serde_json::json!({ "sortColumn": "amount", "direction": "desc", "nullsLast": true }),
         ));
         assert!(legacy.is_empty(), "a pipeline saved before the change was refused: {legacy:?}");
+    }
+
+    /// The Visual Mapper saves its outputs under `mapper` and its joins under
+    /// `lookups` (App.tsx handleMapperSave), and build_mapper reads both. The
+    /// manifest declares only `mode` and `expressions`, so every map built in
+    /// the editor failed `validate` for two properties the engine runs on.
+    #[test]
+    fn a_map_the_visual_mapper_saved_validates() {
+        let editor = check(&doc(
+            "xf.map",
+            serde_json::json!({
+                "mode": "visual",
+                "lookups": [{ "port": "lookup_1", "leftKey": "id", "rightKey": "id", "joinType": "left" }],
+                "mapper": { "outputs": [{ "id": "o1", "name": "id", "expression": "main.id" }], "filter": "" }
+            }),
+        ));
+        assert!(editor.is_empty(), "the Visual Mapper's own output was refused: {editor:?}");
+
+        // The same filter, written at the top level as build_mapper also accepts it.
+        let written = check(&doc(
+            "xf.map",
+            serde_json::json!({ "expressions": [{ "key": "id", "value": "id" }], "filter": "id > 0" }),
+        ));
+        assert!(written.is_empty(), "a filter build_mapper reads was called dead: {written:?}");
     }
 
     /// A GraphQL source is a query and its variables, and neither was
