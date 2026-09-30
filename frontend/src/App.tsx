@@ -3063,7 +3063,12 @@ export default function App() {
                     workspacePath={workspacePathState}
                     pipelines={repo
                         .filter(r => r.type === 'pipeline')
-                        .map(r => ({ id: r.id, name: r.name }))}
+                        .map(r => ({
+                            id: r.id,
+                            name: r.name,
+                            // #317: a plan step binds values to what each pipeline declares.
+                            declared: pipelineRunFields(pipelineData[r.id]).parameters ?? {},
+                        }))}
                     onClose={() => setShowPlans(false)}
                 />
             ) : null}

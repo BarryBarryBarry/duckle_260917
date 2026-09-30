@@ -1051,11 +1051,11 @@ fn plans_list(workspace_path: String) -> Result<Vec<plans::Plan>, String> {
 /// second window reaches. Returning the full list means the caller redraws from what was
 /// actually written instead of from what it hoped was written.
 #[tauri::command]
-fn plans_save(workspace_path: String, plan: plans::Plan) -> Result<Vec<plans::Plan>, String> {
-    let problems = plan.problems();
-    if !problems.is_empty() {
-        return Err(problems.join("; "));
-    }
+fn plans_save(workspace_path: String, mut plan: plans::Plan) -> Result<Vec<plans::Plan>, String> {
+    // #317: the same save as the console's - structure, the stored parameter values
+    // a save that does not mention them keeps, and those values against each
+    // pipeline's own contract.
+    plans::prepare_for_save(std::path::Path::new(&workspace_path), &mut plan)?;
     plans::update(std::path::Path::new(&workspace_path), move |list| {
         match list.iter().position(|p| p.id == plan.id) {
             Some(i) => list[i] = plan,
@@ -2680,8 +2680,9 @@ mod tests {
                     // The console's spelling, because the editor writes it that way too.
                     pipelines: vec!["pipelines/orders.json".into()],
                     continue_on_failure: None,
+                    params: None,
                 },
-                plans::Step { name: "Publish".into(), pipelines: vec!["pipelines/export.json".into()], continue_on_failure: None },
+                plans::Step { name: "Publish".into(), pipelines: vec!["pipelines/export.json".into()], continue_on_failure: None, params: None },
             ],
         };
         let saved = plans_save(ws.clone(), plan.clone()).unwrap();
@@ -2700,7 +2701,7 @@ mod tests {
             id: "broken".into(),
             name: String::new(),
             stop_on_failure: true,
-            steps: vec![plans::Step { name: "Empty".into(), pipelines: vec![], continue_on_failure: None }],
+            steps: vec![plans::Step { name: "Empty".into(), pipelines: vec![], continue_on_failure: None, params: None }],
         };
         let err = plans_save(ws.clone(), broken).expect_err("an empty step is not a plan");
         assert!(err.contains("no pipelines"), "unhelpful refusal: {err}");

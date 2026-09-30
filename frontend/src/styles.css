@@ -6331,6 +6331,30 @@ select.modal-select:focus {
     font-size: 0.88rem;
 }
 
+/* #317: the values a plan step gives one of its pipelines. */
+.plans-step-params {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 4px 0 8px 12px;
+    padding-left: 10px;
+    border-left: 2px solid var(--border);
+}
+
+.plans-step-stale {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--danger);
+    font-size: 0.82rem;
+}
+
+.plans-step-values {
+    color: var(--text-2);
+    font-size: 0.76rem;
+}
+
 /* Deploy modal: send a pipeline to a server this workspace is connected to. */
 .modal-deploy {
     width: 100%;

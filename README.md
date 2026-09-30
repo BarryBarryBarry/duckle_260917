@@ -644,8 +644,8 @@ against the contract like any other value, on the desktop scheduler and under
 `duckle-runner serve` alike. A blank field uses the pipeline's default. Through
 the console's API a schedule takes them as `"params": { "region": "us" }`, and a
 save that does not mention `params` keeps the ones the schedule has. A schedule
-that runs a plan cannot bind values yet, since each pipeline in the plan has its
-own contract; that is refused when it is saved.
+that runs a plan binds none itself: each pipeline in a plan has its own contract,
+so its values live on the plan's steps (see [Plans](#plans-several-pipelines-in-an-order-you-chose)).
 
 **Where a value came from is kept.** When two surfaces bind the same parameter -
 a schedule and the run that starts, say - the later one wins, which is a
@@ -3148,11 +3148,12 @@ orders.json      -->       export.json
 customers.json
 ```
 
-Two things worth knowing:
+Worth knowing:
 
 - **Every pipeline keeps its own run history.** A plan does not collapse into one opaque run, because at three in the morning the question is which step broke, not that the nightly load did.
 - **A plan can be scheduled like anything else**, from its own card. The same plan runs whether the schedule is fired by `serve` on your server or by the desktop app on a shared workspace - both read `plans.json` and `schedules.json`, and both decide it the same way.
 - **It is one file, so it travels.** A plan written in the desktop app opens in the console and the other way round, and it goes to your server with everything else in the workspace.
+- **Each pipeline in a step can be given its own parameter values.** The desktop editor shows the controls a pipeline declares under it in the step, and every run of the plan, scheduled or started with Run now, hands that pipeline those values, checked by its own contract - so two pipelines with different parameters can share a step, and a misspelt name is refused rather than dropped. A value the contract refuses is refused when the plan is saved, not at three in the morning. In `plans.json` they sit on the step as `"params": { "pipelines/orders.json": { "region": "us" } }`. The console's form does not show them yet, and keeps them when it saves.
 
 Plans live in `<workspace>/plans.json`, so they are a file in git alongside the pipelines they order.
 

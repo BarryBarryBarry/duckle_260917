@@ -1202,6 +1202,12 @@ export type PlanStep = {
     name: string;
     /** Workspace-relative pipeline files. Order between them means nothing. */
     pipelines: string[];
+    /**
+     * #317: parameter values for each pipeline in the step, keyed the way `pipelines`
+     * names it, each checked by that pipeline's own contract. Absent means "this save
+     * did not say", which keeps what is stored; empty clears.
+     */
+    params?: Record<string, Record<string, string>>;
 };
 
 export type Plan = {

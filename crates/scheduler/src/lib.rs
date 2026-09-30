@@ -102,6 +102,11 @@ fn work_of(workspace: &Path, s: &Schedule) -> Result<plans::Plan, String> {
                 pipelines: vec![s.pipeline_id.clone()],
                 // A single-pipeline schedule has nothing after it to carry on to.
                 continue_on_failure: None,
+                // #317: what the schedule binds is what its one pipeline is given.
+                params: s
+                    .params
+                    .clone()
+                    .map(|values| [(s.pipeline_id.clone(), values)].into_iter().collect()),
             }],
         });
     };
@@ -166,18 +171,28 @@ fn run_one_blocking(
     engine: &DuckdbEngine,
     workspace: &Path,
     pipeline_id: &str,
+    values: &std::collections::BTreeMap<String, String>,
 ) -> Result<RunResult, String> {
     // Normalised because a plan step may name a pipeline the console's way, as a
     // workspace-relative file. `resolve_workspace` takes a bare id and builds the path
     // itself, so an un-normalised step asked it for `pipelines/pipelines/orders.json.json`.
     // A bare id normalises to itself, so an ordinary schedule is unaffected.
-    // #317: held to its declared parameter contract like any other run - with no
-    // values bound here, so its declared defaults apply and a required one refuses.
+    // #317: held to its declared parameter contract like any other run, with the
+    // values its plan step binds for it - named as the step's, so the run's
+    // provenance record says where they came from.
+    let supplied: Vec<duckle_duckdb_engine::params::Supplied> = values
+        .iter()
+        .map(|(name, value)| duckle_duckdb_engine::params::Supplied {
+            name: name.clone(),
+            value: value.clone(),
+            source: "plan step".to_string(),
+        })
+        .collect();
     let mut pipeline = duckle_duckdb_engine::context::resolve_workspace_with_params(
         workspace,
         plans::step_pipeline_id(pipeline_id),
         None,
-        &[],
+        &supplied,
     )?
     .doc;
     duckle_duckdb_engine::context::apply_time_builtins(&mut pipeline);
@@ -681,7 +696,7 @@ impl Scheduler {
         let ws = workspace.to_path_buf();
         let trigger = trigger.to_string();
         tokio::task::spawn_blocking(move || {
-            plans::execute(&plan, |step| {
+            plans::execute(&plan, |step, values| {
                 // Normalised ONCE, here, and everything below uses it. The run lock, the
                 // run history and the alert are all keyed by a pipeline's bare id, because
                 // that is what a schedule of its own uses and what the Runs views read.
@@ -702,7 +717,7 @@ impl Scheduler {
                         return Err(format!("Cannot take a run lock for {pipeline}: {why}"))
                     }
                 };
-                let result = run_one_blocking(&engine, &ws, pipeline);
+                let result = run_one_blocking(&engine, &ws, pipeline, values);
                 let answer = match &result {
                     Ok(r) if r.status == "error" => {
                         Err(r.error.clone().unwrap_or_else(|| "the run failed".into()))
@@ -1810,8 +1825,9 @@ mod tests {
                     name: "Extract".into(),
                     pipelines: vec!["orders.json".into(), "customers.json".into()],
                     continue_on_failure: None,
+                    params: None,
                 },
-                plans::Step { name: "Publish".into(), pipelines: vec!["export.json".into()], continue_on_failure: None },
+                plans::Step { name: "Publish".into(), pipelines: vec!["export.json".into()], continue_on_failure: None, params: None },
             ],
         };
         plans::update(ws, |list| list.push(plan)).unwrap();
@@ -1922,7 +1938,7 @@ mod tests {
         for spelling in ["orders", "pipelines/orders.json"] {
             // Whether DuckDB is installed is not this test's business: resolving the name
             // is. A failure to RESOLVE comes back as Err before the engine is ever asked.
-            if let Err(e) = run_one_blocking(&engine, ws, spelling) {
+            if let Err(e) = run_one_blocking(&engine, ws, spelling, &Default::default()) {
                 panic!("a plan step spelled '{spelling}' could not be resolved: {e}");
             }
         }
@@ -1936,6 +1952,70 @@ mod tests {
     /// file, holding real runs, that nothing in either product ever looks at. The run was
     /// recorded and invisible, which is worse than not recorded at all.
     ///
+    const REGIONAL_PIPELINE: &str = r#"{"parameters":{"region":{"type":"string","enum":["eu","us"],"default":"eu"}},
+ "nodes":[{"id":"s","position":{"x":0,"y":0},"data":{"label":"s","componentId":"src.csv","properties":{"path":"${workspace}/in.csv","hasHeader":true}}},
+          {"id":"k","position":{"x":0,"y":0},"data":{"label":"k","componentId":"snk.csv","properties":{"path":"${workspace}/out/${region}.csv"}}}],
+ "edges":[{"id":"e","source":"s","target":"k"}]}"#;
+
+    /// #317: a plan step hands each pipeline its own values - the step's, not the
+    /// pipeline's, since one pipeline can sit in two steps with different ones.
+    #[test]
+    fn a_plan_step_hands_each_pipeline_its_own_values() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| Path::new(b).exists()) else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::create_dir_all(ws.join("out")).unwrap();
+        std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
+        std::fs::write(ws.join("pipelines").join("regional.json"), REGIONAL_PIPELINE).unwrap();
+        // The same pipeline in two steps: bound in the first, left to its default
+        // in the second, so the values are the STEP's and not the pipeline's.
+        plans::update(&ws, |list| {
+            list.push(plans::Plan {
+                id: "nightly".into(),
+                name: String::new(),
+                stop_on_failure: true,
+                steps: vec![
+                    plans::Step {
+                        name: "Bound".into(),
+                        pipelines: vec!["pipelines/regional.json".into()],
+                        continue_on_failure: None,
+                        params: Some(
+                            [(
+                                "pipelines/regional.json".to_string(),
+                                [("region".to_string(), "us".to_string())].into_iter().collect(),
+                            )]
+                            .into_iter()
+                            .collect(),
+                        ),
+                    },
+                    plans::Step {
+                        name: "Default".into(),
+                        pipelines: vec!["regional".into()],
+                        continue_on_failure: None,
+                        params: None,
+                    },
+                ],
+            })
+        })
+        .unwrap();
+
+        let sched = Scheduler::new(DuckdbEngine::new(PathBuf::from(bin)));
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let run = rt.block_on(sched.run_plan_now(&ws, "nightly")).expect("the plan runs");
+        assert!(!run.failed(), "{run:?}");
+        let out: Vec<String> = std::fs::read_dir(ws.join("out"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(out.contains(&"us.csv".to_string()), "the step's value did not reach the run: {out:?}");
+        assert!(out.contains(&"eu.csv".to_string()), "a step without values still gets the default: {out:?}");
+    }
+
     /// #317: a desktop-scheduled run is held to the pipeline's parameter contract,
     /// as the server's is: the schedule's values reach the run, and with none the
     /// declared default does. The desktop scheduler applied neither, so a default
@@ -2021,6 +2101,7 @@ mod tests {
                 name: "Extract".into(),
                 pipelines: vec!["pipelines/orders.json".into()],
                 continue_on_failure: None,
+                params: None,
             }],
         };
         plans::update(&ws, |list| list.push(plan)).unwrap();

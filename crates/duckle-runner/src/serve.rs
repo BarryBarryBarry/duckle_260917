@@ -1107,14 +1107,13 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
         },
         "plans_save" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-            let plan: duckle_duckdb_engine::plans::Plan =
+            let mut plan: duckle_duckdb_engine::plans::Plan =
                 match serde_json::from_value(args.get("plan").cloned().unwrap_or(Value::Null)) {
                     Ok(p) => p,
                     Err(e) => return respond_err("400 Bad Request", &format!("that is not a plan: {e}")),
                 };
-            let problems = plan.problems();
-            if !problems.is_empty() {
-                return respond_err("400 Bad Request", &problems.join("; "));
+            if let Err(e) = duckle_duckdb_engine::plans::prepare_for_save(&state.workspace, &mut plan) {
+                return respond_err("400 Bad Request", &e);
             }
             match duckle_duckdb_engine::plans::update(&state.workspace, move |list| {
                 list.retain(|p| p.id != plan.id);
@@ -2723,14 +2722,14 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
         },
         ("POST", "/api/plans") => {
             let body: Value = serde_json::from_slice(&req.body).unwrap_or(json!({}));
-            let plan: duckle_duckdb_engine::plans::Plan = match serde_json::from_value(body) {
+            let mut plan: duckle_duckdb_engine::plans::Plan = match serde_json::from_value(body) {
                 Ok(p) => p,
                 Err(e) => return respond_err("400 Bad Request", &format!("that is not a plan: {e}")),
             };
-            // Refused where it was written rather than at three in the morning.
-            let problems = plan.problems();
-            if !problems.is_empty() {
-                return respond_err("400 Bad Request", &problems.join("; "));
+            // Refused where it was written rather than at three in the morning. This
+            // form does not show parameter values, so the stored ones are kept.
+            if let Err(e) = duckle_duckdb_engine::plans::prepare_for_save(&state.workspace, &mut plan) {
+                return respond_err("400 Bad Request", &e);
             }
             let id = plan.id.clone();
             match duckle_duckdb_engine::plans::update(&state.workspace, |list| {
@@ -2766,15 +2765,21 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
             // Each pipeline goes through the ordinary run path, so every one of them lands
             // in run history under its own name. A plan that produced a single opaque run
             // would answer "the nightly load failed" without answering which part.
-            let outcome = duckle_duckdb_engine::plans::execute(&plan, |pipeline| {
-                plan_step_outcome(execute_one(
+            let outcome = duckle_duckdb_engine::plans::execute(&plan, |pipeline, values| {
+                // #317: the step's own values for this pipeline, then the run input,
+                // which wins - and the run's provenance says which it replaced.
+                let mut supplied = sourced(values, "plan step");
+                supplied.extend(sourced(&params, "run input"));
+                plan_step_outcome(execute_one_with(
                     state,
-                    // A step may be spelled as a bare id by the desktop editor; execute_one
+                    // A step may be spelled as a bare id by the desktop editor; the run
                     // takes a workspace-relative file. Normalised so one plans.json means
                     // the same thing in both products.
                     &duckle_duckdb_engine::plans::step_pipeline_file(pipeline),
                     "plan",
-                    &params,
+                    &supplied,
+                    None,
+                    None,
                 ))
             });
             respond_json(&serde_json::to_value(&outcome).unwrap_or(json!({})))
@@ -2946,7 +2951,7 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
                 // a panic or a kill releases it too.
                 let _run_lock = run_lock;
                 let outcome = outcome_or_panic_error("the run", || {
-                    execute_one_with(&bg, &file, "manual", &params, "run input", Some(engine), Some(&rid))
+                    execute_one_with(&bg, &file, "manual", &sourced(&params, "run input"), Some(engine), Some(&rid))
                 });
                 if let Ok(mut runs) = bg.runs.lock() {
                     let pid = runs.get(&rid).map(|r| r.pipeline_id.clone()).unwrap_or_default();
@@ -3856,8 +3861,8 @@ fn save_schedule_at(workspace: &Path, body: &Value) -> Result<Value, String> {
             .and_then(|s| s.plan_id);
         if plan_id.clone().unwrap_or(current_plan).is_some() {
             return Err(
-                "A schedule that runs a plan cannot bind parameter values yet; bind them on a \
-                 schedule of the pipeline itself"
+                "A schedule that runs a plan binds no values itself: each pipeline in a plan \
+                 has its own parameters, so give them their values on the plan's steps"
                     .into(),
             );
         }
@@ -3987,7 +3992,7 @@ fn run_scheduled(state: &State, id: &str, file: &str, params: &HashMap<String, S
     };
     // #317: named as the schedule's, so the run's provenance record says where
     // each value came from.
-    match execute_one_with(state, file, "scheduled", params, "schedule", None, None) {
+    match execute_one_with(state, file, "scheduled", &sourced(params, "schedule"), None, None) {
         Ok(v) => {
             let status = v.get("status").and_then(|s| s.as_str()).unwrap_or("?");
             eprintln!("duckle-runner: scheduled {} -> {}", id, status);
@@ -4287,7 +4292,7 @@ fn execute_one(
     trigger: &str,
     params: &HashMap<String, String>,
 ) -> Result<Value, String> {
-    execute_one_with(state, file, trigger, params, "run input", None, None)
+    execute_one_with(state, file, trigger, &sourced(params, "run input"), None, None)
 }
 
 /// #259: the body of `execute_one`, with the engine handle and the run id
@@ -4297,12 +4302,28 @@ fn execute_one(
 /// cancel arriving early has nothing to cancel, and it records the id it was
 /// accepted under so the run can still be found after a restart. Both callers
 /// otherwise take exactly the same path.
+/// Values from one place, each named as coming from it (#317).
+fn sourced<'a>(
+    values: impl IntoIterator<Item = (&'a String, &'a String)>,
+    source: &str,
+) -> Vec<duckle_duckdb_engine::params::Supplied> {
+    values
+        .into_iter()
+        .map(|(name, value)| duckle_duckdb_engine::params::Supplied {
+            name: name.clone(),
+            value: value.clone(),
+            source: source.to_string(),
+        })
+        .collect()
+}
+
+/// `supplied` is lowest-authority first: a later source wins, and the run's
+/// provenance record says what it replaced.
 fn execute_one_with(
     state: &State,
     file: &str,
     trigger: &str,
-    params: &HashMap<String, String>,
-    source: &str,
+    supplied: &[duckle_duckdb_engine::params::Supplied],
     engine: Option<DuckdbEngine>,
     run_id: Option<&str>,
 ) -> Result<Value, String> {
@@ -4340,22 +4361,11 @@ fn execute_one_with(
     // from the substitution boundary rather than from `params` here, because
     // that is the only place that knows the effective set (declared defaults
     // included) and which of them the pipeline declared secret.
-    // #317: named, so the receipt can later say where a value came from. There
-    // is one source on this path today, which is why nothing here ever reports
-    // an override - but a schedule that binds parameters is the obvious second,
-    // and the difference between a deliberate override and an accidental
-    // double binding has to be recoverable the first time it happens, not
-    // after someone notices it did not get recorded.
-    let supplied: Vec<duckle_duckdb_engine::params::Supplied> = params
-        .iter()
-        .map(|(name, value)| duckle_duckdb_engine::params::Supplied {
-            name: name.clone(),
-            value: value.clone(),
-            source: source.to_string(),
-        })
-        .collect();
+    // #317: named, so the receipt can say where a value came from - and, when a
+    // plan step's value and a run input both bind a name, which one replaced
+    // the other.
     let (recorded_params, parameter_sources) =
-        duckle_duckdb_engine::context::apply_params_from(&mut doc, &supplied)?;
+        duckle_duckdb_engine::context::apply_params_from(&mut doc, supplied)?;
     // Match the web cmd paths and headless `duckle-runner --pipeline`: resolve
     // ${workspace}/${projectroot} and workspace-relative file paths before run,
     // so file-loaded pipelines (manual /api/run + scheduled runs) work too. The
@@ -4837,13 +4847,15 @@ fn fire_plan(state: &State, plan_id: &str) {
         eprintln!("duckle-runner: schedule fires plan '{plan_id}', which does not exist");
         return;
     };
-    let params = HashMap::new();
-    let outcome = duckle_duckdb_engine::plans::execute(&plan, |pipeline| {
-        plan_step_outcome(execute_one(
+    let outcome = duckle_duckdb_engine::plans::execute(&plan, |pipeline, values| {
+        // #317: each pipeline is given the values its step binds for it.
+        plan_step_outcome(execute_one_with(
             state,
             &duckle_duckdb_engine::plans::step_pipeline_file(pipeline),
             "schedule",
-            &params,
+            &sourced(values, "plan step"),
+            None,
+            None,
         ))
     });
     let ran = outcome
@@ -5563,6 +5575,51 @@ mod tests {
         assert!(!ws.join("out").join("eu.csv").exists(), "the run fell back to the default");
     }
 
+    /// #317: a scheduled plan gives each pipeline the values its step binds.
+    #[test]
+    fn a_plan_steps_values_reach_its_scheduled_runs() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| std::path::Path::new(b).exists())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::create_dir_all(ws.join("out")).unwrap();
+        std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
+        std::fs::write(ws.join("pipelines").join("regional.json"), r#"{"parameters":{"region":{"type":"string","enum":["eu","us"],"default":"eu"}},
+ "nodes":[{"id":"s","position":{"x":0,"y":0},"data":{"label":"s","componentId":"src.csv","properties":{"path":"${workspace}/in.csv","hasHeader":true}}},
+          {"id":"k","position":{"x":0,"y":0},"data":{"label":"k","componentId":"snk.csv","properties":{"path":"${workspace}/out/${region}.csv"}}}],
+ "edges":[{"id":"e","source":"s","target":"k"}]}"#).unwrap();
+        duckle_duckdb_engine::plans::update(&ws, |list| {
+            list.push(duckle_duckdb_engine::plans::Plan {
+                id: "nightly".into(),
+                name: String::new(),
+                stop_on_failure: true,
+                steps: vec![duckle_duckdb_engine::plans::Step {
+                    name: "Load".into(),
+                    pipelines: vec!["pipelines/regional.json".into()],
+                    continue_on_failure: None,
+                    params: Some(
+                        [(
+                            "pipelines/regional.json".to_string(),
+                            [("region".to_string(), "us".to_string())].into_iter().collect(),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    ),
+                }],
+            })
+        })
+        .unwrap();
+
+        let state = local_state_using(&ws, std::path::PathBuf::from(bin));
+        super::fire_plan(&state, "nightly");
+        assert!(ws.join("out").join("us.csv").exists(), "the step's value did not reach the run");
+        assert!(!ws.join("out").join("eu.csv").exists(), "the run fell back to the default");
+    }
+
     #[test]
     fn a_schedule_that_names_a_plan_tells_the_scheduler_so() {
         let tmp = tempfile::tempdir().unwrap();
@@ -5609,11 +5666,13 @@ mod tests {
                     name: "Extract".into(),
                     pipelines: vec!["orders.json".into()],
                     continue_on_failure: None,
+                    params: None,
                 },
                 duckle_duckdb_engine::plans::Step {
                     name: "Publish".into(),
                     pipelines: vec!["export.json".into()],
                     continue_on_failure: None,
+                    params: None,
                 },
             ],
         };
@@ -5626,7 +5685,7 @@ mod tests {
         }));
 
         let mut attempted = Vec::new();
-        let outcome = duckle_duckdb_engine::plans::execute(&plan, |pipeline| {
+        let outcome = duckle_duckdb_engine::plans::execute(&plan, |pipeline, _| {
             attempted.push(pipeline.to_string());
             plan_step_outcome(failed_but_ok.clone())
         });
