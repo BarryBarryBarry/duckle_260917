@@ -5869,6 +5869,32 @@ mod tests {
         assert_eq!(e.err().as_deref(), Some("path escapes workspace"));
     }
 
+    /// Every page the binary serves uses only CSS variables it defines, and
+    /// the brand orange rather than the lemon the rebrand retired. A missing
+    /// variable fails silently: `var(--accent)` on the People screen drew no
+    /// border at all, because the console's palette still said `--lemon`.
+    #[test]
+    fn the_console_pages_use_only_variables_they_define_and_the_brand_orange() {
+        let defined = regex::Regex::new(r"(--[a-z0-9-]+)\s*:").unwrap();
+        // Only a use WITHOUT a fallback: `var(--mono, monospace)` still draws.
+        let used = regex::Regex::new(r"var\(\s*(--[a-z0-9-]+)\s*\)").unwrap();
+        for (name, html) in [
+            ("panel.html", include_str!("panel.html")),
+            ("signin.html", include_str!("signin.html")),
+            ("setup.html", include_str!("setup.html")),
+        ] {
+            let have: std::collections::BTreeSet<&str> =
+                defined.captures_iter(html).map(|c| c.get(1).unwrap().as_str()).collect();
+            let missing: std::collections::BTreeSet<&str> = used
+                .captures_iter(html)
+                .map(|c| c.get(1).unwrap().as_str())
+                .filter(|v| !have.contains(v))
+                .collect();
+            assert!(missing.is_empty(), "{name} uses undefined {missing:?}");
+            assert!(!html.to_lowercase().contains("#ffd84d"), "{name} still carries the retired lemon");
+        }
+    }
+
     #[test]
     fn a_session_cookie_is_always_httponly_and_samesite() {
         for proto in [None, Some("http"), Some("https")] {
