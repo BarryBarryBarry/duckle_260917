@@ -6,6 +6,8 @@
 
 <p><b>Duckle</b> is an open-source ETL platform for teams who want their pipelines running on their own infrastructure. Author on a canvas, in Python or in SQL, then ship the same file to your own server or cloud account: <code>duckle-runner serve</code> runs it headless on a schedule, in Docker or on a box you own, with a web console, roles and an audit trail. Every pipeline is one file in git, so it outlives whoever wrote it. It compiles to SQL on DuckDB and uses every core you give the box, so a bigger instance is a faster pipeline: <b>96 million rows out of Postgres to Parquet in 39.9s</b>. <b>No vendor cloud. No per-row billing. No lock-in.</b></p>
 
+<a href="https://duckle.org/#film"><img src="website/assets/img/duckle-film-thumb.jpg" alt="Watch Duckle in 49 seconds: real pipelines running in the real app" width="600"/></a>
+
 <a href="https://duckle.org/"><img src="website/assets/img/website-hero.gif" alt="Duckle connecting 190 sources and destinations - databases, warehouses, SaaS apps and the DuckDB ecosystem - all running locally on DuckDB" width="600"/></a>
 
 <p><sub><i>Duckle is an independent open-source project by SlothFlowLabs. It builds on the DuckDB engine but is not part of, affiliated with, or endorsed by DuckDB Labs or MotherDuck.</i></sub></p>
