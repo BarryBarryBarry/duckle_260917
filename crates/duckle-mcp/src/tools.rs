@@ -69,13 +69,14 @@ pub fn list_tools() -> Value {
                 "workspace": { "type": "string", "description": "Workspace directory, for an external ext.* component installed there (#307)." }
             }, "required": ["componentId"] })),
         tool("create_pipeline",
-            "Validate a pipeline and write it. Prefer 'workspace' (writes pipelines/<id>.json and registers it in repository.json so it shows in the GUI immediately); 'directory' writes a loose <name>.json (not GUI-listed). Fails (without writing) if it does not compile, unless validate=false.",
+            "Validate a pipeline and write it. Prefer 'workspace' (writes pipelines/<id>.json and registers it in repository.json so it shows in the GUI immediately); 'directory' writes a loose <name>.json (not GUI-listed). To put it in a folder of the project tree, pass 'folder' with 'workspace' - never 'directory'. Fails (without writing) if it does not compile, unless validate=false. Each node needs id, data.componentId, data.label and data.properties; each edge needs source and target (ids and positions are filled in when missing).",
             json!({ "type": "object", "properties": {
                 "workspace": { "type": "string", "description": "Workspace root. Recommended: writes pipelines/<id>.json + registers in repository.json so the GUI lists it." },
                 "directory": { "type": "string", "description": "Alternative to 'workspace': write a loose <name>.json here (not registered in the GUI)." },
                 "name": { "type": "string", "description": "Pipeline display name." },
                 "id": { "type": "string", "description": "Pipeline id (file stem under workspace). Optional; generated if absent." },
-                "pipeline": { "type": "object", "description": "The pipeline object with at least a 'nodes' array (and usually 'edges')." },
+                "folder": { "type": "string", "description": "With 'workspace': the project-tree folder to list it under, by name or id (e.g. '20261002'). Created at the top level if missing. The file still goes to pipelines/<id>.json." },
+                "pipeline": { "type": "object", "description": "The pipeline object: { nodes: [{ id, data: { componentId, label, properties } }], edges: [{ source, target }] }." },
                 "overwrite": { "type": "boolean", "description": "Replace an existing file. Default false." },
                 "validate": { "type": "boolean", "description": "Compile-check before writing. Default true." }
             }, "required": ["name","pipeline"] })),
@@ -1051,7 +1052,7 @@ fn t_create_pipeline(args: &Value) -> Result<Value, String> {
             return Err(format!("{} already exists (pass overwrite=true to replace)", path.display()));
         }
         std::fs::write(&path, &pretty).map_err(|e| format!("write {}: {e}", path.display()))?;
-        let registered = register_pipeline_in_repo(ws, &id, name);
+        let registered = register_pipeline_in_repo(ws, &id, name, arg_str(args, "folder"));
         (path, registered)
     } else {
         let dir = dir.unwrap();
@@ -1068,10 +1069,35 @@ fn t_create_pipeline(args: &Value) -> Result<Value, String> {
     Ok(json!({ "ok": true, "id": id, "path": path.to_string_lossy(), "registeredInRepository": registered, "validation": validation }))
 }
 
+/// The id of the project-tree folder named or identified by `folder`,
+/// creating it at the top level when the repository has none.
+fn resolve_repo_folder(arr: &mut Vec<Value>, folder: &str) -> String {
+    let folder = folder.trim();
+    let is_folder = |e: &Value| e.get("type").and_then(|v| v.as_str()) == Some("folder");
+    if let Some(found) = arr.iter().find(|e| {
+        is_folder(e)
+            && (e.get("id").and_then(|v| v.as_str()) == Some(folder)
+                || e.get("name").and_then(|v| v.as_str()) == Some(folder))
+    }) {
+        return found.get("id").and_then(|v| v.as_str()).unwrap_or(folder).to_string();
+    }
+    let id = format!("f_{}", gen_id("mcp").trim_start_matches("mcp_"));
+    let mut entry = serde_json::Map::new();
+    entry.insert("id".to_string(), json!(id));
+    entry.insert("name".to_string(), json!(folder));
+    entry.insert("type".to_string(), json!("folder"));
+    if arr.iter().any(|e| e.get("id").and_then(|v| v.as_str()) == Some("root")) {
+        entry.insert("parentId".to_string(), json!("root"));
+    }
+    arr.push(Value::Object(entry));
+    id
+}
+
 /// Best-effort: upsert a pipeline entry into <ws>/repository.json so the GUI
-/// lists an MCP-created/updated pipeline. Places it under the "pipelines" folder
-/// when one exists (v2 layout), else at the root. Returns true if written.
-fn register_pipeline_in_repo(ws: &str, id: &str, name: &str) -> bool {
+/// lists an MCP-created/updated pipeline. `folder` (a project-tree folder name
+/// or id) wins; otherwise it goes under the "pipelines" folder when one exists
+/// (v2 layout), else at the root. Returns true if written.
+fn register_pipeline_in_repo(ws: &str, id: &str, name: &str, folder: Option<&str>) -> bool {
     let repo_path = std::path::Path::new(ws).join("repository.json");
     let mut repo: Value = std::fs::read_to_string(&repo_path)
         .ok()
@@ -1081,12 +1107,18 @@ fn register_pipeline_in_repo(ws: &str, id: &str, name: &str) -> bool {
         Some(a) => a,
         None => return false,
     };
+    let parent = folder
+        .filter(|f| !f.trim().is_empty())
+        .map(|f| resolve_repo_folder(arr, f));
     if let Some(existing) = arr
         .iter_mut()
         .find(|e| e.get("id").and_then(|v| v.as_str()) == Some(id))
     {
         if let Some(o) = existing.as_object_mut() {
             o.insert("name".to_string(), json!(name));
+            if let Some(parent) = &parent {
+                o.insert("parentId".to_string(), json!(parent));
+            }
         }
     } else {
         let has_folder = arr.iter().any(|e| {
@@ -1097,7 +1129,9 @@ fn register_pipeline_in_repo(ws: &str, id: &str, name: &str) -> bool {
         entry.insert("id".to_string(), json!(id));
         entry.insert("name".to_string(), json!(name));
         entry.insert("type".to_string(), json!("pipeline"));
-        if has_folder {
+        if let Some(parent) = parent {
+            entry.insert("parentId".to_string(), json!(parent));
+        } else if has_folder {
             entry.insert("parentId".to_string(), json!("pipelines"));
         }
         arr.push(Value::Object(entry));
@@ -1215,7 +1249,7 @@ fn t_update_pipeline(args: &Value) -> Result<Value, String> {
     let mut registered = false;
     if let (Some(ws), Some(id)) = (workspace.as_ref(), id.as_ref()) {
         if let Some(name) = doc_val.get("name").and_then(|v| v.as_str()) {
-            registered = register_pipeline_in_repo(ws, id, name);
+            registered = register_pipeline_in_repo(ws, id, name, None);
         }
     }
     Ok(json!({ "ok": true, "path": path.to_string_lossy(), "registeredInRepository": registered, "validation": validation }))
@@ -1874,7 +1908,14 @@ fn load_pipeline_value(args: &Value) -> Result<(Value, String), String> {
 }
 
 fn to_doc(v: &Value) -> Result<PipelineDoc, String> {
-    serde_json::from_value(v.clone()).map_err(|e| format!("not a valid pipeline: {e}"))
+    serde_path_to_error::deserialize(v.clone()).map_err(|e| {
+        let path = e.path().to_string();
+        if path == "." {
+            format!("not a valid pipeline: {}", e.inner())
+        } else {
+            format!("not a valid pipeline: {path}: {}", e.inner())
+        }
+    })
 }
 
 fn resolve_duckdb(explicit: Option<&str>) -> Option<PathBuf> {
@@ -2712,7 +2753,7 @@ mod repository_registration {
         )
         .unwrap();
 
-        assert!(register_pipeline_in_repo(&ws.to_string_lossy(), "new", "New"));
+        assert!(register_pipeline_in_repo(&ws.to_string_lossy(), "new", "New", None));
 
         let text = std::fs::read_to_string(ws.join("repository.json")).unwrap();
         let after: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
@@ -2728,5 +2769,80 @@ mod repository_registration {
             "registering `new` destroyed the existing registrations: {ids:?}"
         );
         assert!(ids.contains(&"new"), "the new pipeline was not registered: {ids:?}");
+    }
+}
+
+#[cfg(test)]
+mod agent_friendly_create_tests {
+    use super::*;
+
+    fn csv_to_csv(nodes: Value, edges: Value) -> Value {
+        json!({ "nodes": nodes, "edges": edges })
+    }
+
+    /// The shapes a model sent in a real session: node ids inside `data`, no
+    /// labels, `from`/`to` edges without ids. All of it is clear in intent.
+    #[test]
+    fn common_model_mistakes_are_repaired_and_the_pipeline_lands_in_its_folder() {
+        let ws = tempfile::tempdir().unwrap();
+        std::fs::write(ws.path().join("in.csv"), "a,b\n1,2\n").unwrap();
+        std::fs::write(
+            ws.path().join("repository.json"),
+            r#"[{"id":"root","name":"Project","type":"project"},{"id":"f_1002","name":"20261002","type":"folder","parentId":"root"}]"#,
+        )
+        .unwrap();
+        let input = ws.path().join("in.csv").to_string_lossy().into_owned();
+        let output = ws.path().join("out.csv").to_string_lossy().into_owned();
+        let pipeline = csv_to_csv(
+            json!([
+                { "data": { "id": "s1", "componentId": "src.csv", "properties": { "path": input } } },
+                { "id": "k1", "componentId": "snk.csv", "properties": { "path": output } },
+            ]),
+            json!([{ "from": "s1", "to": "k1" }]),
+        );
+        let out = t_create_pipeline(&json!({
+            "workspace": ws.path().to_string_lossy(),
+            "folder": "20261002",
+            "id": "p1002",
+            "name": "1002 demo",
+            "pipeline": pipeline,
+        }))
+        .expect("repaired pipeline is accepted");
+        assert_eq!(out["id"], "p1002");
+        let saved: Value = serde_json::from_str(
+            &std::fs::read_to_string(ws.path().join("pipelines/p1002.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved["nodes"][0]["id"], "s1");
+        assert_eq!(saved["nodes"][1]["data"]["label"], "snk.csv");
+        assert_eq!(saved["edges"][0]["source"], "s1");
+        assert!(saved["edges"][0]["id"].as_str().is_some_and(|s| !s.is_empty()));
+        let repo: Value = serde_json::from_str(
+            &std::fs::read_to_string(ws.path().join("repository.json")).unwrap(),
+        )
+        .unwrap();
+        let entry = repo.as_array().unwrap().iter().find(|e| e["id"] == "p1002").unwrap();
+        assert_eq!(entry["parentId"], "f_1002");
+    }
+
+    #[test]
+    fn a_missing_folder_is_created_at_the_top_level() {
+        let mut arr = vec![json!({ "id": "root", "name": "P", "type": "project" })];
+        let id = resolve_repo_folder(&mut arr, "20261003");
+        assert_eq!(resolve_repo_folder(&mut arr, "20261003"), id, "found by name the second time");
+        assert_eq!(resolve_repo_folder(&mut arr, &id), id, "and by id");
+        let folder = arr.iter().find(|e| e["id"] == id.as_str()).unwrap();
+        assert_eq!(folder["type"], "folder");
+        assert_eq!(folder["parentId"], "root");
+    }
+
+    #[test]
+    fn invalid_pipelines_say_where_the_problem_is() {
+        let err = to_doc(&json!({
+            "nodes": [{ "id": "s1", "position": { "x": 0, "y": 0 }, "data": { "label": "S" } }],
+            "edges": [{ "id": "e1", "source": "s1" }],
+        }))
+        .unwrap_err();
+        assert!(err.contains("edges[0]") && err.contains("target"), "{err}");
     }
 }

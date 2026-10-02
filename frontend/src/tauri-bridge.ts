@@ -521,6 +521,7 @@ export type InstallProgress =
     | { phase: 'downloading'; received: number; total?: number }
     | { phase: 'extracting' }
     | { phase: 'verifying' }
+    | { phase: 'running_command'; label: string }
     | { phase: 'installing_extension'; name: string; index: number; total: number }
     // llamacpp only: separate progress phase for the Qwen GGUF model
     // (~1.1 GB, much larger than the binary itself).
@@ -584,6 +585,114 @@ export async function engineInstall(
     const channel = new Channel<InstallProgress>();
     if (onProgress) channel.onmessage = onProgress;
     return await invoke<string>('engine_install', { engine, modelId, onProgress: channel });
+}
+
+export type AgentConnectionContext = {
+    id: string;
+    name: string;
+    kind?: string | null;
+    host?: string | null;
+    port?: string | null;
+    database?: string | null;
+    schema?: string | null;
+};
+
+export type AgentContext = {
+    workspace: string;
+    connection?: AgentConnectionContext | null;
+    selectedAssets: unknown[];
+};
+
+export type AgentHistoryMessage = {
+    role: string;
+    text: string;
+};
+
+export type AgentEvent =
+    | { kind: 'session_ready'; session_id: string; session_name?: string | null }
+    | { kind: 'history_loaded'; messages: AgentHistoryMessage[] }
+    | { kind: 'text_delta'; delta: string }
+    | { kind: 'thinking_delta'; delta: string }
+    | { kind: 'tool_start'; id: string; name: string; args: unknown }
+    | { kind: 'tool_update'; id: string; partial: unknown }
+    | { kind: 'tool_end'; id: string; name: string; result: unknown; is_error: boolean }
+    | { kind: 'subagent'; id: string; task: string; status: 'running' | 'done' | 'failed'; result?: unknown | null }
+    | { kind: 'skill_used'; name: string }
+    | {
+          kind: 'ui_request';
+          id: string;
+          method: string;
+          title?: string | null;
+          message?: string | null;
+          options?: string[] | null;
+          placeholder?: string | null;
+          prefill?: string | null;
+          timeout_ms?: number | null;
+      }
+    | { kind: 'ui_notify'; method: string; payload: unknown }
+    | { kind: 'message_end'; usage?: unknown; error?: string | null; truncated?: boolean }
+    | { kind: 'settled' }
+    | { kind: 'command_failed'; id?: string | null; command: string; error: string }
+    | { kind: 'error'; message: string }
+    | { kind: 'exited'; code?: number | null };
+
+/** An agent event as emitted, tagged with the Pi session (`duckle-<conversation id>`) it came from. */
+export type AgentEventEnvelope = AgentEvent & { session?: string };
+
+export async function agentCheckInstalled(): Promise<boolean> {
+    if (!isTauri()) return false;
+    try {
+        return await invoke<boolean>('agent_check_installed');
+    } catch {
+        return false;
+    }
+}
+
+export async function agentInstall(onProgress?: (p: InstallProgress) => void): Promise<string> {
+    if (!isTauri()) {
+        throw new Error('Pi Agent is only available in the desktop app.');
+    }
+    const channel = new Channel<InstallProgress>();
+    if (onProgress) channel.onmessage = onProgress;
+    return await invoke<string>('agent_install', { onProgress: channel });
+}
+
+/** Start (or restart) the agent on one conversation's Pi session. */
+export async function agentStart(workspace: string, conversationId: string): Promise<void> {
+    await invoke('agent_start', { workspace, conversationId });
+}
+
+export async function agentSendPrompt(prompt: string, context: AgentContext): Promise<void> {
+    await invoke('agent_send_prompt', { prompt, context });
+}
+
+export async function agentAbort(): Promise<void> {
+    await invoke('agent_abort');
+}
+
+export async function agentStop(): Promise<void> {
+    await invoke('agent_stop');
+}
+
+export async function agentUiReply(
+    requestId: string,
+    reply: { value: string } | { confirmed: boolean } | { cancelled: true },
+): Promise<void> {
+    let payload: unknown;
+    if ('value' in reply) payload = { value: { value: reply.value } };
+    else if ('confirmed' in reply) payload = { confirmed: { confirmed: reply.confirmed } };
+    else payload = 'cancelled';
+    await invoke('agent_ui_reply', { requestId, reply: payload });
+}
+
+export async function agentListConnections(workspace: string): Promise<AgentConnectionContext[]> {
+    if (!isTauri()) return [];
+    try {
+        return await invoke<AgentConnectionContext[]>('agent_list_connections', { workspace });
+    } catch (err) {
+        console.warn('agentListConnections failed', err);
+        return [];
+    }
 }
 
 /** Whether the free dbt engine (dbt Fusion, or dbt-core fallback) is provisioned. */
@@ -715,6 +824,42 @@ export async function chatExtractPipeline(text: string): Promise<unknown | null>
 export async function chatCloseSession(sessionId: string): Promise<void> {
     if (!isTauri()) return;
     await invoke('chat_close_session', { sessionId });
+}
+
+// ---- Pi Agent chat history (<workspace>/.duckle/pi-agent/conversations) --
+
+export async function agentConversationsList(workspace: string): Promise<DuckieConversationSummary[]> {
+    if (!isTauri()) return [];
+    return await invoke<DuckieConversationSummary[]>('agent_conversations_list', { workspace });
+}
+
+export async function agentConversationGet(workspace: string, id: string): Promise<DuckieConversation> {
+    return await invoke<DuckieConversation>('agent_conversation_get', { workspace, id });
+}
+
+/** Saves the messages; the title is only used when the conversation is created. */
+export async function agentConversationSave(
+    workspace: string,
+    conversation: { id: string; title: string; messages: unknown[] },
+): Promise<DuckieConversationSummary[]> {
+    return await invoke<DuckieConversationSummary[]>('agent_conversation_save', { workspace, conversation });
+}
+
+export async function agentConversationUpdateMeta(
+    workspace: string,
+    id: string,
+    meta: { title?: string; pinned?: boolean },
+): Promise<DuckieConversationSummary[]> {
+    return await invoke<DuckieConversationSummary[]>('agent_conversation_update_meta', {
+        workspace,
+        id,
+        title: meta.title ?? null,
+        pinned: meta.pinned ?? null,
+    });
+}
+
+export async function agentConversationDelete(workspace: string, id: string): Promise<DuckieConversationSummary[]> {
+    return await invoke<DuckieConversationSummary[]>('agent_conversation_delete', { workspace, id });
 }
 
 // ---- Duckie chat history (<workspace>/.duckle/duckie/conversations) -----

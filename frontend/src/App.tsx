@@ -12,7 +12,7 @@ import {
     type OnSelectionChangeParams,
 } from '@xyflow/react';
 import type { ConnectionType } from './canvas/connection-types';
-import { BarChart3, Braces, FolderOpen, GitBranch, LayoutDashboard, Loader2, Moon, RotateCw, ShieldCheck, Sparkles, Sun, Waypoints } from 'lucide-react';
+import { BarChart3, Bot, Braces, FolderOpen, GitBranch, LayoutDashboard, Loader2, Moon, RotateCw, ShieldCheck, Sparkles, Sun, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import LanguageSelector from './i18n/LanguageSelector';
 import { UpdateBanner } from './UpdateBanner';
@@ -48,6 +48,7 @@ import { DuckleLogo } from './workflow-ui/DuckleLogo';
 import EngineSetupModal from './workflow-ui/EngineSetupModal';
 import SetupWizard from './workflow-ui/SetupWizard';
 import ChatPanel from './workflow-ui/ChatPanel';
+import AgentChatPanel from './workflow-ui/AgentChatPanel';
 import GitPanel from './workflow-ui/GitPanel';
 import WindowControls from './workflow-ui/WindowControls';
 import WindowResizeHandles from './workflow-ui/WindowResizeHandles';
@@ -398,6 +399,11 @@ export default function App() {
     useEffect(() => {
         if (showChatPanel) setChatPanelMounted(true);
     }, [showChatPanel]);
+    const [showAgentPanel, setShowAgentPanel] = useState(false);
+    const [agentPanelMounted, setAgentPanelMounted] = useState(false);
+    useEffect(() => {
+        if (showAgentPanel) setAgentPanelMounted(true);
+    }, [showAgentPanel]);
     const [showGitPanel, setShowGitPanel] = useState(false);
 
     useEffect(() => {
@@ -2663,6 +2669,17 @@ export default function App() {
                 <button
                     type="button"
                     className="topbar-theme-toggle"
+                    onClick={() => setShowAgentPanel(s => !s)}
+                    title="Pi Agent"
+                    aria-label="Toggle Pi Agent"
+                    aria-pressed={showAgentPanel}
+                    disabled={!workspacePathState}
+                >
+                    <Bot size={14} />
+                </button>
+                <button
+                    type="button"
+                    className="topbar-theme-toggle"
                     data-tour="duckie"
                     onClick={() => setShowChatPanel(s => !s)}
                     title={t('topbar.duckieAssistant')}
@@ -2948,6 +2965,17 @@ export default function App() {
                     onInsertPipeline={handleInsertAiPipeline}
                     onPersistedPipeline={handleOpenPersistedPipeline}
                     onConnectionsChanged={handleReloadWorkspace}
+                />
+            ) : null}
+
+            {showAgentPanel || agentPanelMounted ? (
+                <AgentChatPanel
+                    workspace={workspacePathState}
+                    open={showAgentPanel}
+                    onClose={() => setShowAgentPanel(false)}
+                    onOpenPipeline={handleOpenPersistedPipeline}
+                    onWorkspaceChanged={handleReloadWorkspace}
+                    onOpenSettings={() => setShowSettings(true)}
                 />
             ) : null}
 

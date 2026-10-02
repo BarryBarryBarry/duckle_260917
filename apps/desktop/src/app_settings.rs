@@ -5,6 +5,7 @@
 //! in-app updater through a proxy WITHOUT setting any system environment
 //! variable (issue #80). Applied on startup and on every workspace switch.
 
+use crate::agent_manager;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -83,6 +84,15 @@ pub struct AiConfig {
     pub harness_provider: Option<String>,
     pub harness_model: Option<String>,
     pub harness_idle_timeout_secs: Option<u64>,
+}
+
+/// The model the Pi Agent uses: the External OpenAI endpoint from
+/// Settings > AI assistant, shared with Duckie.
+#[derive(Debug, Clone)]
+pub struct AgentLlmConfig {
+    pub base_url: String,
+    pub model: String,
+    pub api_key: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -375,7 +385,25 @@ pub fn settings_set_ai(
             "DeepSeek Harness override requires both provider and model, or neither".into(),
         );
     }
-    store(Path::new(&workspace), &s)
+    store(Path::new(&workspace), &s)?;
+    // A running Pi Agent picked up the old model and key at start; stop it so
+    // the next message starts it again with these settings.
+    let _ = agent_manager::agent_stop_sync();
+    Ok(())
+}
+
+/// None unless Settings > AI assistant uses External OpenAI with a base URL
+/// and a model.
+pub fn agent_llm_config(workspace: &str) -> Option<AgentLlmConfig> {
+    let ai = ai_config(workspace);
+    match (ai.mode.as_str(), ai.base_url, ai.model) {
+        ("openai_compatible", Some(base_url), Some(model)) => Some(AgentLlmConfig {
+            base_url,
+            model,
+            api_key: ai.api_key,
+        }),
+        _ => None,
+    }
 }
 
 /// Internal: the workspace AI-provider config for chat routing.
@@ -456,5 +484,53 @@ mod tests {
             before,
             "a workspace with no settings kept the previous one's cap and unsigned-extension opt-in"
         );
+    }
+
+    fn workspace_with(settings: AppSettings) -> tempfile::TempDir {
+        let ws = tempfile::tempdir().unwrap();
+        store(ws.path(), &settings).unwrap();
+        ws
+    }
+
+    /// The Pi Agent shares Duckie's External OpenAI settings and has no model
+    /// while Duckie uses DeepSeek Harness or the local model.
+    #[test]
+    fn agent_model_needs_external_openai() {
+        for mode in ["deepseek_harness", "local_qwen"] {
+            let ws = workspace_with(AppSettings {
+                ai_mode: Some(mode.into()),
+                ai_base_url: Some("https://api.deepseek.com".into()),
+                ai_model: Some("deepseek-chat".into()),
+                ..Default::default()
+            });
+            assert!(
+                agent_llm_config(&ws.path().to_string_lossy()).is_none(),
+                "{mode}"
+            );
+        }
+        let ws = workspace_with(AppSettings {
+            ai_mode: Some("openai_compatible".into()),
+            ai_base_url: Some("https://api.deepseek.com".into()),
+            ..Default::default()
+        });
+        assert!(
+            agent_llm_config(&ws.path().to_string_lossy()).is_none(),
+            "no model"
+        );
+    }
+
+    #[test]
+    fn agent_model_uses_external_openai_settings() {
+        let ws = workspace_with(AppSettings {
+            ai_mode: Some("openai_compatible".into()),
+            ai_base_url: Some(" https://api.deepseek.com ".into()),
+            ai_model: Some("deepseek-chat".into()),
+            ai_api_key: Some("sk-1".into()),
+            ..Default::default()
+        });
+        let cfg = agent_llm_config(&ws.path().to_string_lossy()).unwrap();
+        assert_eq!(cfg.base_url, "https://api.deepseek.com");
+        assert_eq!(cfg.model, "deepseek-chat");
+        assert_eq!(cfg.api_key.as_deref(), Some("sk-1"));
     }
 }

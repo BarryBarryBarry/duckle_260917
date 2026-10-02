@@ -103,11 +103,89 @@ fn layered_positions(node_ids: &[String], edges: &[Value]) -> HashMap<String, (f
         .collect()
 }
 
+/// Repair the shapes models most often get wrong, so a pipeline that is clear
+/// in intent is not refused over spelling: a node id or component written
+/// beside `data` instead of inside it (or the other way round), a missing
+/// label, `from`/`to` instead of `source`/`target`, and edges without ids.
+/// Anything already well-formed is left as it is.
+fn repair_common_shapes(obj: &mut serde_json::Map<String, Value>) {
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if let Some(nodes) = obj.get_mut("nodes").and_then(Value::as_array_mut) {
+        for (index, node) in nodes.iter_mut().enumerate() {
+            let Some(map) = node.as_object_mut() else {
+                continue;
+            };
+            if !map.get("data").is_some_and(Value::is_object) {
+                map.insert("data".to_string(), Value::Object(serde_json::Map::new()));
+            }
+            // Node-level fields that belong in data, and data.id that belongs on the node.
+            for key in ["componentId", "label", "properties"] {
+                if let Some(value) = map.remove(key) {
+                    let data = map.get_mut("data").and_then(Value::as_object_mut).unwrap();
+                    data.entry(key.to_string()).or_insert(value);
+                }
+            }
+            let data_id = map
+                .get_mut("data")
+                .and_then(Value::as_object_mut)
+                .and_then(|d| d.remove("id"));
+            let has_id = map.get("id").and_then(Value::as_str).is_some_and(|s| !s.is_empty());
+            if !has_id {
+                let id = data_id
+                    .as_ref()
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("n{}", index + 1));
+                map.insert("id".to_string(), Value::String(id));
+            }
+            if let Some(id) = map.get("id").and_then(Value::as_str) {
+                used.insert(id.to_string());
+            }
+            let fallback_label = map
+                .get("data")
+                .and_then(|d| d.get("componentId"))
+                .and_then(Value::as_str)
+                .or_else(|| map.get("id").and_then(Value::as_str))
+                .unwrap_or("node")
+                .to_string();
+            let data = map.get_mut("data").and_then(Value::as_object_mut).unwrap();
+            if !data.get("label").and_then(Value::as_str).is_some_and(|s| !s.is_empty()) {
+                data.insert("label".to_string(), Value::String(fallback_label));
+            }
+        }
+    }
+    if let Some(edges) = obj.get_mut("edges").and_then(Value::as_array_mut) {
+        for (index, edge) in edges.iter_mut().enumerate() {
+            let Some(map) = edge.as_object_mut() else {
+                continue;
+            };
+            for (wrong, right) in [("from", "source"), ("to", "target")] {
+                if !map.contains_key(right) {
+                    if let Some(value) = map.remove(wrong) {
+                        map.insert(right.to_string(), value);
+                    }
+                }
+            }
+            if !map.get("id").and_then(Value::as_str).is_some_and(|s| !s.is_empty()) {
+                let mut n = index + 1;
+                while used.contains(&format!("e{n}")) {
+                    n += 1;
+                }
+                let id = format!("e{n}");
+                used.insert(id.clone());
+                map.insert("id".to_string(), Value::String(id));
+            }
+        }
+    }
+}
+
 /// Fill in the canvas fields a pipeline object is missing, in place.
 pub fn normalize(pipeline: &mut Value) {
     let Some(obj) = pipeline.as_object_mut() else {
         return;
     };
+    repair_common_shapes(obj);
     let edges: Vec<Value> = obj
         .get("edges")
         .and_then(Value::as_array)

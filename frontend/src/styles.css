@@ -8220,6 +8220,145 @@ select.modal-select:focus {
     border-top: 1px solid var(--border);
     background: var(--bg-0);
 }
+
+/* Pi Agent panel: reuses the Duckie chat-panel styles (and its window
+   behaviour via useFloatingPanel); only the bits Duckie does not have - the
+   context picker and raw tool output - live here. */
+.agent-context {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+}
+.agent-context .chat-panel-model {
+    max-width: none;
+    margin: 0;
+}
+.agent-pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.agent-thinking {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+.agent-thinking summary,
+.agent-tool-detail summary {
+    cursor: pointer;
+    user-select: none;
+}
+.agent-tool-detail pre {
+    margin: 6px 0 0;
+    max-height: 180px;
+    overflow: auto;
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.agent-processing-dots {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 1em;
+    margin-left: 2px;
+    padding-bottom: 0.18em;
+    box-sizing: border-box;
+    vertical-align: baseline;
+}
+.agent-processing-dots span {
+    width: 3px;
+    height: 3px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.25;
+    animation: agent-processing-dot 1.2s ease-in-out infinite;
+}
+.agent-processing-dots span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+.agent-processing-dots span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+@keyframes agent-processing-dot {
+    0%,
+    70%,
+    100% {
+        opacity: 0.25;
+        transform: translateY(0);
+    }
+    35% {
+        opacity: 1;
+        transform: translateY(-2px);
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .agent-processing-dots span {
+        animation: none;
+        opacity: 0.6;
+    }
+}
+.agent-ui-request {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--accent-soft) 72%, var(--bg-1));
+    border: 1px solid var(--accent);
+    color: var(--text-1);
+    font-size: 0.846rem;
+    animation: chat-panel-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.agent-ui-request-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--accent);
+}
+.agent-ui-request-title {
+    font-weight: 600;
+    color: var(--text-1);
+    word-break: break-word;
+}
+.agent-ui-request-message {
+    max-height: 96px;
+    overflow: auto;
+    color: var(--text-muted);
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.agent-ui-request-field {
+    cursor: text;
+    resize: vertical;
+}
+.agent-ui-request-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+}
+.agent-ui-request-btn {
+    padding: 5px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-1);
+    color: var(--text-1);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+}
+.agent-ui-request-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+.agent-ui-request-btn-primary,
+.agent-ui-request-btn-primary:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-fg);
+}
 .chat-panel-live-banner {
     display: inline-flex;
     align-items: center;

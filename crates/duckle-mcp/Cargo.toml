@@ -20,6 +20,9 @@ duckle-duckdb-engine = { workspace = true }
 duckle-secrets = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Names the node/edge and field a malformed pipeline is missing, so an agent
+# can fix it instead of guessing ("nodes[2].data: missing field `label`").
+serde_path_to_error = "0.1"
 
 # Teradata and DB2 (ODBC via odbc-api) are enabled everywhere except macOS, whose
 # cross-arch ODBC driver manager is awkward to link in the release build. On

@@ -49,6 +49,8 @@ export function EngineUpgradeBanner() {
                 return 'Extracting...';
             case 'verifying':
                 return 'Verifying...';
+            case 'running_command':
+                return p.label;
             case 'installing_extension':
                 return `Installing extensions (${p.index}/${p.total})`;
             case 'downloading_model':

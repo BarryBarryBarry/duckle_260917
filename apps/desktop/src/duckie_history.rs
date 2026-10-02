@@ -1,5 +1,5 @@
-//! Duckie chat history, one JSON file per conversation under
-//! `<workspace>/.duckle/duckie/conversations/<id>.json`.
+//! Chat history for Duckie and the Pi Agent, one JSON file per conversation
+//! under `<workspace>/.duckle/<store>/conversations/<id>.json`.
 //!
 //! Messages are stored as opaque JSON so the frontend can keep its bubble
 //! shape (status cards, usage, extracted pipelines) without a schema here.
@@ -57,8 +57,24 @@ pub struct SaveRequest {
     pub messages: Vec<Value>,
 }
 
-fn conversations_dir(workspace: &Path) -> PathBuf {
-    workspace.join(".duckle").join("duckie").join("conversations")
+/// Which assistant a conversation belongs to; each keeps its own folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Store {
+    Duckie,
+    PiAgent,
+}
+
+impl Store {
+    fn folder(self) -> &'static str {
+        match self {
+            Store::Duckie => "duckie",
+            Store::PiAgent => "pi-agent",
+        }
+    }
+}
+
+fn conversations_dir(workspace: &Path, store: Store) -> PathBuf {
+    workspace.join(".duckle").join(store.folder()).join("conversations")
 }
 
 fn validate_id(id: &str) -> Result<(), String> {
@@ -74,15 +90,15 @@ fn validate_id(id: &str) -> Result<(), String> {
     }
 }
 
-fn conversation_path(workspace: &Path, id: &str) -> Result<PathBuf, String> {
+fn conversation_path(workspace: &Path, store: Store, id: &str) -> Result<PathBuf, String> {
     validate_id(id)?;
-    Ok(conversations_dir(workspace).join(format!("{id}.json")))
+    Ok(conversations_dir(workspace, store).join(format!("{id}.json")))
 }
 
 fn workspace_path(workspace: &str) -> Result<PathBuf, String> {
     let trimmed = workspace.trim();
     if trimmed.is_empty() {
-        return Err("open a workspace to keep Duckie chat history".into());
+        return Err("open a workspace to keep chat history".into());
     }
     Ok(PathBuf::from(trimmed))
 }
@@ -131,8 +147,8 @@ fn summary(conv: &Conversation) -> ConversationSummary {
 }
 
 /// Pinned first, then most recently updated.
-pub fn list(workspace: &Path) -> Result<Vec<ConversationSummary>, String> {
-    let dir = conversations_dir(workspace);
+pub fn list(workspace: &Path, store: Store) -> Result<Vec<ConversationSummary>, String> {
+    let dir = conversations_dir(workspace, store);
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -156,13 +172,13 @@ pub fn list(workspace: &Path) -> Result<Vec<ConversationSummary>, String> {
     Ok(out)
 }
 
-pub fn get(workspace: &Path, id: &str) -> Result<Conversation, String> {
-    read(&conversation_path(workspace, id)?)?
+pub fn get(workspace: &Path, store: Store, id: &str) -> Result<Conversation, String> {
+    read(&conversation_path(workspace, store, id)?)?
         .ok_or_else(|| format!("conversation {id} not found"))
 }
 
-pub fn save(workspace: &Path, req: SaveRequest) -> Result<(), String> {
-    let path = conversation_path(workspace, &req.id)?;
+pub fn save(workspace: &Path, store: Store, req: SaveRequest) -> Result<(), String> {
+    let path = conversation_path(workspace, store, &req.id)?;
     let now = now_ms();
     let conv = match read(&path)? {
         Some(mut existing) => {
@@ -188,11 +204,12 @@ pub fn save(workspace: &Path, req: SaveRequest) -> Result<(), String> {
 
 pub fn update_meta(
     workspace: &Path,
+    store: Store,
     id: &str,
     title: Option<String>,
     pinned: Option<bool>,
 ) -> Result<(), String> {
-    let path = conversation_path(workspace, id)?;
+    let path = conversation_path(workspace, store, id)?;
     let mut conv = read(&path)?.ok_or_else(|| format!("conversation {id} not found"))?;
     if let Some(title) = title {
         let title = clean_title(&title);
@@ -207,8 +224,8 @@ pub fn update_meta(
     write(&path, &conv)
 }
 
-pub fn delete(workspace: &Path, id: &str) -> Result<(), String> {
-    let path = conversation_path(workspace, id)?;
+pub fn delete(workspace: &Path, store: Store, id: &str) -> Result<(), String> {
+    let path = conversation_path(workspace, store, id)?;
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -222,12 +239,12 @@ pub fn delete(workspace: &Path, id: &str) -> Result<(), String> {
 
 #[tauri::command]
 pub fn duckie_conversations_list(workspace: String) -> Result<Vec<ConversationSummary>, String> {
-    list(&workspace_path(&workspace)?)
+    list(&workspace_path(&workspace)?, Store::Duckie)
 }
 
 #[tauri::command]
 pub fn duckie_conversation_get(workspace: String, id: String) -> Result<Conversation, String> {
-    get(&workspace_path(&workspace)?, &id)
+    get(&workspace_path(&workspace)?, Store::Duckie, &id)
 }
 
 #[tauri::command]
@@ -236,8 +253,8 @@ pub fn duckie_conversation_save(
     conversation: SaveRequest,
 ) -> Result<Vec<ConversationSummary>, String> {
     let ws = workspace_path(&workspace)?;
-    save(&ws, conversation)?;
-    list(&ws)
+    save(&ws, Store::Duckie, conversation)?;
+    list(&ws, Store::Duckie)
 }
 
 #[tauri::command]
@@ -248,8 +265,8 @@ pub fn duckie_conversation_update_meta(
     pinned: Option<bool>,
 ) -> Result<Vec<ConversationSummary>, String> {
     let ws = workspace_path(&workspace)?;
-    update_meta(&ws, &id, title, pinned)?;
-    list(&ws)
+    update_meta(&ws, Store::Duckie, &id, title, pinned)?;
+    list(&ws, Store::Duckie)
 }
 
 #[tauri::command]
@@ -258,8 +275,52 @@ pub fn duckie_conversation_delete(
     id: String,
 ) -> Result<Vec<ConversationSummary>, String> {
     let ws = workspace_path(&workspace)?;
-    delete(&ws, &id)?;
-    list(&ws)
+    delete(&ws, Store::Duckie, &id)?;
+    list(&ws, Store::Duckie)
+}
+
+// The Pi Agent keeps its own history, beside Duckie's.
+
+#[tauri::command]
+pub fn agent_conversations_list(workspace: String) -> Result<Vec<ConversationSummary>, String> {
+    list(&workspace_path(&workspace)?, Store::PiAgent)
+}
+
+#[tauri::command]
+pub fn agent_conversation_get(workspace: String, id: String) -> Result<Conversation, String> {
+    get(&workspace_path(&workspace)?, Store::PiAgent, &id)
+}
+
+#[tauri::command]
+pub fn agent_conversation_save(
+    workspace: String,
+    conversation: SaveRequest,
+) -> Result<Vec<ConversationSummary>, String> {
+    let ws = workspace_path(&workspace)?;
+    save(&ws, Store::PiAgent, conversation)?;
+    list(&ws, Store::PiAgent)
+}
+
+#[tauri::command]
+pub fn agent_conversation_update_meta(
+    workspace: String,
+    id: String,
+    title: Option<String>,
+    pinned: Option<bool>,
+) -> Result<Vec<ConversationSummary>, String> {
+    let ws = workspace_path(&workspace)?;
+    update_meta(&ws, Store::PiAgent, &id, title, pinned)?;
+    list(&ws, Store::PiAgent)
+}
+
+#[tauri::command]
+pub fn agent_conversation_delete(
+    workspace: String,
+    id: String,
+) -> Result<Vec<ConversationSummary>, String> {
+    let ws = workspace_path(&workspace)?;
+    delete(&ws, Store::PiAgent, &id)?;
+    list(&ws, Store::PiAgent)
 }
 
 #[cfg(test)]
@@ -280,30 +341,30 @@ mod tests {
     fn save_creates_then_updates_without_touching_title_or_pin() {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path();
-        save(ws, save_req("c1", "  First   question ", vec![json!({"role": "user"})])).unwrap();
-        update_meta(ws, "c1", Some("Renamed".into()), Some(true)).unwrap();
+        save(ws, Store::Duckie, save_req("c1", "  First   question ", vec![json!({"role": "user"})])).unwrap();
+        update_meta(ws, Store::Duckie, "c1", Some("Renamed".into()), Some(true)).unwrap();
 
         let mut again = save_req("c1", "ignored on update", vec![json!({}), json!({})]);
         again.remote_session_id = Some("acp-1".into());
-        save(ws, again).unwrap();
+        save(ws, Store::Duckie, again).unwrap();
 
-        let conv = get(ws, "c1").unwrap();
+        let conv = get(ws, Store::Duckie, "c1").unwrap();
         assert_eq!(conv.title, "Renamed");
         assert!(conv.pinned);
         assert_eq!(conv.messages.len(), 2);
         assert_eq!(conv.remote_session_id.as_deref(), Some("acp-1"));
 
         // A later save without a remote id keeps the one already recorded.
-        save(ws, save_req("c1", "", vec![json!({})])).unwrap();
-        assert_eq!(get(ws, "c1").unwrap().remote_session_id.as_deref(), Some("acp-1"));
+        save(ws, Store::Duckie, save_req("c1", "", vec![json!({})])).unwrap();
+        assert_eq!(get(ws, Store::Duckie, "c1").unwrap().remote_session_id.as_deref(), Some("acp-1"));
     }
 
     #[test]
     fn new_titles_are_collapsed_and_capped() {
         let tmp = tempfile::tempdir().unwrap();
-        save(tmp.path(), save_req("c1", "  a \n b  ", vec![])).unwrap();
-        assert_eq!(get(tmp.path(), "c1").unwrap().title, "a b");
-        assert!(update_meta(tmp.path(), "c1", Some("   ".into()), None).is_err());
+        save(tmp.path(), Store::Duckie, save_req("c1", "  a \n b  ", vec![])).unwrap();
+        assert_eq!(get(tmp.path(), Store::Duckie, "c1").unwrap().title, "a b");
+        assert!(update_meta(tmp.path(), Store::Duckie, "c1", Some("   ".into()), None).is_err());
     }
 
     #[test]
@@ -311,15 +372,15 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path();
         for id in ["old", "pinned", "new"] {
-            save(ws, save_req(id, id, vec![])).unwrap();
+            save(ws, Store::Duckie, save_req(id, id, vec![])).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        update_meta(ws, "old", None, Some(false)).unwrap();
-        update_meta(ws, "pinned", None, Some(true)).unwrap();
+        update_meta(ws, Store::Duckie, "old", None, Some(false)).unwrap();
+        update_meta(ws, Store::Duckie, "pinned", None, Some(true)).unwrap();
         // A broken file is skipped rather than failing the whole list.
-        std::fs::write(conversations_dir(ws).join("broken.json"), "{").unwrap();
+        std::fs::write(conversations_dir(ws, Store::Duckie).join("broken.json"), "{").unwrap();
 
-        let ids: Vec<String> = list(ws).unwrap().into_iter().map(|s| s.id).collect();
+        let ids: Vec<String> = list(ws, Store::Duckie).unwrap().into_iter().map(|s| s.id).collect();
         assert_eq!(ids, vec!["pinned", "new", "old"]);
     }
 
@@ -327,18 +388,27 @@ mod tests {
     fn rejects_ids_that_could_escape_the_folder() {
         let tmp = tempfile::tempdir().unwrap();
         for bad in ["", "../x", "a/b", "a.b", "x\\y"] {
-            assert!(get(tmp.path(), bad).is_err(), "{bad:?} should be rejected");
-            assert!(delete(tmp.path(), bad).is_err(), "{bad:?} should be rejected");
+            assert!(get(tmp.path(), Store::Duckie, bad).is_err(), "{bad:?} should be rejected");
+            assert!(delete(tmp.path(), Store::Duckie, bad).is_err(), "{bad:?} should be rejected");
         }
     }
 
     #[test]
     fn delete_is_idempotent_and_missing_history_is_empty() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(list(tmp.path()).unwrap().is_empty());
-        save(tmp.path(), save_req("c1", "t", vec![])).unwrap();
-        delete(tmp.path(), "c1").unwrap();
-        delete(tmp.path(), "c1").unwrap();
-        assert!(list(tmp.path()).unwrap().is_empty());
+        assert!(list(tmp.path(), Store::Duckie).unwrap().is_empty());
+        save(tmp.path(), Store::Duckie, save_req("c1", "t", vec![])).unwrap();
+        delete(tmp.path(), Store::Duckie, "c1").unwrap();
+        delete(tmp.path(), Store::Duckie, "c1").unwrap();
+        assert!(list(tmp.path(), Store::Duckie).unwrap().is_empty());
+    }
+
+    #[test]
+    fn stores_are_kept_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        save(tmp.path(), Store::PiAgent, save_req("c1", "agent", vec![])).unwrap();
+        assert!(list(tmp.path(), Store::Duckie).unwrap().is_empty());
+        assert_eq!(list(tmp.path(), Store::PiAgent).unwrap()[0].title, "agent");
+        assert!(tmp.path().join(".duckle/pi-agent/conversations/c1.json").exists());
     }
 }

@@ -18,6 +18,8 @@ pub const SLOTHDB_VERSION: &str = "0.2.7";
 /// flavors) - keep this on a recent build that ships the `*-cpu-*`
 /// universal variant.
 pub const LLAMACPP_BUILD: &str = "b9305";
+pub const NODE_VERSION: &str = "22.23.3";
+pub const PI_VERSION: &str = "0.99.2";
 /// A GGUF chat model the assistant can be installed with.
 ///
 /// The catalogue is curated rather than a live Hugging Face search: every
@@ -371,6 +373,170 @@ pub fn llama_model_path(app_data: &Path) -> PathBuf {
     dir.join(llama_model(None).file)
 }
 
+fn node_platform_triplet() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => Some("win-x64"),
+        ("windows", "aarch64") => Some("win-arm64"),
+        ("linux", "x86_64") => Some("linux-x64"),
+        ("linux", "aarch64") => Some("linux-arm64"),
+        ("macos", "x86_64") => Some("darwin-x64"),
+        ("macos", "aarch64") => Some("darwin-arm64"),
+        _ => None,
+    }
+}
+
+fn node_archive_name() -> Option<String> {
+    let triplet = node_platform_triplet()?;
+    Some(if cfg!(windows) {
+        format!("node-v{NODE_VERSION}-{triplet}.zip")
+    } else {
+        format!("node-v{NODE_VERSION}-{triplet}.tar.gz")
+    })
+}
+
+fn node_dist_dir_name() -> Option<String> {
+    node_platform_triplet().map(|triplet| format!("node-v{NODE_VERSION}-{triplet}"))
+}
+
+/// SHA-256 of each Node.js archive, from nodejs.org/dist/v<NODE_VERSION>/SHASUMS256.txt.
+/// Keyed by archive name, which carries the version, so bumping NODE_VERSION
+/// without updating this table fails closed rather than skipping verification.
+pub(crate) fn expected_node_sha256(asset: &str) -> &'static str {
+    match asset {
+        "node-v22.23.3-darwin-arm64.tar.gz" => {
+            "23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53"
+        }
+        "node-v22.23.3-darwin-x64.tar.gz" => {
+            "8a677b0219178efd6eb0e475457c4afb452b521a92f6e67845a73bd85727f2a8"
+        }
+        "node-v22.23.3-linux-arm64.tar.gz" => {
+            "5ced2d48d1d7198739b7f86804de0171aefb6823b684b12341d3321afc3cb0b2"
+        }
+        "node-v22.23.3-linux-x64.tar.gz" => {
+            "1084aa36196bba4c3a5e69a1ee388a6e4ff729dad09445fbcd434b28fe3c24af"
+        }
+        "node-v22.23.3-win-arm64.zip" => {
+            "33dad22e4cef5ee8f9fbb1b0d037fdacd0e56d12a4580f0d63f68b894deab535"
+        }
+        "node-v22.23.3-win-x64.zip" => {
+            "2b0ff57b049cda1bbcea2240eec20467018713c1efe1f7360c2681859b90ed71"
+        }
+        _ => "no pinned digest for this Node.js archive",
+    }
+}
+
+pub fn nodejs_dir(app_data: &Path) -> PathBuf {
+    app_data.join("engines").join("nodejs")
+}
+
+pub fn nodejs_path(app_data: &Path) -> PathBuf {
+    let root = nodejs_dir(app_data)
+        .join(node_dist_dir_name().unwrap_or_else(|| format!("node-v{NODE_VERSION}-unknown")));
+    if cfg!(windows) {
+        root.join("node.exe")
+    } else {
+        root.join("bin").join("node")
+    }
+}
+
+pub fn npm_cli_js(app_data: &Path) -> PathBuf {
+    let root = nodejs_dir(app_data)
+        .join(node_dist_dir_name().unwrap_or_else(|| format!("node-v{NODE_VERSION}-unknown")));
+    if cfg!(windows) {
+        root.join("node_modules")
+            .join("npm")
+            .join("bin")
+            .join("npm-cli.js")
+    } else {
+        root.join("lib")
+            .join("node_modules")
+            .join("npm")
+            .join("bin")
+            .join("npm-cli.js")
+    }
+}
+
+pub fn pi_prefix(app_data: &Path) -> PathBuf {
+    app_data.join("engines").join("pi")
+}
+
+pub fn pi_cli_js(app_data: &Path) -> PathBuf {
+    let pkg = pi_prefix(app_data)
+        .join("node_modules")
+        .join("@earendil-works")
+        .join("pi-coding-agent")
+        .join("package.json");
+    if let Ok(text) = std::fs::read_to_string(&pkg) {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+            let bin = json.get("bin").and_then(|v| match v {
+                serde_json::Value::String(s) => Some(s.as_str()),
+                serde_json::Value::Object(map) => map.get("pi").and_then(|v| v.as_str()),
+                _ => None,
+            });
+            if let Some(bin) = bin {
+                return pkg.parent().unwrap_or_else(|| Path::new("")).join(bin);
+            }
+        }
+    }
+    pi_prefix(app_data)
+        .join("node_modules")
+        .join("@earendil-works")
+        .join("pi-coding-agent")
+        .join("dist")
+        .join("bundle")
+        .join("cli.js")
+}
+
+fn pi_package_json(app_data: &Path) -> PathBuf {
+    pi_prefix(app_data)
+        .join("node_modules")
+        .join("@earendil-works")
+        .join("pi-coding-agent")
+        .join("package.json")
+}
+
+pub fn nodejs_installed(app_data: &Path) -> bool {
+    let node = nodejs_path(app_data);
+    if !node.exists() {
+        return false;
+    }
+    if !cfg!(windows) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if std::fs::metadata(&node)
+                .map(|m| m.permissions().mode() & 0o111 == 0)
+                .unwrap_or(true)
+            {
+                return false;
+            }
+        }
+    }
+    std::process::Command::new(&node)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .map(|v| v.trim().starts_with(&format!("v{NODE_VERSION}")))
+        .unwrap_or(false)
+}
+
+pub fn pi_installed(app_data: &Path) -> bool {
+    if !pi_cli_js(app_data).exists() {
+        return false;
+    }
+    std::fs::read_to_string(pi_package_json(app_data))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|json| {
+            json.get("version")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        })
+        .is_some_and(|version| version == PI_VERSION)
+}
+
 /// Release asset name for this OS/arch, or None if unsupported.
 fn asset_for(s: &EngineSpec) -> Option<String> {
     let os = std::env::consts::OS;
@@ -549,6 +715,9 @@ pub enum InstallProgress {
     Downloading { received: u64, total: Option<u64> },
     Extracting,
     Verifying,
+    RunningCommand {
+        label: String,
+    },
     /// Per-extension progress for the DuckDB extension pre-install step
     /// that runs after the engine binary lands. Fetching them up front
     /// means the first time a fresh user touches a Postgres source or an
@@ -706,6 +875,173 @@ pub fn install<F: FnMut(InstallProgress)>(
 ) -> Result<String, String> {
     let s = spec(engine_id).ok_or_else(|| format!("Unknown engine '{}'", engine_id))?;
     install_spec(app_data, s, model_id, on_progress)
+}
+
+fn extract_zip_all(bytes: &[u8], dir: &Path) -> Result<(), String> {
+    let reader = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(reader).map_err(|e| e.to_string())?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
+        let out_path = match file.enclosed_name() {
+            Some(path) => dir.join(path),
+            None => continue,
+        };
+        if file.is_dir() {
+            std::fs::create_dir_all(&out_path).map_err(|e| e.to_string())?;
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut out = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
+        std::io::copy(&mut file, &mut out).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Some(mode) = file.unix_mode() {
+                let _ = std::fs::set_permissions(&out_path, std::fs::Permissions::from_mode(mode));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn install_nodejs(
+    app_data: &Path,
+    mut on_progress: impl FnMut(InstallProgress),
+) -> Result<String, String> {
+    let asset = node_archive_name().ok_or_else(|| {
+        format!(
+            "No Node.js build for {}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+    })?;
+    let url = format!("https://nodejs.org/dist/v{NODE_VERSION}/{asset}");
+    let root_dir = node_dist_dir_name().ok_or_else(|| {
+        format!(
+            "No Node.js layout for {}-{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+    })?;
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("duckle")
+        .use_preconfigured_tls(duckle_duckdb_engine::tls::build_client_config())
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut resp = client.get(&url).send().map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Couldn't download Node.js {} (HTTP {})",
+            NODE_VERSION,
+            resp.status().as_u16()
+        ));
+    }
+    let total = resp.content_length();
+    let mut buf = Vec::with_capacity(total.unwrap_or(0) as usize);
+    let mut chunk = [0u8; 64 * 1024];
+    let mut received = 0u64;
+    on_progress(InstallProgress::Downloading { received: 0, total });
+    loop {
+        let n = resp.read(&mut chunk).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        received += n as u64;
+        on_progress(InstallProgress::Downloading { received, total });
+    }
+    verify_download(
+        "the Node.js runtime download",
+        &hex_sha256(&buf),
+        expected_node_sha256(&asset),
+    )?;
+
+    let final_dir = nodejs_dir(app_data);
+    let tmp_dir = final_dir.with_extension("installing");
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+    on_progress(InstallProgress::Extracting);
+    if asset.ends_with(".zip") {
+        extract_zip_all(&buf, &tmp_dir)?;
+    } else {
+        let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(buf));
+        let mut archive = tar::Archive::new(gz);
+        archive.unpack(&tmp_dir).map_err(|e| e.to_string())?;
+    }
+    let node = if cfg!(windows) {
+        tmp_dir.join(&root_dir).join("node.exe")
+    } else {
+        tmp_dir.join(&root_dir).join("bin").join("node")
+    };
+    if !node.exists() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        return Err("Node.js binary not found inside the downloaded archive".to_string());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755));
+    }
+    let _ = std::fs::remove_dir_all(&final_dir);
+    std::fs::rename(&tmp_dir, &final_dir).map_err(|e| e.to_string())?;
+    Ok(nodejs_path(app_data).to_string_lossy().into_owned())
+}
+
+pub fn install_pi(
+    app_data: &Path,
+    mut on_progress: impl FnMut(InstallProgress),
+) -> Result<String, String> {
+    if !nodejs_installed(app_data) {
+        return Err("Node.js is not installed yet".to_string());
+    }
+    let prefix = pi_prefix(app_data);
+    std::fs::create_dir_all(&prefix).map_err(|e| e.to_string())?;
+    on_progress(InstallProgress::RunningCommand {
+        label: "Installing Pi agent…".to_string(),
+    });
+    let mut cmd = std::process::Command::new(nodejs_path(app_data));
+    let node_bin_dir = nodejs_path(app_data)
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "node binary has no parent directory".to_string())?;
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let joined =
+        std::env::join_paths(std::iter::once(node_bin_dir).chain(std::env::split_paths(&path_var)))
+            .map_err(|e| e.to_string())?;
+    let out = cmd
+        .arg(npm_cli_js(app_data))
+        .args([
+            "install",
+            "--prefix",
+            prefix.to_string_lossy().as_ref(),
+            "--no-audit",
+            "--no-fund",
+            "--omit=dev",
+            &format!("@earendil-works/pi-coding-agent@{PI_VERSION}"),
+        ])
+        .env("PATH", joined)
+        .output()
+        .map_err(|e| format!("install Pi agent: {e}"))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let tail: String = stderr
+            .trim()
+            .chars()
+            .rev()
+            .take(400)
+            .collect::<Vec<char>>()
+            .into_iter()
+            .rev()
+            .collect();
+        return Err(if tail.is_empty() {
+            "Pi agent install failed".to_string()
+        } else {
+            format!("Pi agent install failed: {tail}")
+        });
+    }
+    Ok(pi_cli_js(app_data).to_string_lossy().into_owned())
 }
 
 /// macOS (#89): make a freshly downloaded engine dir launchable. Downloaded
@@ -1281,6 +1617,36 @@ mod download_verification_tests {
     fn digest_comparison_ignores_case() {
         let d = hex_sha256(b"x");
         verify_download("test artifact", &d.to_uppercase(), &d).unwrap();
+    }
+
+    /// The agent runtime is executed, so every platform Duckle offers it on must
+    /// carry a real digest for the pinned NODE_VERSION.
+    #[test]
+    fn every_node_archive_is_pinned() {
+        for triplet in [
+            "darwin-arm64",
+            "darwin-x64",
+            "linux-arm64",
+            "linux-x64",
+            "win-arm64",
+            "win-x64",
+        ] {
+            let ext = if triplet.starts_with("win") {
+                "zip"
+            } else {
+                "tar.gz"
+            };
+            let asset = format!("node-v{NODE_VERSION}-{triplet}.{ext}");
+            let digest = expected_node_sha256(&asset);
+            assert!(
+                digest.len() == 64 && digest.chars().all(|c| c.is_ascii_hexdigit()),
+                "{asset} has no pinned digest"
+            );
+        }
+        assert_eq!(
+            node_archive_name().map(|a| expected_node_sha256(&a).len()),
+            Some(64)
+        );
     }
 
     /// An unpinned artifact still installs, because refusing every download until

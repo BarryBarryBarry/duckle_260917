@@ -514,7 +514,7 @@ export function SettingsModal({
                             type="text"
                             value={aiBaseUrl}
                             onChange={e => setAiBaseUrl(e.target.value)}
-                            placeholder="Base URL, e.g. https://api.openai.com"
+                            placeholder="Base URL, e.g. https://api.openai.com or https://dashscope.aliyuncs.com/compatible-mode/v1"
                             disabled={!loaded || !workspace}
                             spellCheck={false}
                             autoComplete="off"

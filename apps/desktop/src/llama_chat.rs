@@ -353,6 +353,49 @@ fn usable_for_chat(kind: Option<&str>) -> bool {
     matches!(kind, None | Some("language") | Some("chat"))
 }
 
+/// Endpoints such as Aliyun Bailian list every model without a type, so an
+/// embedding model looked chat-ready and failed only at send time with a 400.
+fn named_like_non_chat(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    ["embedding", "embed-", "rerank", "-tts", "tts-", "-asr", "asr-", "paraformer", "cosyvoice"]
+        .iter()
+        .any(|marker| id.contains(marker))
+}
+
+/// The provider's own reason from an error body: OpenAI's `{"error":{"message"}}`,
+/// Aliyun's `{"code","message"}`, or the raw text, cut to a readable length.
+fn api_error_message(body: &str) -> Option<String> {
+    let text = body.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let parsed: Option<serde_json::Value> = serde_json::from_str(text).ok();
+    let message = parsed
+        .as_ref()
+        .and_then(|v| {
+            v.pointer("/error/message")
+                .or_else(|| v.get("message"))
+                .or_else(|| v.get("error"))
+                .and_then(|m| m.as_str())
+        })
+        .unwrap_or(text);
+    Some(message.chars().take(500).collect())
+}
+
+/// A ureq failure with the provider's explanation, not only its status code.
+fn describe_http_error(context: &str, err: ureq::Error) -> String {
+    match err {
+        ureq::Error::Status(code, resp) => {
+            let body = resp.into_string().unwrap_or_default();
+            match api_error_message(&body) {
+                Some(reason) => format!("{context}: status code {code}: {reason}"),
+                None => format!("{context}: status code {code}"),
+            }
+        }
+        other => format!("{context}: {other}"),
+    }
+}
+
 /// Parse an OpenAI-compatible `/v1/models` body into choices, chat models
 /// first and each group sorted by id.
 pub fn parse_models(body: &serde_json::Value) -> Vec<ModelChoice> {
@@ -369,13 +412,31 @@ pub fn parse_models(body: &serde_json::Value) -> Vec<ModelChoice> {
                 return None;
             }
             let kind = m.get("type").and_then(|v| v.as_str()).map(|s| s.to_string());
-            let chat = usable_for_chat(kind.as_deref());
+            let chat = usable_for_chat(kind.as_deref()) && !named_like_non_chat(&id);
             Some(ModelChoice { id, kind, chat })
         })
         .collect();
     out.sort_by(|a, b| b.chat.cmp(&a.chat).then_with(|| a.id.cmp(&b.id)));
     out.dedup_by(|a, b| a.id == b.id);
     out
+}
+
+/// The versioned API root of an OpenAI-compatible endpoint, without a
+/// trailing slash. A base URL that already ends in a version segment (`/v1`,
+/// Aliyun Bailian's `/compatible-mode/v1`, Zhipu's `/api/paas/v4`) is used as
+/// given; a bare host gets `/v1`, which is what OpenAI, DeepSeek, Ollama and
+/// most proxies serve. Appending `/v1` unconditionally turned the Aliyun URL
+/// into `.../compatible-mode/v1/v1/...`, a 404.
+pub fn openai_api_root(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    let last = trimmed.rsplit('/').next().unwrap_or("");
+    let versioned =
+        last.len() >= 2 && last.starts_with('v') && last[1..].chars().all(|c| c.is_ascii_digit());
+    if versioned {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/v1")
+    }
 }
 
 /// List what an OpenAI-compatible endpoint offers, so a model can be picked
@@ -385,7 +446,7 @@ pub fn parse_models(body: &serde_json::Value) -> Vec<ModelChoice> {
 /// unauthenticated, so the list can be browsed before a key exists. OpenAI
 /// requires one and says so in its own error, which is passed through.
 pub fn list_models(base_url: &str, api_key: Option<&str>) -> Result<Vec<ModelChoice>, String> {
-    let endpoint = format!("{}/v1/models", base_url.trim_end_matches('/'));
+    let endpoint = format!("{}/models", openai_api_root(base_url));
     // Same split as chat: a remote host needs the shared agent for OS roots and
     // the configured proxy; loopback must not go through that proxy.
     let mut req = if is_loopback_endpoint(&endpoint) {
@@ -399,7 +460,7 @@ pub fn list_models(base_url: &str, api_key: Option<&str>) -> Result<Vec<ModelCho
     }
     let body: serde_json::Value = req
         .call()
-        .map_err(|e| format!("list models: {}", e))?
+        .map_err(|e| describe_http_error("list models", e))?
         .into_json()
         .map_err(|e| format!("list models: {}", e))?;
     Ok(parse_models(&body))
@@ -456,7 +517,7 @@ pub fn chat_stream<F: FnMut(ChatEvent)>(
     }
     let resp = req
         .send_string(&body.to_string())
-        .map_err(|e| format!("chat send: {}", e))?;
+        .map_err(|e| describe_http_error("chat send", e))?;
     let reader = BufReader::new(resp.into_reader());
     // OpenAI-style SSE: each event is a "data: <json>" line. The
     // final line is "data: [DONE]". Empty lines separate events.
@@ -532,6 +593,51 @@ pub fn extract_pipeline(assistant_text: &str) -> Result<serde_json::Value, Strin
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn provider_error_reason_is_kept() {
+        use super::api_error_message as reason;
+        assert_eq!(
+            reason(r#"{"code":"InvalidParameter","message":"<400> InternalError.Algo.InvalidParameter: Field required: input.contents"}"#)
+                .as_deref(),
+            Some("<400> InternalError.Algo.InvalidParameter: Field required: input.contents")
+        );
+        assert_eq!(
+            reason(r#"{"error":{"message":"The model `x` does not exist","type":"invalid_request_error"}}"#).as_deref(),
+            Some("The model `x` does not exist")
+        );
+        assert_eq!(reason("Bad Gateway").as_deref(), Some("Bad Gateway"));
+        assert_eq!(reason("  "), None);
+    }
+
+    #[test]
+    fn untyped_embedding_models_are_not_offered_for_chat() {
+        let body = serde_json::json!({ "data": [
+            { "id": "qwen3.7-text-embedding" },
+            { "id": "qwen-plus" },
+            { "id": "gte-rerank-v2" },
+        ]});
+        let models = super::parse_models(&body);
+        assert_eq!(models[0].id, "qwen-plus");
+        assert!(models[0].chat);
+        assert!(models.iter().filter(|m| m.id != "qwen-plus").all(|m| !m.chat));
+    }
+
+    #[test]
+    fn openai_api_root_appends_v1_only_when_no_version_is_given() {
+        use super::openai_api_root as root;
+        assert_eq!(root("https://api.openai.com"), "https://api.openai.com/v1");
+        assert_eq!(root("https://api.deepseek.com/"), "https://api.deepseek.com/v1");
+        assert_eq!(root("http://localhost:11434"), "http://localhost:11434/v1");
+        assert_eq!(root("https://api.openai.com/v1/"), "https://api.openai.com/v1");
+        assert_eq!(
+            root(" https://ws-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1 "),
+            "https://ws-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        );
+        assert_eq!(root("https://open.bigmodel.cn/api/paas/v4"), "https://open.bigmodel.cn/api/paas/v4");
+        // A path that merely starts with "v" is not a version.
+        assert_eq!(root("https://gw.example.com/vendor"), "https://gw.example.com/vendor/v1");
+    }
+
     use super::*;
 
     #[test]

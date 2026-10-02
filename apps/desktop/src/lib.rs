@@ -19,7 +19,9 @@ use tauri::ipc::Channel;
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
+mod agent_backend;
 mod agent_bridge;
+mod agent_manager;
 mod app_settings;
 mod ci_status;
 mod dbt_engine;
@@ -258,6 +260,14 @@ pub fn run() {
             workspace_catalog_inspect,
             engine_status,
             engine_install,
+            agent_check_installed,
+            agent_install,
+            agent_start,
+            agent_send_prompt,
+            agent_abort,
+            agent_stop,
+            agent_ui_reply,
+            agent_list_connections,
             llama_models,
             llama_default_model,
             dbt_status,
@@ -275,6 +285,11 @@ pub fn run() {
             duckie_history::duckie_conversation_save,
             duckie_history::duckie_conversation_update_meta,
             duckie_history::duckie_conversation_delete,
+            duckie_history::agent_conversations_list,
+            duckie_history::agent_conversation_get,
+            duckie_history::agent_conversation_save,
+            duckie_history::agent_conversation_update_meta,
+            duckie_history::agent_conversation_delete,
             secrets::duckie_connection_set_credentials,
             workspace_git_status,
             workspace_git_init,
@@ -326,6 +341,7 @@ pub fn run() {
             // does not linger as an orphaned headless process.
             if let tauri::RunEvent::Exit = event {
                 stop_web_panel_silent();
+                let _ = agent_manager::agent_stop_sync();
             }
         });
 }
@@ -1281,6 +1297,91 @@ async fn engine_install(
     result
 }
 
+#[tauri::command]
+fn agent_check_installed(app: tauri::AppHandle) -> Result<bool, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    Ok(agent_manager::agent_check_installed_sync(&dir))
+}
+
+#[tauri::command]
+async fn agent_install(
+    app: tauri::AppHandle,
+    on_progress: Channel<InstallProgress>,
+) -> Result<String, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        if !engine_manager::nodejs_installed(&dir) {
+            engine_manager::install_nodejs(&dir, |p| {
+                let _ = on_progress.send(p);
+            })?;
+        }
+        engine_manager::install_pi(&dir, |p| {
+            let _ = on_progress.send(p);
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn agent_start(
+    app: tauri::AppHandle,
+    workspace: String,
+    conversation_id: String,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        agent_manager::agent_start_sync(app, workspace, conversation_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn agent_send_prompt(
+    prompt: String,
+    context: agent_backend::ContextPayload,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || agent_manager::agent_send_prompt_sync(prompt, context))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn agent_abort() -> Result<(), String> {
+    tokio::task::spawn_blocking(agent_manager::agent_abort_sync)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn agent_stop() -> Result<(), String> {
+    tokio::task::spawn_blocking(agent_manager::agent_stop_sync)
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn agent_ui_reply(
+    request_id: String,
+    reply: agent_backend::UiReplyDto,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        agent_manager::agent_ui_reply_sync(request_id, reply.into())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn agent_list_connections(
+    workspace: String,
+) -> Result<Vec<agent_backend::ConnectionContext>, String> {
+    if workspace.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    agent_manager::list_connections_sync(&workspace)
+}
+
 /// Whether a free dbt engine (Apache dbt-core + dbt-duckdb, provisioned via uv)
 /// is already installed in app-data. The xf.dbt node needs it; first launch
 /// fetches it automatically in the background.
@@ -1461,7 +1562,7 @@ async fn chat_send(
         let base = ai.base_url.clone().ok_or_else(|| {
             "AI mode is OpenAI-compatible but no base URL is configured".to_string()
         })?;
-        let endpoint = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+        let endpoint = format!("{}/chat/completions", llama_chat::openai_api_root(&base));
         let model = ai.model.unwrap_or_else(|| "gpt-4o-mini".to_string());
         let key = ai.api_key;
         return tokio::task::spawn_blocking(move || {

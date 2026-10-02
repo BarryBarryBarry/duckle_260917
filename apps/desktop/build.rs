@@ -46,7 +46,12 @@ fn compress_to(src: &std::path::Path, dst: &std::path::Path) {
         }
     }
     let raw = std::fs::read(src).unwrap_or_else(|e| panic!("read {}: {}", src.display(), e));
-    let comp = zstd::encode_all(std::io::Cursor::new(&raw), 19)
+    // Level 19 is for what ships. On a ~280MB unoptimized dev sidecar it costs
+    // many minutes of a single core every time that sidecar is rebuilt, which
+    // looks like `cargo tauri dev` hanging at "duckle-desktop(build)"; level 3
+    // takes about a second there. Decompression speed does not depend on it.
+    let level = if std::env::var("PROFILE").as_deref() == Ok("debug") { 3 } else { 19 };
+    let comp = zstd::encode_all(std::io::Cursor::new(&raw), level)
         .unwrap_or_else(|e| panic!("zstd compress {}: {}", src.display(), e));
     std::fs::write(dst, &comp).unwrap_or_else(|e| panic!("write {}: {}", dst.display(), e));
 }
