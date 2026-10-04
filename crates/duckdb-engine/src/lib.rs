@@ -44,6 +44,7 @@ pub mod capabilities;
 pub mod materialize;
 pub mod metrics_bus;
 pub mod metrics_model;
+pub mod metrics_query;
 pub mod metrics_store;
 pub mod subscribe;
 pub mod chunk_exec;

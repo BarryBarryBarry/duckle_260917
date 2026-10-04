@@ -50,6 +50,7 @@ mod follow;
 mod listen;
 mod import;
 mod manifest;
+mod metrics_api;
 mod pipetest;
 mod python;
 mod selfextract;

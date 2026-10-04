@@ -239,6 +239,8 @@ pub fn run() {
             run_pipeline,
             run_pipeline_partial,
             run_history,
+            metrics_runs,
+            metrics_pipelines,
             watermark_list,
             watermark_set,
             watermark_clear,
@@ -722,6 +724,37 @@ async fn run_pipeline_partial(
     }
     record_history(&pipeline_id, &workspace_path, &result, "partial", run_id.as_deref());
     Ok(result)
+}
+
+/// Plan 003: runs from the workspace's metrics store, for the run metrics page.
+/// Parameters are the console API's (`from`, `to`, `pipeline`, `status`,
+/// `page`, `pageSize`, `cursor`, `runKey`, `includeNodes`). A query that cannot
+/// be answered comes back as an object with `error`, `status` and, when the
+/// store is unreachable, `reason`.
+#[tauri::command]
+fn metrics_runs(workspace_path: String, query: Option<JsonValue>) -> JsonValue {
+    let bin = DUCKDB_BIN.get().cloned().unwrap_or_default();
+    metrics_runs_in(std::path::Path::new(&workspace_path), &bin, &query.unwrap_or(JsonValue::Null))
+}
+
+fn metrics_runs_in(workspace: &std::path::Path, bin: &std::path::Path, query: &JsonValue) -> JsonValue {
+    let params = duckle_duckdb_engine::metrics_query::params_from_json(query);
+    match duckle_duckdb_engine::metrics_query::runs(workspace, bin, &params) {
+        Ok(v) => v,
+        Err(e) => {
+            let mut body = e.body();
+            let code: u16 = e.status().split_whitespace().next().and_then(|c| c.parse().ok()).unwrap_or(500);
+            body["status"] = JsonValue::from(code);
+            body
+        }
+    }
+}
+
+/// Plan 003: every pipeline in the workspace with its display name, for the
+/// run metrics page's pipeline filter.
+#[tauri::command]
+fn metrics_pipelines(workspace_path: String) -> JsonValue {
+    duckle_duckdb_engine::metrics_query::pipelines(std::path::Path::new(&workspace_path))
 }
 
 /// Read the run history for a pipeline (newest first).
@@ -2827,6 +2860,39 @@ fn mcp_inject_config(app: tauri::AppHandle, client: String) -> Result<String, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plan 003: the desktop's metrics command answers what the console API
+    /// does for the same store and query, and says why when it cannot.
+    #[test]
+    fn the_metrics_command_answers_like_the_console_api() {
+        let ws = tempfile::tempdir().unwrap();
+        let down = metrics_runs_in(ws.path(), std::path::Path::new("/no/duckdb"), &serde_json::json!({}));
+        assert_eq!(down["status"], 503);
+        let refused = metrics_runs_in(ws.path(), std::path::Path::new("/no/duckdb"), &serde_json::json!({ "limit": 0 }));
+        assert_eq!(refused["status"], 400);
+        let Some(bin) = std::env::var_os("DUCKLE_DUCKDB_BIN").map(PathBuf::from).filter(|b| b.is_file()) else {
+            eprintln!("skipping the store half: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let store = duckle_duckdb_engine::metrics_store::MetricsStore::open(ws.path(), &bin).unwrap();
+        store
+            .apply_run_patch(&duckle_duckdb_engine::metrics_model::PipelineRunPatch {
+                run_key: "run-1".into(),
+                pipeline_id: Some("orders".into()),
+                started_at: Some("2026-10-04T10:00:00Z".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let query = serde_json::json!({ "pipeline": ["orders"], "page": 1 });
+        let api = duckle_duckdb_engine::metrics_query::runs(
+            ws.path(),
+            &bin,
+            &duckle_duckdb_engine::metrics_query::params_from_json(&query),
+        )
+        .unwrap();
+        assert_eq!(metrics_runs_in(ws.path(), &bin, &query), api);
+        assert_eq!(api["total"], 1);
+    }
 
     /// Plan 003: a canvas run's history record names the run its receipt does,
     /// and a run with no workspace records nothing and begins nothing.

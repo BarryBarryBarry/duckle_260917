@@ -321,6 +321,8 @@ pub fn requirement(method: &str, path: &str) -> (Role, &'static str) {
         ("GET", "/api/pipelines") => (Role::Viewer, "pipelines.list"),
         ("GET", "/api/pipeline") => (Role::Viewer, "pipeline.read"),
         ("GET", "/api/runs") => (Role::Viewer, "runs.read"),
+        ("GET", "/api/metrics/runs") => (Role::Viewer, "metrics.runs.read"),
+        ("GET", "/api/metrics/events") => (Role::Viewer, "metrics.events.read"),
         ("GET", "/api/log") => (Role::Viewer, "log.read"),
         ("GET", "/api/schedules") => (Role::Viewer, "schedules.read"),
         ("GET", "/api/catalog") => (Role::Viewer, "catalog.read"),
@@ -526,6 +528,8 @@ mod tests {
     #[test]
     fn reading_needs_less_than_running_and_unknown_routes_need_the_most() {
         assert_eq!(requirement("GET", "/api/runs").0, Role::Viewer);
+        assert_eq!(requirement("GET", "/api/metrics/runs"), (Role::Viewer, "metrics.runs.read"));
+        assert_eq!(requirement("GET", "/api/metrics/events"), (Role::Viewer, "metrics.events.read"));
         assert_eq!(requirement("POST", "/api/run").0, Role::Operator);
         // Signing yourself out is not a privileged act. Anyone who could sign
         // in must be able to sign out, whatever their role.

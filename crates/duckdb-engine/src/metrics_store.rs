@@ -414,6 +414,16 @@ impl MetricsStore {
         Ok(states.into_iter().map(|s| (s.run_key, s.status)).collect())
     }
 
+    /// The pipelines the store holds at least one run of.
+    pub fn pipelines_with_runs(&self) -> Result<HashSet<String>, MetricsError> {
+        #[derive(Deserialize)]
+        struct Id {
+            pipeline_id: String,
+        }
+        let ids: Vec<Id> = last_result(&self.read("SELECT DISTINCT pipeline_id FROM pipeline_run;")?)?;
+        Ok(ids.into_iter().map(|i| i.pipeline_id).collect())
+    }
+
     /// What [`MetricsStore::delete_before`] would remove for this horizon.
     pub fn count_before(&self, horizon: DateTime<Utc>) -> Result<PurgeCounts, MetricsError> {
         last_result::<PurgeCounts>(&self.read(&count_before_sql(horizon))?)?
