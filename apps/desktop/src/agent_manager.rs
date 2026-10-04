@@ -30,8 +30,10 @@ const SUBAGENT_DEFINITIONS: &[(&str, &str)] = &[
 ];
 /// The bridge extension's delegation tool (see agent_assets/duckle-bridge.ts).
 const SUBAGENT_TOOL: &str = "duckle_subagent";
-/// Pi's own tools the agent must not have: Duckle work goes through MCP.
-const EXCLUDED_TOOLS: &str = "bash,edit,write";
+/// Pi's own tools the agent must not have: Duckle work goes through MCP. Only
+/// `read` stays, confined to the workspace by the bridge's tool policy. Keep in
+/// sync with CHILD_EXCLUDED_TOOLS in agent_assets/duckle-bridge.ts.
+const EXCLUDED_TOOLS: &str = "bash,powershell,edit,write,grep,find,ls";
 
 #[derive(Default)]
 struct RuntimeState {
@@ -79,12 +81,16 @@ impl AgentBackend for PiBackend {
                 &config.session_id,
                 "--exclude-tools",
                 EXCLUDED_TOOLS,
+                // A workspace's own .pi settings, extensions or MCP servers
+                // must not widen the tools the bridge allows.
+                "--no-approve",
             ])
             .current_dir(&config.workspace)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .env("PI_CODING_AGENT_DIR", &config.agent_dir)
+            .env("DUCKLE_AGENT_WORKSPACE", &config.workspace)
             .env("PI_OFFLINE", "1")
             .env("PI_TELEMETRY", "0");
         if let Some(parent) = config.node_bin.parent() {
@@ -1386,10 +1392,22 @@ mod agent_e2e {
         }
         let user = last["content"].to_string();
         let pipelines = ws.join("pipelines");
+        let outside = ws.join("..").join("duckle-outside.json");
         if is_checker {
+            if user.contains("try to write") {
+                return tool_reply(
+                    "mcp__duckle__create_pipeline",
+                    json!({ "workspace": ws, "name": "x", "pipeline": { "nodes": [], "edges": [] } }),
+                );
+            }
             tool_reply(
                 "mcp__duckle__list_pipelines",
                 json!({ "directory": pipelines }),
+            )
+        } else if user.contains("delegate a write") {
+            tool_reply(
+                SUBAGENT_TOOL,
+                json!({ "agent": "pipeline-checker", "task": format!("try to write a pipeline in {}", ws.display()) }),
             )
         } else if user.contains("delegate") {
             tool_reply(
@@ -1400,6 +1418,29 @@ mod agent_e2e {
             tool_reply(
                 "mcp__duckle__run_pipeline",
                 json!({ "workspace": ws, "path": pipelines.join("demo.json") }),
+            )
+        } else if user.contains("read outside") {
+            tool_reply("read", json!({ "path": outside }))
+        } else if user.contains("read secret") {
+            tool_reply("read", json!({ "path": ".duckle/settings.json" }))
+        } else if user.contains("read inside") {
+            tool_reply("read", json!({ "path": "notes.txt" }))
+        } else if user.contains("pipeline outside") {
+            tool_reply("mcp__duckle__read_pipeline", json!({ "path": outside }))
+        } else if user.contains("pass duckdb") {
+            tool_reply(
+                "mcp__duckle__validate_pipeline",
+                json!({ "path": pipelines.join("demo.json"), "duckdb": "/bin/sh" }),
+            )
+        } else if user.contains("make connection") {
+            tool_reply(
+                "mcp__duckle__create_connection",
+                json!({ "workspace": ws, "name": "Sales DB", "connection": { "kind": "postgres" } }),
+            )
+        } else if user.contains("bad id") {
+            tool_reply(
+                "mcp__duckle__create_pipeline",
+                json!({ "workspace": ws, "id": "../escape", "name": "x", "pipeline": { "nodes": [], "edges": [] } }),
             )
         } else {
             text_reply("HELLO")
@@ -1483,6 +1524,31 @@ mod agent_e2e {
             .start(cfg, Box::new(move |e| sink.lock().unwrap().push(e)))
             .expect("pi agent starts");
         Events { seen }
+    }
+
+    /// Send one prompt and return the result of the named tool's call once the
+    /// agent has settled.
+    fn tool_end(
+        backend: &mut PiBackend,
+        events: &Events,
+        ctx: &ContextPayload,
+        prompt: &str,
+        tool: &str,
+    ) -> (String, bool) {
+        events.clear();
+        backend.send_prompt(prompt, ctx).unwrap();
+        let end = events.wait_for(
+            tool,
+            |e| matches!(e, AgentEvent::ToolEnd { name, .. } if name == tool),
+        );
+        events.wait_for("settled", |e| matches!(e, AgentEvent::Settled));
+        let AgentEvent::ToolEnd {
+            result, is_error, ..
+        } = end
+        else {
+            unreachable!()
+        };
+        (result.to_string(), is_error)
     }
 
     #[test]
@@ -1601,7 +1667,91 @@ mod agent_e2e {
         );
         events.wait_for("settled", |e| matches!(e, AgentEvent::Settled));
 
-        // 3. A restart restores the conversation without the context block.
+        // 3. The tool policy: paths stay in the workspace, out of .duckle;
+        //    other side effects ask; subagents only inspect.
+        std::fs::write(ws.join("notes.txt"), "INSIDE_NOTE").unwrap();
+        std::fs::create_dir_all(ws.join(".duckle")).unwrap();
+        std::fs::write(
+            ws.join(".duckle/settings.json"),
+            r#"{"aiApiKey":"sk-hidden"}"#,
+        )
+        .unwrap();
+
+        let (out, err) = tool_end(&mut backend, &events, &ctx, "please read inside", "read");
+        assert!(!err && out.contains("INSIDE_NOTE"), "{out}");
+        let (out, err) = tool_end(&mut backend, &events, &ctx, "please read outside", "read");
+        assert!(err && out.contains("outside the workspace"), "{out}");
+        let (out, err) = tool_end(&mut backend, &events, &ctx, "please read secret", "read");
+        assert!(
+            err && out.contains(".duckle folder") && !out.contains("sk-hidden"),
+            "{out}"
+        );
+        let (out, err) = tool_end(
+            &mut backend,
+            &events,
+            &ctx,
+            "please read pipeline outside",
+            "mcp__duckle__read_pipeline",
+        );
+        assert!(err && out.contains("outside the workspace"), "{out}");
+        let (out, err) = tool_end(
+            &mut backend,
+            &events,
+            &ctx,
+            "please pass duckdb",
+            "mcp__duckle__validate_pipeline",
+        );
+        assert!(err && out.contains("duckdb"), "{out}");
+        let (out, err) = tool_end(
+            &mut backend,
+            &events,
+            &ctx,
+            "please use a bad id",
+            "mcp__duckle__create_pipeline",
+        );
+        assert!(err && out.contains("../escape"), "{out}");
+        assert!(!ws.join("escape.json").exists());
+        let (out, err) = tool_end(
+            &mut backend,
+            &events,
+            &ctx,
+            "please delegate a write",
+            SUBAGENT_TOOL,
+        );
+        assert!(!err && out.contains("only inspects"), "{out}");
+        assert!(std::fs::read_dir(ws.join("pipelines"))
+            .unwrap()
+            .next()
+            .is_none());
+
+        events.clear();
+        backend.send_prompt("please make connection", &ctx).unwrap();
+        let request = events.wait_for(
+            "connection confirm",
+            |e| matches!(e, AgentEvent::UiRequest { method, .. } if method == "confirm"),
+        );
+        let AgentEvent::UiRequest { id, title, .. } = request else {
+            unreachable!()
+        };
+        assert_eq!(title.as_deref(), Some("新建连接「Sales DB」？"));
+        backend.reply_ui(&id, UiReply::Confirmed(false)).unwrap();
+        let end = events.wait_for("connection tool end", |e| {
+            matches!(e, AgentEvent::ToolEnd { name, .. } if name == "mcp__duckle__create_connection")
+        });
+        let AgentEvent::ToolEnd {
+            result, is_error, ..
+        } = end
+        else {
+            unreachable!()
+        };
+        assert!(
+            is_error && result.to_string().contains("declined"),
+            "{result}"
+        );
+        assert!(!ws.join("connections").exists());
+        events.wait_for("settled", |e| matches!(e, AgentEvent::Settled));
+
+        // 4. A restart restores the conversation without the context block.
         backend.stop().unwrap();
         let events = start(&mut backend, &cfg);
         let history = events.wait_for("history", |e| matches!(e, AgentEvent::HistoryLoaded { .. }));
