@@ -255,6 +255,30 @@ impl MetricsStore {
         self.exec(&sql, false).map(|_| ())
     }
 
+    /// Create or update many runs in one statement, each of which carries
+    /// `pipeline_id` and `started_at`. A run patched twice keeps the later
+    /// patch. For bulk loads such as a backfill.
+    pub fn apply_run_patches(&self, patches: &[PipelineRunPatch]) -> Result<(), MetricsError> {
+        let mut seen = HashSet::new();
+        let mut unique: Vec<&PipelineRunPatch> = Vec::with_capacity(patches.len());
+        for p in patches.iter().rev() {
+            require_key("run_key", &p.run_key)?;
+            if p.pipeline_id.is_none() || p.started_at.is_none() {
+                return Err(MetricsError::InvalidArgument(format!("run {} has no pipeline or start", p.run_key)));
+            }
+            if seen.insert(p.run_key.as_str()) {
+                unique.push(p);
+            }
+        }
+        if unique.is_empty() {
+            return Ok(());
+        }
+        unique.reverse();
+        let rows = TempNdjson::write(&self.temp_dir(), &unique)?;
+        let sql = upsert_sql("pipeline_run", &["run_key"], RUN_COLS, &rows.path, "'queued'");
+        self.exec(&sql, false).map(|_| ())
+    }
+
     /// Create or update nodes. A node patched twice in one call keeps the
     /// later patch only, since one statement cannot update a row twice.
     pub fn apply_node_patches(&self, patches: &[NodeRunPatch]) -> Result<(), MetricsError> {
@@ -297,8 +321,23 @@ impl MetricsStore {
 
     /// Record an event. An event already recorded is left as it was.
     pub fn append_event(&self, event: &PipelineEventRecord) -> Result<(), MetricsError> {
-        require_key("event_id", &event.event_id)?;
-        let rows = TempNdjson::write(&self.temp_dir(), std::slice::from_ref(event))?;
+        self.append_events(std::slice::from_ref(event))
+    }
+
+    /// Record many events; any already recorded, or repeated, keep the first.
+    pub fn append_events(&self, events: &[PipelineEventRecord]) -> Result<(), MetricsError> {
+        let mut seen = HashSet::new();
+        let mut unique: Vec<&PipelineEventRecord> = Vec::with_capacity(events.len());
+        for e in events {
+            require_key("event_id", &e.event_id)?;
+            if seen.insert(e.event_id.as_str()) {
+                unique.push(e);
+            }
+        }
+        if unique.is_empty() {
+            return Ok(());
+        }
+        let rows = TempNdjson::write(&self.temp_dir(), &unique)?;
         let sql = format!(
             "INSERT INTO pipeline_event (event_id, run_key, pipeline_id, pipeline_name, kind, occurred_at, trigger, detail) \
              SELECT event_id, run_key, pipeline_id, pipeline_name, kind, occurred_at, trigger, detail \

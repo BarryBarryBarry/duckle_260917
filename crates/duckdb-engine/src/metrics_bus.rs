@@ -499,22 +499,44 @@ fn apply_ended(
 
 fn apply_recorded(store: &MetricsStore, pipeline_id: &str, r: &RunRecord) -> Result<(), MetricsError> {
     let Some(run_key) = r.run_id.clone() else { return Ok(()) };
+    let parts = record_parts(pipeline_id, &run_key, r);
+    store.apply_run_patch(&parts.run)?;
+    store.apply_node_patches(&parts.nodes)?;
+    close_run(store, &run_key, parts.status)?;
+    store.append_event(&parts.finished)
+}
+
+/// What one run record writes to the store, keyed by `run_key`.
+pub(crate) struct RecordParts {
+    pub run: PipelineRunPatch,
+    pub nodes: Vec<NodeRunPatch>,
+    pub status: RunStatus,
+    pub started: PipelineEventRecord,
+    pub finished: PipelineEventRecord,
+}
+
+/// A run record in the store's terms. The record `reconcile` writes for an
+/// interrupted run has zeros for figures it never measured, so those are left
+/// out rather than stored as measurements.
+pub(crate) fn record_parts(pipeline_id: &str, run_key: &str, r: &RunRecord) -> RecordParts {
     let (status, unknown) = RunStatus::from_result_status(&r.status);
+    let measured = status != RunStatus::Interrupted;
     let started_at = r.started_at.clone().or_else(|| minus_ms(&r.at, r.duration_ms)).unwrap_or_else(|| r.at.clone());
     let error = match (&r.error, unknown) {
         (Some(e), Some(u)) => Some(format!("{u}: {e}")),
         (e, u) => e.clone().or(u),
     };
-    let patch = PipelineRunPatch {
-        run_key: run_key.clone(),
+    let figure = |n: u64| measured.then_some(to_i64(n));
+    let run = PipelineRunPatch {
+        run_key: run_key.to_string(),
         pipeline_id: Some(pipeline_id.to_string()),
         trigger: Some(r.trigger.clone()),
         status: Some(status),
         started_at: Some(started_at.clone()),
-        duration_ms: Some(to_i64(r.duration_ms)),
-        rows: Some(to_i64(r.rows)),
+        duration_ms: figure(r.duration_ms),
+        rows: figure(r.rows),
         rejected_rows: r.rejected_rows.map(to_i64),
-        node_count: Some(to_i64(r.node_count as u64)),
+        node_count: figure(r.node_count as u64),
         unchanged: Some(r.unchanged),
         incomplete: Some(r.incomplete),
         incomplete_reason: r.incomplete_reason.clone(),
@@ -522,12 +544,11 @@ fn apply_recorded(store: &MetricsStore, pipeline_id: &str, r: &RunRecord) -> Res
         category: r.category.clone(),
         ..Default::default()
     };
-    store.apply_run_patch(&patch)?;
-    let nodes: Vec<NodeRunPatch> = r
+    let nodes = r
         .nodes
         .iter()
         .map(|n| NodeRunPatch {
-            run_key: run_key.clone(),
+            run_key: run_key.to_string(),
             node_id: n.node.clone(),
             component: n.component.clone(),
             kind: n.kind.clone(),
@@ -541,17 +562,37 @@ fn apply_recorded(store: &MetricsStore, pipeline_id: &str, r: &RunRecord) -> Res
             ..Default::default()
         })
         .collect();
-    store.apply_node_patches(&nodes)?;
-    close_run(store, &run_key, status)?;
     let id = RunIdentity {
-        run_key,
+        run_key: run_key.to_string(),
         pipeline_id: pipeline_id.to_string(),
         pipeline_name: None,
         trigger: r.trigger.clone(),
         began_at: started_at,
     };
-    let (duration, rows) = (Some(to_i64(r.duration_ms)), Some(to_i64(r.rows)));
-    store.append_event(&finished_event(&id, &r.at, status, duration, rows, error.as_deref()))
+    let finished = finished_event(&id, &r.at, status, run.duration_ms, run.rows, error.as_deref());
+    RecordParts { run, nodes, status, started: started_event(&id), finished }
+}
+
+/// A `run_started` event for a run whose admission was never seen: it
+/// started when it began.
+fn started_event(id: &RunIdentity) -> PipelineEventRecord {
+    PipelineEventRecord {
+        event_id: PipelineEventRecord::id_for(&id.run_key, PipelineEventKind::RunStarted),
+        run_key: id.run_key.clone(),
+        pipeline_id: id.pipeline_id.clone(),
+        pipeline_name: id.pipeline_name.clone(),
+        kind: PipelineEventKind::RunStarted,
+        occurred_at: id.began_at.clone(),
+        trigger: Some(id.trigger.clone()),
+        detail: Some(serde_json::json!({ "queue_ms": null }).to_string()),
+        created_at: String::new(),
+    }
+}
+
+/// Apply an event now, on this thread, whether or not metrics are configured.
+/// For backfill, which repairs runs the live bus could not.
+pub(crate) fn apply_now(bin: &Path, event: &MetricsEvent) -> Result<(), MetricsError> {
+    apply(bin, event)
 }
 
 fn finished_event(

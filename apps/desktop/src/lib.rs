@@ -1012,6 +1012,11 @@ fn schedule_set_workspace(path: String) -> Result<(), String> {
         let ws = PathBuf::from(&path);
         std::thread::spawn(move || {
             duckle_duckdb_engine::recovery::reclaim_abandoned(&ws);
+            // Plan 003: then bring the run metrics store up to date from run
+            // history. Pruning old metrics is left to `retention` here.
+            if let Some(bin) = DUCKDB_BIN.get() {
+                duckle_duckdb_engine::metrics_backfill::at_startup(&ws, bin, false);
+            }
         });
     }
     let p = if path.is_empty() {

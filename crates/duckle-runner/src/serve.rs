@@ -333,6 +333,13 @@ pub fn run() -> Result<(), String> {
     );
 
     reconcile_at_startup(&workspace);
+    // Plan 003: bring the run metrics store up to date from run history, and
+    // keep DUCKLE_METRICS_RETENTION_DAYS of it (30 unless set; 0 keeps all).
+    // On its own thread: a large history must not hold up the console.
+    {
+        let (ws, bin) = (workspace.clone(), duckdb.clone());
+        std::thread::spawn(move || duckle_duckdb_engine::metrics_backfill::at_startup(&ws, &bin, true));
+    }
 
     // Decide who may use this console before binding anything. An exposed bind
     // with no credential does not refuse to start any more - it comes up
@@ -546,6 +553,13 @@ pub fn run_web() -> Result<(), String> {
     );
 
     reconcile_at_startup(&workspace);
+    // Plan 003: bring the run metrics store up to date from run history, and
+    // keep DUCKLE_METRICS_RETENTION_DAYS of it (30 unless set; 0 keeps all).
+    // On its own thread: a large history must not hold up the console.
+    {
+        let (ws, bin) = (workspace.clone(), duckdb.clone());
+        std::thread::spawn(move || duckle_duckdb_engine::metrics_backfill::at_startup(&ws, &bin, true));
+    }
     // The editor writes files, edits connections and runs pipelines, so it is
     // at least as powerful as the console and gets the same rule: loopback is
     // open, anything else needs a credential before the socket is bound.
