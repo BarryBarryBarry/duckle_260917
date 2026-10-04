@@ -42,6 +42,8 @@ pub mod backfill;
 pub mod backfill_exec;
 pub mod capabilities;
 pub mod materialize;
+pub mod metrics_model;
+pub mod metrics_store;
 pub mod subscribe;
 pub mod chunk_exec;
 pub mod chunking;
