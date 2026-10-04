@@ -295,6 +295,7 @@ mod tests {
             category: None,
             assets: Vec::new(),
             nodes: Vec::new(),
+            ..Default::default()
         };
         r.assets = writes
             .iter()
@@ -396,6 +397,7 @@ mod emitted_once {
                 rows: Some(5),
             }],
             nodes: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -562,6 +564,7 @@ mod needs_a_catalog {
             category: None,
             assets: Vec::new(),
             nodes: Vec::new(),
+            ..Default::default()
         };
         assert!(
             event_of(None, "p", &no_assets).is_none(),
@@ -604,6 +607,7 @@ mod survives_a_pruned_receipt {
                 rows: Some(5),
             }],
             nodes: Vec::new(),
+            ..Default::default()
         }
     }
 

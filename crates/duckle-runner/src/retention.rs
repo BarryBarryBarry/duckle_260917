@@ -724,6 +724,7 @@ mod reference_aware {
                     rows: Some(5),
                 }],
                 nodes: Vec::new(),
+                ..Default::default()
             },
         )
         .unwrap();

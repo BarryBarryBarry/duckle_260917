@@ -218,6 +218,36 @@ pub fn all() -> Vec<Capabilities> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
+static KIND_INDEX_BUILDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A built-in component's catalog kind (`source`, `transform`, `sink`,
+/// `quality`, `control`, `custom`), or `None` when the catalog does not know
+/// it - workspace plugins included, since they are not compiled in.
+///
+/// Run records ask this once per node, so the index is built on first use and
+/// kept. It reads the same `kind` that [`derive`] copies into
+/// [`Capabilities::kind`], without paying for the rest of the derivation.
+pub fn component_kind(component_id: &str) -> Option<&'static str> {
+    static INDEX: std::sync::OnceLock<std::collections::HashMap<String, String>> =
+        std::sync::OnceLock::new();
+    INDEX.get_or_init(build_kind_index).get(component_id).map(String::as_str)
+}
+
+fn build_kind_index() -> std::collections::HashMap<String, String> {
+    #[cfg(test)]
+    KIND_INDEX_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let Ok(v) = serde_json::from_str::<Value>(CATALOG_JSON) else {
+        return Default::default();
+    };
+    v["components"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| Some((c["id"].as_str()?.to_string(), c["kind"].as_str()?.to_string())))
+        .collect()
+}
+
 /// The registry INCLUDING whatever this workspace has installed (#313).
 ///
 /// An external component is a component: it appears in the palette, the engine
@@ -248,6 +278,18 @@ mod tests {
         let caps = all();
         assert!(caps.len() > 380, "got {}", caps.len());
         assert!(caps.iter().all(|c| !c.component.is_empty() && !c.kind.is_empty()));
+    }
+
+    /// Run records name a node's catalog kind through `component_kind`, which
+    /// must agree with the registry and be built once, not per node.
+    #[test]
+    fn component_kind_agrees_with_the_registry_and_is_built_once() {
+        for c in all() {
+            assert_eq!(component_kind(&c.component), Some(c.kind.as_str()), "{}", c.component);
+        }
+        assert_eq!(component_kind("src.csv"), Some("source"));
+        assert_eq!(component_kind("no.such.component"), None);
+        assert_eq!(KIND_INDEX_BUILDS.load(std::sync::atomic::Ordering::Relaxed), 1);
     }
 
     /// Spot-check a source whose answers are known, so a change in how the

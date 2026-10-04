@@ -492,6 +492,7 @@ pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<Strin
                 category: None,
                 assets: Vec::new(),
                 nodes: Vec::new(),
+                ..Default::default()
             };
             let _ = crate::history::append_run_record(workspace, &r.pipeline_name, record);
             let _ = crate::history::write_metrics_textfile(workspace);
@@ -1157,6 +1158,7 @@ mod tests {
                 category: None,
                 assets: Vec::new(),
                 nodes: Vec::new(),
+                ..Default::default()
             },
         )
         .unwrap();

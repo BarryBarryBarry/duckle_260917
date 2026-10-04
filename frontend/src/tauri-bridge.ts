@@ -324,6 +324,7 @@ export async function runPipelinePartial(
 }
 
 export type RunRecord = {
+    /** When the record was written, i.e. when the run finished. */
     at: string;
     status: string;
     duration_ms: number;
@@ -333,6 +334,31 @@ export type RunRecord = {
     error?: string;
     /** Coarse error bucket (auth/network/timeout/oom/disk/schema/syntax/...). */
     category?: string;
+    run_id?: string;
+    unchanged?: boolean;
+    incomplete?: boolean;
+    incomplete_reason?: string;
+    /** When execution began (`at` minus `duration_ms`); absent on older records. */
+    started_at?: string;
+    /** Rows the reject-splitting quality checks turned away, summed. */
+    rejected_rows?: number;
+    /** Per-node detail; kept on the newest record of a pipeline only. */
+    nodes?: RunNodeMetric[];
+};
+
+/** One node of a run record. The backend writes these fields in camelCase. */
+export type RunNodeMetric = {
+    node: string;
+    component?: string;
+    durationMs?: number;
+    rows?: number;
+    /** Catalog kind: source / transform / sink / quality / control / custom. */
+    kind?: string;
+    status?: string;
+    startedAt?: string;
+    error?: string;
+    category?: string;
+    rejectedRows?: number;
 };
 
 export type CatalogFreshness = {

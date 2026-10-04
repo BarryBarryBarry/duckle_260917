@@ -12,7 +12,12 @@ use std::path::Path;
 
 const MAX_RECORDS: usize = 50;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Longest node error kept on a run record. The record is rewritten whole on
+/// every run and the full message is in the run log, so the history only
+/// needs enough of it to say what went wrong.
+const NODE_ERROR_MAX_CHARS: usize = 1000;
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunRecord {
     /// #259: the id an async run was accepted under, so a run started through
     /// POST /api/run/async can still be found after the console restarts.
@@ -20,12 +25,22 @@ pub struct RunRecord {
     /// whose caller already holds the result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
-    /// RFC3339 timestamp of when the run started.
+    /// RFC3339 timestamp of when the record was made, which is when the run
+    /// finished. See `started_at` for when it began.
     pub at: String,
+    /// When execution began: `at` minus `duration_ms`. Absent on records
+    /// written before it existed, and when the subtraction is out of range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
     pub status: String,
     pub duration_ms: u64,
     /// Total rows written across all sinks.
     pub rows: u64,
+    /// Rows the run's reject-splitting quality checks turned away, summed.
+    /// Absent when no such check reported both of its counts, which is not
+    /// the same as a check that rejected nothing (`Some(0)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_rows: Option<u64>,
     pub node_count: usize,
     /// What kicked off the run: "manual" / "partial" / "scheduled".
     pub trigger: String,
@@ -83,7 +98,7 @@ pub struct RunRecord {
 }
 
 /// One node's contribution to a run, in the shape metrics need.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeMetric {
     pub node: String,
@@ -98,6 +113,24 @@ pub struct NodeMetric {
     pub duration_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rows: Option<u64>,
+    /// The component's catalog kind (`source`, `transform`, `sink`,
+    /// `quality`, `control`, `custom`). Not `NodeRunStatus.kind`, which only
+    /// says whether the stage was a sink or a view. Absent for components the
+    /// built-in catalog does not know, such as workspace plugins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The node's own outcome (`ok`, `unchanged`, `error`, `skipped`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// Truncated to [`NODE_ERROR_MAX_CHARS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_rows: Option<u64>,
 }
 
 /// One asset a run touched.
@@ -125,12 +158,20 @@ impl RunRecord {
             .filter(|n| n.kind.as_deref() == Some("sink"))
             .filter_map(|n| n.rows)
             .sum();
+        let now = Utc::now();
+        let started_at = i64::try_from(result.duration_ms)
+            .ok()
+            .and_then(chrono::TimeDelta::try_milliseconds)
+            .and_then(|d| now.checked_sub_signed(d))
+            .map(|t| t.to_rfc3339());
         RunRecord {
             run_id: None,
-            at: Utc::now().to_rfc3339(),
+            at: now.to_rfc3339(),
+            started_at,
             status: result.status.clone(),
             duration_ms: result.duration_ms,
             rows,
+            rejected_rows: rejected_total(result),
             node_count: result.nodes.len(),
             trigger: trigger.to_string(),
             unchanged: result.unchanged,
@@ -140,16 +181,7 @@ impl RunRecord {
             category: result.category.clone(),
             assets: Vec::new(),
             // BTreeMap order, so the record is deterministic.
-            nodes: result
-                .nodes
-                .iter()
-                .map(|(id, n)| NodeMetric {
-                    node: id.clone(),
-                    component: n.component.clone(),
-                    duration_ms: n.duration_ms,
-                    rows: n.rows,
-                })
-                .collect(),
+            nodes: result.nodes.iter().map(|(id, n)| NodeMetric::from_status(id, n)).collect(),
         }
     }
 
@@ -185,6 +217,44 @@ impl RunRecord {
             });
         }
         record
+    }
+}
+
+impl NodeMetric {
+    fn from_status(node_id: &str, n: &crate::NodeRunStatus) -> Self {
+        let kind = n
+            .component
+            .as_deref()
+            .and_then(crate::capabilities::component_kind)
+            .map(str::to_string);
+        NodeMetric {
+            node: node_id.to_string(),
+            component: n.component.clone(),
+            duration_ms: n.duration_ms,
+            rows: n.rows,
+            kind,
+            status: Some(n.status.clone()),
+            started_at: n.started_at.clone(),
+            error: n.error.as_deref().map(|e| truncate_chars(e, NODE_ERROR_MAX_CHARS)),
+            category: n.category.clone(),
+            rejected_rows: n.rejected_rows,
+        }
+    }
+}
+
+/// Sum of the nodes' rejected rows, or `None` when no node reported any figure.
+fn rejected_total(result: &RunResult) -> Option<u64> {
+    result
+        .nodes
+        .values()
+        .filter_map(|n| n.rejected_rows)
+        .fold(None, |acc, n| Some(acc.unwrap_or(0).saturating_add(n)))
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((cut, _)) => s[..cut].to_string(),
+        None => s.to_string(),
     }
 }
 
@@ -643,6 +713,7 @@ mod tests {
             unchanged: false,
             incomplete: false,
             incomplete_reason: None,
+            ..Default::default()
         }
     }
 
@@ -693,15 +764,17 @@ mod tests {
                 component: Some("src.rest".into()),
                 duration_ms: Some(900),
                 rows: Some(100),
+                ..Default::default()
             },
             NodeMetric {
                 node: "load".into(),
                 component: Some("snk.parquet".into()),
                 duration_ms: Some(600),
                 rows: Some(42),
+                ..Default::default()
             },
             // Never reached: no duration, no rows, emits nothing.
-            NodeMetric { node: "audit".into(), component: Some("snk.audit".into()), duration_ms: None, rows: None },
+            NodeMetric { node: "audit".into(), component: Some("snk.audit".into()), duration_ms: None, rows: None, ..Default::default() },
         ];
         append_run_record(ws.path(), "nightly", rec).unwrap();
 
@@ -753,6 +826,8 @@ mod tests {
             error: None,
             category: None,
             sql: None,
+            started_at: None,
+            rejected_rows: None,
         };
         // Inserted out of order on purpose: the record must be BTreeMap-sorted
         // so two runs of the same pipeline serialize identically.
@@ -794,6 +869,7 @@ mod tests {
                 component: Some("src.csv".into()),
                 duration_ms: Some(1),
                 rows: Some(1),
+                ..Default::default()
             }];
             r
         };
@@ -806,6 +882,63 @@ mod tests {
         // And the metrics still emit the newest run's node series.
         let out = render_metrics(ws.path()).unwrap();
         assert!(out.contains("duckle_node_last_rows{pipeline=\"nightly\",node=\"a\",component=\"src.csv\"} 1"), "{out}");
+    }
+
+    fn baseline_fixture(ws: &Path, enriched: bool) {
+        let mut ok = record("ok", 1500, 42);
+        ok.at = "2026-09-30T12:00:00+00:00".into();
+        ok.nodes = vec![
+            NodeMetric {
+                node: "extract".into(),
+                component: Some("src.csv".into()),
+                duration_ms: Some(900),
+                rows: Some(100),
+                ..Default::default()
+            },
+            NodeMetric { node: "load".into(), duration_ms: Some(600), ..Default::default() },
+        ];
+        let mut failed = record("error", 900, 0);
+        failed.at = "2026-09-30T12:05:00+00:00".into();
+        let mut quiet = record("ok", 20, 0);
+        quiet.at = "2026-09-30T11:00:00+00:00".into();
+        quiet.unchanged = true;
+        if enriched {
+            ok.started_at = Some("2026-09-30T11:59:58.500+00:00".into());
+            ok.rejected_rows = Some(3);
+            for n in &mut ok.nodes {
+                n.kind = Some("source".into());
+                n.status = Some("ok".into());
+                n.started_at = Some("2026-09-30T11:59:58.500+00:00".into());
+                n.rejected_rows = Some(0);
+            }
+            failed.started_at = Some("2026-09-30T12:04:59.100+00:00".into());
+            quiet.started_at = Some("2026-09-30T10:59:59.980+00:00".into());
+        }
+        append_run_record(ws, "orders", ok).unwrap();
+        append_run_record(ws, "billing", failed).unwrap();
+        append_run_record(ws, "billing", quiet).unwrap();
+    }
+
+    /// Plan 003 Phase 0 baseline: `/metrics` and the `.prom` textfile must stay
+    /// byte-identical while run records gain optional fields. The fixture file
+    /// was captured from `render_metrics` before any of those fields existed.
+    #[test]
+    fn render_metrics_matches_the_pre_003_baseline() {
+        let ws = tempfile::tempdir().unwrap();
+        baseline_fixture(ws.path(), false);
+        let expected = include_str!("../tests/metrics_baseline.prom");
+        assert_eq!(render_metrics(ws.path()).unwrap(), expected);
+    }
+
+    /// The same runs carrying every new optional field render the same bytes:
+    /// nothing added for the metrics store may leak into the Prometheus text.
+    #[test]
+    fn new_record_fields_do_not_change_rendered_metrics() {
+        let plain = tempfile::tempdir().unwrap();
+        baseline_fixture(plain.path(), false);
+        let enriched = tempfile::tempdir().unwrap();
+        baseline_fixture(enriched.path(), true);
+        assert_eq!(render_metrics(plain.path()).unwrap(), render_metrics(enriched.path()).unwrap());
     }
 }
 
@@ -862,6 +995,7 @@ mod unchanged_persistence_tests {
             incomplete_reason: None,
             assets: Vec::new(),
             nodes: Vec::new(),
+            ..Default::default()
         }
     }
 
@@ -923,5 +1057,170 @@ mod unchanged_persistence_tests {
             text.contains("duckle_runs_window{pipeline=\"quiet\",status=\"unchanged\"} 1"),
             "{text}"
         );
+    }
+}
+
+#[cfg(test)]
+mod run_metrics_fields_tests {
+    use super::*;
+
+    fn node(component: &str, status: &str) -> crate::NodeRunStatus {
+        crate::NodeRunStatus {
+            status: status.into(),
+            kind: Some("view".into()),
+            component: Some(component.into()),
+            note: None,
+            rows: Some(5),
+            duration_ms: Some(10),
+            error: None,
+            category: None,
+            sql: None,
+            started_at: Some("2026-09-30T12:00:00+00:00".into()),
+            rejected_rows: None,
+        }
+    }
+
+    fn result_of(duration_ms: u64, nodes: Vec<(&str, crate::NodeRunStatus)>) -> RunResult {
+        RunResult {
+            cache_keys: Default::default(),
+            status: "ok".into(),
+            duration_ms,
+            nodes: nodes.into_iter().map(|(id, n)| (id.to_string(), n)).collect(),
+            preview: Vec::new(),
+            error: None,
+            category: None,
+            unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
+            artifacts: Vec::new(),
+            artifacts_truncated: false,
+        }
+    }
+
+    /// Only the fields that existed before plan 003, as an older Duckle reads them.
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct LegacyRecord {
+        at: String,
+        status: String,
+        duration_ms: u64,
+        rows: u64,
+        node_count: usize,
+        trigger: String,
+        #[serde(default)]
+        nodes: Vec<LegacyNode>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    #[allow(dead_code)]
+    struct LegacyNode {
+        node: String,
+        #[serde(default)]
+        component: Option<String>,
+        #[serde(default)]
+        duration_ms: Option<u64>,
+        #[serde(default)]
+        rows: Option<u64>,
+    }
+
+    #[test]
+    fn a_record_from_before_the_new_fields_loads_with_them_absent() {
+        let old = r#"{"at":"2026-01-01T00:00:00Z","status":"ok","duration_ms":5,"rows":10,
+                      "node_count":1,"trigger":"manual",
+                      "nodes":[{"node":"a","component":"src.csv","durationMs":5,"rows":10}]}"#;
+        let back: RunRecord = serde_json::from_str(old).expect("old records must still parse");
+        assert_eq!(back.started_at, None);
+        assert_eq!(back.rejected_rows, None);
+        let n = &back.nodes[0];
+        assert_eq!((n.kind.as_ref(), n.status.as_ref(), n.started_at.as_ref()), (None, None, None));
+        assert_eq!((n.error.as_ref(), n.category.as_ref(), n.rejected_rows), (None, None, None));
+    }
+
+    #[test]
+    fn a_new_record_still_loads_in_an_older_reader() {
+        let mut failed = node("qa.notnull", "error");
+        failed.error = Some("boom".into());
+        failed.rejected_rows = Some(2);
+        let rec = RunRecord::from_result(&result_of(40, vec![("a", failed)]), "manual");
+        let text = serde_json::to_string(&rec).unwrap();
+        assert!(text.contains("\"started_at\""), "{text}");
+        assert!(text.contains("\"rejectedRows\":2"), "node fields stay camelCase: {text}");
+        let legacy: LegacyRecord = serde_json::from_str(&text).expect("an older reader ignores new keys");
+        assert_eq!(legacy.nodes.len(), 1);
+        assert_eq!(legacy.duration_ms, 40);
+    }
+
+    #[test]
+    fn started_at_is_at_minus_the_duration() {
+        let rec = RunRecord::from_result(&result_of(1500, Vec::new()), "manual");
+        let at = chrono::DateTime::parse_from_rfc3339(&rec.at).unwrap();
+        let started = chrono::DateTime::parse_from_rfc3339(rec.started_at.as_deref().unwrap()).unwrap();
+        assert_eq!((at - started).num_milliseconds(), 1500);
+    }
+
+    #[test]
+    fn an_out_of_range_duration_leaves_started_at_absent() {
+        let rec = RunRecord::from_result(&result_of(u64::MAX, Vec::new()), "manual");
+        assert_eq!(rec.started_at, None);
+        assert!(!rec.at.is_empty(), "the record is still written");
+    }
+
+    #[test]
+    fn node_errors_are_cut_at_the_limit_by_characters() {
+        let at_limit = "é".repeat(NODE_ERROR_MAX_CHARS);
+        let over = format!("{at_limit}x");
+        let mut a = node("src.csv", "error");
+        a.error = Some(at_limit.clone());
+        let mut b = node("src.csv", "error");
+        b.error = Some(over);
+        let rec = RunRecord::from_result(&result_of(1, vec![("a", a), ("b", b)]), "manual");
+        assert_eq!(rec.nodes[0].error.as_deref(), Some(at_limit.as_str()), "1000 is kept whole");
+        assert_eq!(rec.nodes[1].error.as_deref(), Some(at_limit.as_str()), "1001 loses the last char");
+    }
+
+    #[test]
+    fn nodes_carry_catalog_kind_status_and_start() {
+        let rec = RunRecord::from_result(
+            &result_of(1, vec![("load", node("src.csv", "unchanged")), ("x", node("ext.unknown", "ok"))]),
+            "manual",
+        );
+        let load = &rec.nodes[0];
+        assert_eq!(load.kind.as_deref(), Some("source"), "catalog kind, not the stage's view/sink");
+        assert_eq!(load.status.as_deref(), Some("unchanged"));
+        assert_eq!(load.started_at.as_deref(), Some("2026-09-30T12:00:00+00:00"));
+        assert_eq!(rec.nodes[1].kind, None, "an unknown component has no catalog kind");
+    }
+
+    #[test]
+    fn pipeline_rejected_rows_sum_only_what_was_observed() {
+        let none = RunRecord::from_result(&result_of(1, vec![("a", node("src.csv", "ok"))]), "manual");
+        assert_eq!(none.rejected_rows, None, "no observed check is not zero");
+
+        let mut zero = node("qa.notnull", "ok");
+        zero.rejected_rows = Some(0);
+        let rec = RunRecord::from_result(&result_of(1, vec![("q", zero)]), "manual");
+        assert_eq!(rec.rejected_rows, Some(0), "an observed check that rejected nothing is zero");
+
+        let mut three = node("qa.notnull", "ok");
+        three.rejected_rows = Some(3);
+        let mut four = node("qa.range", "ok");
+        four.rejected_rows = Some(4);
+        let rec = RunRecord::from_result(
+            &result_of(1, vec![("q1", three), ("q2", four), ("a", node("src.csv", "ok"))]),
+            "manual",
+        );
+        assert_eq!(rec.rejected_rows, Some(7));
+        assert_eq!(rec.nodes[0].rejected_rows, None);
+        assert_eq!(rec.nodes[1].rejected_rows, Some(3));
+    }
+
+    #[test]
+    fn the_status_vocabulary_of_the_record_is_unchanged() {
+        for status in ["ok", "error", "cancelled"] {
+            let mut r = result_of(1, Vec::new());
+            r.status = status.into();
+            assert_eq!(RunRecord::from_result(&r, "manual").status, status);
+        }
     }
 }

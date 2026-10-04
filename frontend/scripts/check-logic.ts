@@ -39,6 +39,7 @@ import {
     settingsSetMemoryLimit,
     settingsSetPower,
     runHistory,
+    type RunRecord,
     settingsSetProxy,
     watermarkClear,
     watermarkList,
@@ -1212,6 +1213,43 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         'web history: the tab asks the server for the pipeline history',
         records.length === 1 && JSON.stringify(asked) === JSON.stringify({ cmd: 'run_history', args: { workspacePath: '/ws', pipelineId: 'p_7f3a' } }),
         `asked ${JSON.stringify(asked)}, got ${JSON.stringify(records)}`,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Plan 003: run records gain optional fields (started_at, rejected_rows, node
+// detail). The History tab reads only the original ones, so a record carrying
+// the new fields must reach it with those intact and still read as before.
+// ---------------------------------------------------------------------------
+{
+    const g = globalThis as unknown as {
+        __checkLogicInvoke?: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    };
+    const enriched: RunRecord = {
+        at: '2026-09-30T12:00:01Z', status: 'error', duration_ms: 1500, rows: 42, node_count: 2,
+        trigger: 'manual', error: 'Binder Error', category: 'schema',
+        run_id: 'run-1', started_at: '2026-09-30T11:59:59.500Z', rejected_rows: 3,
+        nodes: [{ node: 'q', component: 'qa.notnull', kind: 'quality', status: 'ok', startedAt: '2026-09-30T12:00:00Z', rejectedRows: 3 }],
+    };
+    g.__checkLogicInvoke = async () => [enriched];
+    const [r] = await runHistory('/ws', 'orders');
+    g.__checkLogicInvoke = undefined;
+    const seen = r && {
+        at: r.at, status: r.status, duration_ms: r.duration_ms, rows: r.rows, trigger: r.trigger,
+        error: r.error, category: r.category,
+    };
+    check(
+        '003: a run record with new fields still carries what the History tab reads',
+        JSON.stringify(seen) === JSON.stringify({
+            at: '2026-09-30T12:00:01Z', status: 'error', duration_ms: 1500, rows: 42, trigger: 'manual',
+            error: 'Binder Error', category: 'schema',
+        }),
+        JSON.stringify(r),
+    );
+    check(
+        '003: the new fields arrive as the backend wrote them',
+        r?.started_at === enriched.started_at && r?.rejected_rows === 3 && r?.nodes?.[0]?.rejectedRows === 3,
+        JSON.stringify(r),
     );
 }
 

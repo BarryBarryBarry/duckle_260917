@@ -1,0 +1,43 @@
+# HELP duckle_run_last_status 1 when the pipeline's most recent run succeeded, 0 when it failed or was cancelled.
+# TYPE duckle_run_last_status gauge
+duckle_run_last_status{pipeline="orders"} 1
+duckle_run_last_status{pipeline="billing"} 1
+# HELP duckle_run_last_unchanged 1 when the most recent run checked its sources, found nothing changed and wrote nothing. Such a run is a success, so duckle_run_last_status is 1 for it too - this is what separates a poll that is working and finding nothing from one that is ingesting.
+# TYPE duckle_run_last_unchanged gauge
+duckle_run_last_unchanged{pipeline="orders"} 0
+duckle_run_last_unchanged{pipeline="billing"} 1
+# HELP duckle_run_last_duration_seconds Wall-clock duration of the most recent run.
+# TYPE duckle_run_last_duration_seconds gauge
+duckle_run_last_duration_seconds{pipeline="orders"} 1.5
+duckle_run_last_duration_seconds{pipeline="billing"} 0.02
+# HELP duckle_run_last_rows Rows written across all sinks in the most recent run.
+# TYPE duckle_run_last_rows gauge
+duckle_run_last_rows{pipeline="orders"} 42
+duckle_run_last_rows{pipeline="billing"} 0
+# HELP duckle_run_last_timestamp_seconds Unix time the most recent run started.
+# TYPE duckle_run_last_timestamp_seconds gauge
+duckle_run_last_timestamp_seconds{pipeline="orders"} 1790769600
+duckle_run_last_timestamp_seconds{pipeline="billing"} 1790766000
+# HELP duckle_runs_window Runs by status within the retained history window (not a lifetime counter).
+# TYPE duckle_runs_window gauge
+duckle_runs_window{pipeline="orders",status="ok"} 1
+duckle_runs_window{pipeline="orders",status="error"} 0
+duckle_runs_window{pipeline="orders",status="cancelled"} 0
+duckle_runs_window{pipeline="orders",status="unchanged"} 0
+duckle_runs_window{pipeline="billing",status="ok"} 0
+duckle_runs_window{pipeline="billing",status="error"} 1
+duckle_runs_window{pipeline="billing",status="cancelled"} 0
+duckle_runs_window{pipeline="billing",status="unchanged"} 1
+# HELP duckle_node_last_duration_seconds Per-node duration of the most recent run, by component. "The run got slower" answered by which stage, not by polling the UI.
+# TYPE duckle_node_last_duration_seconds gauge
+duckle_node_last_duration_seconds{pipeline="orders",node="extract",component="src.csv"} 0.9
+duckle_node_last_duration_seconds{pipeline="orders",node="load"} 0.6
+# HELP duckle_node_last_rows Rows each node reported in the most recent run. Absent is not zero: a node the run never reached emits nothing.
+# TYPE duckle_node_last_rows gauge
+duckle_node_last_rows{pipeline="orders",node="extract",component="src.csv"} 100
+# HELP duckle_metrics_pipelines Pipelines contributing a label value to this document.
+# TYPE duckle_metrics_pipelines gauge
+duckle_metrics_pipelines 2
+# HELP duckle_metrics_pipelines_omitted Pipelines left out because the label budget was reached. Alert on this being above zero: those pipelines are not being monitored.
+# TYPE duckle_metrics_pipelines_omitted gauge
+duckle_metrics_pipelines_omitted 0

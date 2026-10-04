@@ -449,6 +449,7 @@ mod tests {
             category: None,
             assets: vec![],
             nodes: Vec::new(),
+            ..Default::default()
         }
     }
 

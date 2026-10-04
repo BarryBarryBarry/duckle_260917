@@ -459,6 +459,8 @@ mod tests {
             error: None,
             category: None,
             sql: None,
+            started_at: None,
+            rejected_rows: None,
         };
         nodes.insert("src".to_string(), mk(Some(12), "view"));
         nodes.insert("xf".to_string(), mk(Some(0), "view"));
