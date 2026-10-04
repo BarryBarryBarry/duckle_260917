@@ -229,6 +229,11 @@ pub struct DuckdbEngine {
     /// run executes on, so a called child inherits it and arms no second one:
     /// the limit is on the run that was started.
     deadline: Option<Arc<Deadline>>,
+    /// Plan 003: whether a run on this engine has already taken the job of
+    /// reporting stages to the metrics store. Shared by clones, so the child
+    /// pipelines a run calls - which run on clones - never report as if they
+    /// were the run; a new run identity gets a fresh one.
+    metrics_claim: Arc<AtomicBool>,
 }
 
 /// A run's time limit, and whether it has been hit.
@@ -402,6 +407,7 @@ impl DuckdbEngine {
             probing: false,
             webhook_acks: None,
             deadline: None,
+            metrics_claim: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -478,7 +484,33 @@ impl DuckdbEngine {
     pub fn with_run_id(mut self, run_id: impl Into<String>) -> Self {
         let id = run_id.into();
         self.run_id = (!id.trim().is_empty()).then_some(id);
+        // A new identity is a new run, which reports its own stages.
+        self.metrics_claim = Arc::new(AtomicBool::new(false));
         self
+    }
+
+    /// Plan 003: the stage reporter for this run, if it is the run that
+    /// should report. Only a run with a durable id whose ledger entry this
+    /// process published, and only the first run on this engine - a child
+    /// pipeline shares the claim and finds it taken. A probe never reports.
+    fn metrics_tap(&self, stages: &[plan::Stage]) -> Option<metrics_bus::StageTap> {
+        let run_key = self.run_id.as_deref()?;
+        if self.probing || !metrics_bus::enabled() {
+            return None;
+        }
+        let workspace = metrics_bus::workspace_of(run_key)?;
+        self.metrics_claim.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).ok()?;
+        let planned = stages
+            .iter()
+            .enumerate()
+            .map(|(i, st)| metrics_bus::PlannedStage {
+                node_id: st.node_id.clone(),
+                component: Some(st.component_id.clone()),
+                kind: capabilities::component_kind(&st.component_id).map(str::to_string),
+                ordinal: i64::try_from(i).unwrap_or(i64::MAX),
+            })
+            .collect();
+        Some(metrics_bus::StageTap::new(workspace, run_key.to_string(), planned))
     }
 
     /// Stop fetching per-node preview rows.
@@ -520,6 +552,7 @@ impl DuckdbEngine {
             probing: false,
             webhook_acks: None,
             deadline: None,
+            metrics_claim: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -542,6 +575,7 @@ impl DuckdbEngine {
             probing: true,
             webhook_acks: None,
             deadline: None,
+            metrics_claim: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1708,9 +1742,13 @@ impl DuckdbEngine {
             .clone()
             .unwrap_or_else(|| format!("run-{}-{}", std::process::id(), now_nanos()));
         let mut runlog = run_log::RunLog::open(pipeline_name, run_id, node_meta);
+        let mut metrics_tap = self.metrics_tap(&compiled.stages);
         let mut on_event = |evt: PipelineEvent| {
             if runlog.enabled() {
                 runlog.record(&evt);
+            }
+            if let Some(tap) = metrics_tap.as_mut() {
+                tap.observe(&evt);
             }
             user_on_event(evt);
         };

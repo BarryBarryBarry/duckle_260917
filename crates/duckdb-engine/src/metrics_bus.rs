@@ -40,6 +40,8 @@ const BREAKER_COOLDOWN: Duration = Duration::from_secs(60);
 const DROP_LOG_EVERY: u64 = 100;
 /// How much of an error a `run_finished` event keeps.
 const EVENT_ERROR_MAX_CHARS: usize = 200;
+/// How much of a stage's error the store keeps, as the run record does.
+const STAGE_ERROR_MAX_CHARS: usize = 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeliveryMode {
@@ -595,6 +597,68 @@ fn elapsed_ms(from: &str, to: &str) -> Option<i64> {
 fn minus_ms(at: &str, ms: u64) -> Option<String> {
     let delta = chrono::TimeDelta::try_milliseconds(i64::try_from(ms).ok()?)?;
     parse_utc(at)?.checked_sub_signed(delta).map(|t| t.to_rfc3339())
+}
+
+// ---- the engine's side --------------------------------------------------------------
+
+/// Turns one run's engine events into stage events for the store.
+///
+/// The stream only ever says a stage is running, finished ok, failed or was
+/// skipped. `unchanged` is a fact the run's final record carries, so a stage
+/// that reports `unchanged` here is written as `ok` and corrected by the record.
+pub struct StageTap {
+    workspace: PathBuf,
+    run_key: String,
+    planned: Option<Vec<PlannedStage>>,
+}
+
+impl StageTap {
+    pub fn new(workspace: PathBuf, run_key: String, planned: Vec<PlannedStage>) -> StageTap {
+        StageTap { workspace, run_key, planned: Some(planned) }
+    }
+
+    pub fn observe(&mut self, event: &crate::PipelineEvent) {
+        if let Some(e) = self.translate(event, chrono::Utc::now()) {
+            publish_with(|| e);
+        }
+    }
+
+    fn translate(&mut self, event: &crate::PipelineEvent, now: chrono::DateTime<chrono::Utc>) -> Option<MetricsEvent> {
+        let (workspace, run_key) = (self.workspace.clone(), self.run_key.clone());
+        match event {
+            crate::PipelineEvent::Started { .. } => {
+                let stages = self.planned.take()?;
+                Some(MetricsEvent::StagesPlanned { workspace, run_key, stages })
+            }
+            crate::PipelineEvent::StageStarted { node_id, .. } => Some(MetricsEvent::StageStarted {
+                workspace,
+                run_key,
+                node_id: node_id.clone(),
+                at: now.to_rfc3339(),
+            }),
+            crate::PipelineEvent::StageFinished { node_id, status, rows, duration_ms, error, .. } => {
+                let status = match status.parse::<NodeStatus>().ok()? {
+                    NodeStatus::Unchanged => NodeStatus::Ok,
+                    s @ (NodeStatus::Ok | NodeStatus::Error | NodeStatus::Skipped) => s,
+                    _ => return None,
+                };
+                Some(MetricsEvent::StageFinished {
+                    workspace,
+                    run_key,
+                    node_id: node_id.clone(),
+                    status,
+                    rows: *rows,
+                    duration_ms: Some(*duration_ms),
+                    error: error.as_deref().map(|e| e.chars().take(STAGE_ERROR_MAX_CHARS).collect()),
+                })
+            }
+            // How the run ended reaches the store from the ledger, which also
+            // closes the stages it never got to.
+            crate::PipelineEvent::Cancelled
+            | crate::PipelineEvent::Log { .. }
+            | crate::PipelineEvent::Finished { .. } => None,
+        }
+    }
 }
 
 /// The store key for a run recorded before run ids existed: stable for the

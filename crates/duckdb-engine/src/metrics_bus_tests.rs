@@ -350,3 +350,41 @@ fn legacy_keys_are_stable_and_distinct() {
     assert_ne!(a, legacy_run_key("orders", "2026-10-04T10:00:01Z"));
     assert!(a.starts_with("legacy-") && a.len() == "legacy-".len() + 16, "{a}");
 }
+
+#[test]
+fn the_stage_tap_places_once_and_reports_only_what_a_stage_stream_can_know() {
+    let ws = PathBuf::from("/ws");
+    let planned = vec![PlannedStage { node_id: "a".into(), component: None, kind: None, ordinal: 0 }];
+    let mut tap = StageTap::new(ws, "r1".into(), planned);
+    let now = chrono::Utc::now();
+    let started = crate::PipelineEvent::Started { total_stages: 1 };
+    assert!(matches!(tap.translate(&started, now), Some(MetricsEvent::StagesPlanned { stages, .. }) if stages.len() == 1));
+    assert!(tap.translate(&started, now).is_none(), "placed once per run");
+
+    let finished = |status: &str, error: Option<String>| crate::PipelineEvent::StageFinished {
+        node_id: "a".into(),
+        kind: "view".into(),
+        status: status.into(),
+        rows: Some(2),
+        duration_ms: 7,
+        error,
+        sql: None,
+    };
+    let status_of = |e: Option<MetricsEvent>| match e {
+        Some(MetricsEvent::StageFinished { status, .. }) => Some(status),
+        _ => None,
+    };
+    assert_eq!(status_of(tap.translate(&finished("ok", None), now)), Some(NodeStatus::Ok));
+    assert_eq!(status_of(tap.translate(&finished("unchanged", None), now)), Some(NodeStatus::Ok), "the record says unchanged");
+    assert_eq!(status_of(tap.translate(&finished("skipped", None), now)), Some(NodeStatus::Skipped));
+    assert_eq!(status_of(tap.translate(&finished("mystery", None), now)), None);
+    match tap.translate(&finished("error", Some("x".repeat(5000))), now) {
+        Some(MetricsEvent::StageFinished { status: NodeStatus::Error, error: Some(e), duration_ms: Some(7), .. }) => {
+            assert_eq!(e.chars().count(), STAGE_ERROR_MAX_CHARS)
+        }
+        other => panic!("{other:?}"),
+    }
+    let start = crate::PipelineEvent::StageStarted { node_id: "a".into(), label: "a".into(), kind: "view".into() };
+    assert!(matches!(tap.translate(&start, now), Some(MetricsEvent::StageStarted { at, .. }) if at == now.to_rfc3339()));
+    assert!(tap.translate(&crate::PipelineEvent::Cancelled, now).is_none(), "the ledger reports how a run ended");
+}
