@@ -251,5 +251,70 @@
     "loading": "加载中",
     "error": "错误",
     "success": "成功"
+  },
+  "metrics": {
+    "title": "运行指标",
+    "open": "运行指标 - 按时间、pipeline 和状态查看所有运行",
+    "loading": "正在加载运行指标...",
+    "empty": "没有符合筛选条件的运行。",
+    "noWorkspace": "请先打开一个工作区。",
+    "unavailable": "运行指标库不可用：",
+    "unavailableHint": "各 pipeline 的“历史”页签仍可查看最近的运行。",
+    "nodeCount": "本次运行共 {{count}} 个节点",
+    "filters": {
+      "from": "开始时间",
+      "to": "结束时间",
+      "pipelines": "Pipeline",
+      "allPipelines": "全部 pipeline",
+      "statuses": "状态",
+      "allStatuses": "全部状态",
+      "search": "搜索",
+      "chosen": "已选 {{count}} 项"
+    },
+    "columns": {
+      "pipeline": "Pipeline 名称",
+      "status": "Pipeline 状态",
+      "executedTime": "执行时间",
+      "cost": "耗时",
+      "rows": "成功写入行数"
+    },
+    "nodes": {
+      "title": "{{name}} 的节点",
+      "node": "节点",
+      "status": "节点状态",
+      "executeTime": "执行时间",
+      "type": "节点类型",
+      "neverRun": "该 pipeline 从未运行，没有节点记录。",
+      "none": "本次运行没有记录节点明细。"
+    },
+    "status": {
+      "ok": "成功",
+      "error": "失败",
+      "running": "运行中",
+      "queued": "排队中",
+      "cancelled": "已取消",
+      "interrupted": "已中断",
+      "pending": "未运行",
+      "unchanged": "无变化",
+      "skipped": "已跳过"
+    },
+    "kind": {
+      "fetch": "读取",
+      "convert": "转换",
+      "insert": "写入",
+      "check": "校验",
+      "control": "控制",
+      "custom": "自定义"
+    },
+    "pager": {
+      "ariaLabel": "分页",
+      "total": "共 {{count}} 条",
+      "first": "首页",
+      "previous": "上一页",
+      "next": "下一页",
+      "last": "末页",
+      "pageSize": "每页条数",
+      "perPage": "{{count}} 条/页"
+    }
   }
 }

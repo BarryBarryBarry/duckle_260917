@@ -566,15 +566,22 @@ struct Col {
     ty: &'static str,
     merge: Merge,
     timestamp: bool,
+    /// What a query reads for this column, when not the column itself.
+    read: Option<&'static str>,
 }
 
 const fn col(name: &'static str, ty: &'static str, merge: Merge) -> Col {
-    Col { name, ty, merge, timestamp: false }
+    Col { name, ty, merge, timestamp: false, read: None }
 }
 
 const fn ts_col(name: &'static str, merge: Merge) -> Col {
-    Col { name, ty: "TIMESTAMPTZ", merge, timestamp: true }
+    Col { name, ty: "TIMESTAMPTZ", merge, timestamp: true, read: None }
 }
+
+/// A run's node count as read: its stage rows when it has any - which
+/// include the stages it never reached - else what its record said.
+const NODE_COUNT_READ: &str = "COALESCE(NULLIF((SELECT COUNT(*) FROM node_run n \
+     WHERE n.run_key = pipeline_run.run_key), 0), node_count)";
 
 const RUN_OPEN: &[&str] = &["queued", "running"];
 const NODE_OPEN: &[&str] = &["pending", "running"];
@@ -589,7 +596,7 @@ const RUN_COLS: &[Col] = &[
     col("duration_ms", "BIGINT", Merge::Overwrite),
     col("rows", "BIGINT", Merge::Overwrite),
     col("rejected_rows", "BIGINT", Merge::Overwrite),
-    col("node_count", "BIGINT", Merge::Overwrite),
+    Col { read: Some(NODE_COUNT_READ), ..col("node_count", "BIGINT", Merge::Overwrite) },
     col("unchanged", "BOOLEAN", Merge::Overwrite),
     col("incomplete", "BOOLEAN", Merge::Overwrite),
     col("incomplete_reason", "VARCHAR", Merge::Overwrite),
@@ -700,7 +707,11 @@ fn json_columns(cols: &[Col]) -> String {
 fn select_list(cols: &[Col], audit: &[&str]) -> String {
     let parts: Vec<String> = cols
         .iter()
-        .map(|c| if c.timestamp { format!("strftime({0}, '{TS_FORMAT}') AS {0}", c.name) } else { c.name.to_string() })
+        .map(|c| match (c.read, c.timestamp) {
+            (Some(expr), _) => format!("{expr} AS {}", c.name),
+            (None, true) => format!("strftime({0}, '{TS_FORMAT}') AS {0}", c.name),
+            (None, false) => c.name.to_string(),
+        })
         .chain(audit.iter().map(|n| format!("strftime({n}, '{TS_FORMAT}') AS {n}")))
         .collect();
     parts.join(", ")

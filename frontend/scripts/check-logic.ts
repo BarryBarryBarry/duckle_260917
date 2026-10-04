@@ -24,6 +24,18 @@ import { validatePipeline } from '../src/validation';
 import { deriveNodeSubtitle } from '../src/node-subtitle';
 import { resolveOutputSchema } from '../src/schema-resolve';
 import {
+    buildRunsQuery,
+    firstLine,
+    formatCost,
+    formatLocalTime,
+    formatRows,
+    kindLabelKey,
+    localInputToUtc,
+    pageItems,
+    toLocalInput,
+    totalPages,
+} from '../src/workflow-ui/run-metrics-format';
+import {
     buildBundle,
     cancelPipeline,
     engineInstall,
@@ -39,6 +51,9 @@ import {
     settingsSetMemoryLimit,
     settingsSetPower,
     runHistory,
+    metricsPipelines,
+    metricsRuns,
+    isMetricsFailure,
     type RunRecord,
     settingsSetProxy,
     watermarkClear,
@@ -1384,6 +1399,81 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         JSON.stringify((deployed ?? {}).params) === JSON.stringify({ region: 'us' }),
         JSON.stringify(deployed),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Plan 003: the run metrics page's pure logic, and the commands it calls.
+// ---------------------------------------------------------------------------
+{
+    const kinds = ['source', 'transform', 'sink', 'quality', 'control', 'custom', 'plugin.thing', null].map(kindLabelKey);
+    check(
+        '003: catalog kinds show as fetch/convert/insert/check/control/custom',
+        JSON.stringify(kinds) === JSON.stringify(['fetch', 'convert', 'insert', 'check', 'control', 'custom', null, null]),
+        JSON.stringify(kinds),
+    );
+    const costs = [0, 999, 1000, 1549, 59_949, 60_000, 3_725_000, null, -1].map(formatCost);
+    check(
+        '003: a cost reads in ms, then seconds, then minutes',
+        JSON.stringify(costs) === JSON.stringify(['0 ms', '999 ms', '1.0 s', '1.5 s', '59.9 s', '1m 00s', '62m 05s', '—', '—']),
+        JSON.stringify(costs),
+    );
+    const rows = [1_000_000, 0, null, 12.6].map(formatRows);
+    check('003: rows read with separators, and absent is not zero', JSON.stringify(rows) === JSON.stringify(['1,000,000', '0', '—', '13']), JSON.stringify(rows));
+
+    // Local midnight-and-a-half, which is the previous day in UTC east of
+    // Greenwich and the same day west of it: the conversion must agree with
+    // the platform's own reading of the local time either way.
+    const local = '2026-10-05T00:30';
+    const utc = localInputToUtc(local);
+    check('003: a local start time is sent as the UTC instant it names', utc === new Date(2026, 9, 5, 0, 30).toISOString(), String(utc));
+    check('003: an empty time is no filter', localInputToUtc('  ') === undefined && localInputToUtc('nonsense') === undefined, 'empty');
+    check('003: the input value round-trips', toLocalInput(new Date(utc ?? '')) === local, toLocalInput(new Date(utc ?? '')));
+    const shown = formatLocalTime('2026-09-30T04:00:00.000000Z');
+    const d = new Date('2026-09-30T04:00:00Z');
+    const want = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:00:00`;
+    check('003: a stored time is shown in local time', shown === want && formatLocalTime(null) === '—', `${shown} vs ${want}`);
+
+    check(
+        '003: a table cell shows an error\'s first line',
+        firstLine('\nBinder Error: x\nLINE 1: ...') === 'Binder Error: x' && firstLine(null) === '' && firstLine('y'.repeat(200)).length === 160,
+        firstLine('\nBinder Error: x\nLINE 1: ...'),
+    );
+    const pages = (c: number, n: number) => JSON.stringify(pageItems(c, n));
+    check('003: few pages are all shown', pages(1, 1) === '[1]' && pages(4, 7) === '[1,2,3,4,5,6,7]', pages(4, 7));
+    check('003: page 1 of 8', pages(1, 8) === '[1,2,3,4,"gap",8]', pages(1, 8));
+    check('003: page 50 of 100', pages(50, 100) === '[1,"gap",49,50,51,"gap",100]', pages(50, 100));
+    check('003: the last page of 100', pages(100, 100) === '[1,"gap",97,98,99,100]', pages(100, 100));
+    check('003: page counts', totalPages(0, 20) === 1 && totalPages(41, 20) === 3 && totalPages(40, 20) === 2, 'totalPages');
+
+    const q = buildRunsQuery({ from: '', to: '2026-10-05T00:30', pipelines: ['a', 'b'], statuses: ['ok', 'pending'] }, 2, 50);
+    check(
+        '003: the query carries only what was chosen, nodes left to the popover',
+        JSON.stringify(q) === JSON.stringify({ page: 2, pageSize: 50, includeNodes: false, to: utc, pipeline: ['a', 'b'], status: ['ok', 'pending'] }),
+        JSON.stringify(q),
+    );
+
+    const g = globalThis as unknown as {
+        __checkLogicInvoke?: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+    };
+    const asked: Array<{ cmd: string; args: Record<string, unknown> }> = [];
+    g.__checkLogicInvoke = async (cmd, args) => {
+        asked.push({ cmd, args });
+        if (cmd === 'metrics_pipelines') return { schemaVersion: 1, pipelines: [{ pipelineId: 'orders', pipelineName: 'Orders' }] };
+        return { error: 'the run metrics store is unavailable', reason: 'no CLI', status: 503 };
+    };
+    const failed = await metricsRuns('/ws', { page: 1 });
+    const listed = await metricsPipelines('/ws');
+    g.__checkLogicInvoke = async () => null;
+    const silent = await metricsRuns('/ws', {});
+    g.__checkLogicInvoke = undefined;
+    check(
+        '003: the page asks with the workspace and its query, as the desktop and the server read them',
+        JSON.stringify(asked[0]) === JSON.stringify({ cmd: 'metrics_runs', args: { workspacePath: '/ws', query: { page: 1 } } }),
+        JSON.stringify(asked[0]),
+    );
+    check('003: an unavailable store reaches the page as a failure with its reason', isMetricsFailure(failed) && failed.reason === 'no CLI', JSON.stringify(failed));
+    check('003: no answer at all is a failure too, not an empty page', isMetricsFailure(silent), JSON.stringify(silent));
+    check('003: the pipeline filter lists the workspace', listed.length === 1 && listed[0].pipelineName === 'Orders', JSON.stringify(listed));
 }
 
 if (failures.length) {

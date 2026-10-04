@@ -212,7 +212,8 @@ fn an_interrupted_run_is_closed_by_its_interruption_not_its_placeholder_record()
     bus.publish(MetricsEvent::RunRecorded { workspace: ws.path().into(), pipeline_id: "orders".into(), record: placeholder });
     let r = run(&bin, ws.path(), "r1").unwrap();
     assert_eq!(r.status, RunStatus::Interrupted);
-    assert_eq!((r.duration_ms, r.rows, r.node_count), (None, None, None), "zeros from the placeholder are not figures");
+    assert_eq!((r.duration_ms, r.rows), (None, None), "zeros from the placeholder are not figures");
+    assert_eq!(r.node_count, Some(2), "its placed stages, not the placeholder's zero");
     assert_eq!(
         node_states(&bin, ws.path(), "r1"),
         [("a".to_string(), NodeStatus::Interrupted), ("b".to_string(), NodeStatus::Skipped)]

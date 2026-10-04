@@ -1071,9 +1071,12 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
         // pipeline's retained runs, newest first. The id names the history file,
         // so one that is not a plain file name is refused.
         // Plan 003: the run metrics page.
+        // Called as the desktop's command is, `{ workspacePath, query }`; the
+        // workspace is this server's own, whatever the page names.
         "metrics_runs" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-            respond_json(&crate::metrics_api::editor_runs(&state.workspace, &state.duckdb, &args))
+            let query = args.get("query").cloned().unwrap_or(Value::Null);
+            respond_json(&crate::metrics_api::editor_runs(&state.workspace, &state.duckdb, &query))
         }
         "metrics_pipelines" => respond_json(&crate::metrics_api::editor_pipelines(&state.workspace)),
         "run_history" => {
@@ -7636,9 +7639,9 @@ mod tests {
         let (code, listed) = cmd("metrics_pipelines", serde_json::json!({}));
         assert_eq!(code, 200);
         assert_eq!(listed["pipelines"], serde_json::json!([{ "pipelineId": "orders", "pipelineName": "Orders" }]));
-        let (code, refused) = cmd("metrics_runs", serde_json::json!({ "status": ["sideways"] }));
+        let (code, refused) = cmd("metrics_runs", serde_json::json!({ "query": { "status": ["sideways"] } }));
         assert_eq!((code, refused["status"].clone()), (200, serde_json::json!(400)), "{refused}");
-        let (code, down) = cmd("metrics_runs", serde_json::json!({ "page": 1 }));
+        let (code, down) = cmd("metrics_runs", serde_json::json!({ "workspacePath": "/elsewhere", "query": { "page": 1 } }));
         assert_eq!((code, down["status"].clone()), (200, serde_json::json!(503)), "{down}");
         assert!(down["reason"].is_string());
     }

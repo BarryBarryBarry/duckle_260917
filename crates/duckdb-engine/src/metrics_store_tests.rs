@@ -250,6 +250,18 @@ fn nodes_read_back_in_stage_order_and_a_repeated_node_keeps_the_last_patch() {
 }
 
 #[test]
+fn a_runs_node_count_reads_as_its_stage_rows_when_it_has_them() {
+    let (_ws, s) = store_or_skip!();
+    s.apply_run_patch(&PipelineRunPatch { node_count: Some(2), ..begun("r1", "orders", "2026-10-04T10:00:00Z") }).unwrap();
+    s.apply_run_patch(&PipelineRunPatch { node_count: Some(5), ..begun("r2", "orders", "2026-10-04T10:00:00Z") }).unwrap();
+    assert_eq!(one_run(&s, "r1").node_count, Some(2), "no stage rows: the record's count");
+    s.apply_node_patches(&[node("r1", "a", Some(0), None), node("r1", "b", Some(1), None), node("r1", "c", Some(2), None)])
+        .unwrap();
+    assert_eq!(one_run(&s, "r1").node_count, Some(3), "the stages it never reached count too");
+    assert_eq!(one_run(&s, "r2").node_count, Some(5));
+}
+
+#[test]
 fn a_node_keeps_its_first_start() {
     let (_ws, s) = store_or_skip!();
     let mut p = node("r1", "a", Some(0), Some(NodeStatus::Running));

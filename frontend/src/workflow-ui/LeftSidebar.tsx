@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Boxes, FolderTree } from 'lucide-react';
+import { Activity, Boxes, FolderTree } from 'lucide-react';
 import Palette from './Palette';
 import ProjectTree from './ProjectTree';
 import type { RepoItem } from '../repo-types';
@@ -31,6 +31,8 @@ type Props = {
     onBackfillPipeline: (id: string) => void;
     onBuildPipeline: (id: string) => void;
     onDeployPipeline?: (id: string) => void;
+    /** Plan 003: open the workspace's run metrics page. */
+    onOpenRunMetrics?: () => void;
 };
 
 export default function LeftSidebar({
@@ -56,6 +58,7 @@ export default function LeftSidebar({
     onBackfillPipeline,
     onBuildPipeline,
     onDeployPipeline,
+    onOpenRunMetrics,
 }: Props) {
     const { t } = useTranslation();
     const [tab, setTab] = useState<SideTab>('palette');
@@ -83,6 +86,17 @@ export default function LeftSidebar({
                     <Boxes className="left-sidebar-tab-icon" size={13} aria-hidden="true" />
                     {t('sidebar.components')}
                 </button>
+                {onOpenRunMetrics ? (
+                    <button
+                        type="button"
+                        className="left-sidebar-tab left-sidebar-action"
+                        title={t('metrics.open')}
+                        aria-label={t('metrics.title')}
+                        onClick={onOpenRunMetrics}
+                    >
+                        <Activity className="left-sidebar-tab-icon" size={13} aria-hidden="true" />
+                    </button>
+                ) : null}
             </div>
             <div className="left-sidebar-body">
                 {tab === 'palette' ? (
