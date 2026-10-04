@@ -207,6 +207,13 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
     std::env::set_var("DUCKLE_LOG_DIR", &log_dir);
 
     let duckdb = crate::resolve_duckdb(opts.duckdb.clone())?;
+    // Plan 003: a follower is long-lived, so its run metrics are queued. Its
+    // receipt is only written once a pass has done work, after the engine
+    // ran, so the store gets each run's ending and record but no stage detail.
+    duckle_duckdb_engine::metrics_bus::configure(
+        duckdb.clone(),
+        duckle_duckdb_engine::metrics_bus::DeliveryMode::Queued,
+    );
     let engine = DuckdbEngine::new(duckdb).without_previews();
 
     // Ctrl-C is checked between passes, never during one. Stopping mid-batch
@@ -323,6 +330,7 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
                 // about to exit cleanly, and leaving the session `running` would
                 // make the next start call it interrupted.
                 duckle_duckdb_engine::follow_session::finish(&workspace, &mut session);
+                duckle_duckdb_engine::metrics_bus::flush(Duration::from_secs(2));
                 return Err(outcome.error.unwrap_or_else(|| "batch failed".into()));
             }
             break;
@@ -335,6 +343,7 @@ pub fn run(opts: FollowOptions) -> Result<u64, String> {
     }
 
     duckle_duckdb_engine::follow_session::finish(&workspace, &mut session);
+    duckle_duckdb_engine::metrics_bus::flush(Duration::from_secs(2));
     eprintln!(
         "follow: {} poll(s), {} run(s), {} row(s), {} failed, {:.1}s elapsed",
         passes,

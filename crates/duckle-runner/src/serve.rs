@@ -325,6 +325,12 @@ pub fn run() -> Result<(), String> {
     std::env::set_var("DUCKLE_WORKSPACE", &workspace);
     std::env::set_var("DUCKLE_LOG_DIR", workspace.join("logs"));
     apply_workspace_memory_limit(&workspace);
+    // Plan 003: keep run metrics before reconciling, so the runs a previous
+    // life left `running` are closed in the metrics store too.
+    duckle_duckdb_engine::metrics_bus::configure(
+        duckdb.clone(),
+        duckle_duckdb_engine::metrics_bus::DeliveryMode::Queued,
+    );
 
     reconcile_at_startup(&workspace);
 
@@ -532,6 +538,12 @@ pub fn run_web() -> Result<(), String> {
     std::env::set_var("DUCKLE_WORKSPACE", &workspace);
     std::env::set_var("DUCKLE_LOG_DIR", workspace.join("logs"));
     apply_workspace_memory_limit(&workspace);
+    // Plan 003: keep run metrics before reconciling, so the runs a previous
+    // life left `running` are closed in the metrics store too.
+    duckle_duckdb_engine::metrics_bus::configure(
+        duckdb.clone(),
+        duckle_duckdb_engine::metrics_bus::DeliveryMode::Queued,
+    );
 
     reconcile_at_startup(&workspace);
     // The editor writes files, edits connections and runs pipelines, so it is
@@ -1001,14 +1013,17 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
                 "web",
                 Some((pool, queued_ms)),
             );
-            let result = engine.execute_pipeline_named(&doc, &name);
+            // #259: the same id in the log and the run history as in the receipt.
+            let run_id = receipt.run_id.clone();
+            let result = engine.with_run_id(&run_id).execute_pipeline_named(&doc, &name);
             duckle_duckdb_engine::retry::finish(
                 &state.workspace,
                 receipt,
                 &result.status,
                 duckle_duckdb_engine::retry::nodes_of(&result),
             );
-            record_editor_history(&state.workspace, args.get("pipelineId").and_then(|v| v.as_str()), &result, "web");
+            let pipeline_id = args.get("pipelineId").and_then(|v| v.as_str());
+            record_editor_history(&state.workspace, pipeline_id, &result, "web", Some(&run_id));
             match serde_json::to_value(&result) {
                 Ok(v) => respond_json(&v),
                 Err(e) => respond_err("500 Internal Server Error", &e.to_string()),
@@ -1427,7 +1442,7 @@ fn begin_editor_run(
 
 /// A value from the browser that may name a file: not empty, not `.` or `..`,
 /// and with no separator, drive colon or NUL.
-fn plain_file_name(s: &str) -> bool {
+pub(crate) fn plain_file_name(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\', ':', '\0'])
 }
 
@@ -1439,9 +1454,11 @@ fn record_editor_history(
     pipeline_id: Option<&str>,
     result: &duckle_duckdb_engine::RunResult,
     trigger: &str,
+    run_id: Option<&str>,
 ) {
     if let Some(id) = pipeline_id.filter(|id| plain_file_name(id)) {
-        let record = RunRecord::from_result_in(workspace, id, result, trigger);
+        let mut record = RunRecord::from_result_in(workspace, id, result, trigger);
+        record.run_id = run_id.map(str::to_string);
         duckle_duckdb_engine::record_run(workspace, id, record);
     }
 }
@@ -1523,6 +1540,8 @@ fn run_stream(
         if target.is_some() { "web-partial" } else { "web" },
         Some((pool, queued_ms)),
     );
+    let run_id = receipt.run_id.clone();
+    let engine = engine.with_run_id(&run_id);
     let result = engine.execute_pipeline_with_events(&doc, target.as_deref(), Some(&name), |evt| {
         if let Ok(j) = serde_json::to_string(&evt) {
             let _ = ev.write_all(format!("data: {}\n\n", j).as_bytes());
@@ -1540,6 +1559,7 @@ fn run_stream(
         args.get("pipelineId").and_then(|v| v.as_str()),
         &result,
         if target.is_some() { "web-partial" } else { "web" },
+        Some(&run_id),
     );
     let rj = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
     stream
@@ -7542,6 +7562,12 @@ mod tests {
             .map(|r| r["trigger"].as_str().unwrap_or_default())
             .collect();
         assert_eq!(triggers, ["web", "web", "scheduled"], "newest first, with both editor runs in it");
+        // Plan 003: each editor run's record names the run its receipt does.
+        let ids: Vec<&str> = listed.as_array().unwrap()[..2].iter().map(|r| r["run_id"].as_str().unwrap_or_default()).collect();
+        assert!(ids[0] != ids[1], "two runs, two ids: {ids:?}");
+        for id in ids {
+            assert!(duckle_duckdb_engine::retry::path_for_test(&ws, id).exists(), "no receipt for run id {id:?}");
+        }
 
         assert_eq!(cmd("run_history", serde_json::json!({ "pipelineId": "../outside" })).0, 400);
         let mut escaping = run.clone();

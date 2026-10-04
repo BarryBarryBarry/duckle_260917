@@ -543,6 +543,13 @@ fn run_with(args: Args) -> Result<bool, String> {
     // nothing to look at, so this is the one case where a headless run keeps its
     // previews: stopping early is only useful if you can see where you stopped.
     let target = args.target.clone();
+    // Plan 003: a one-shot run writes its metrics as it goes - a queue would
+    // still be draining when the process exits - and before reconciling below,
+    // so runs a killed predecessor left `running` are closed in the store too.
+    duckle_duckdb_engine::metrics_bus::configure(
+        duckdb.clone(),
+        duckle_duckdb_engine::metrics_bus::DeliveryMode::Direct,
+    );
     let engine = match target.is_some() {
         true => DuckdbEngine::new(duckdb),
         false => DuckdbEngine::new(duckdb).without_previews(),

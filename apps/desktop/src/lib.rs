@@ -164,6 +164,13 @@ pub fn run() {
             if let Ok(dir) = app.path().app_data_dir() {
                 let bin = resolve_duckdb_bin(&dir);
                 std::env::set_var("DUCKLE_DUCKDB_BIN", &bin);
+                // Plan 003: keep run metrics, before anything can reconcile a
+                // workspace. The CLI may not be downloaded yet; the store asks
+                // again on every write, so the first run after setup is kept.
+                duckle_duckdb_engine::metrics_bus::configure(
+                    bin.clone(),
+                    duckle_duckdb_engine::metrics_bus::DeliveryMode::Queued,
+                );
                 let _ = DUCKDB_BIN.set(bin);
 
                 // dbt for the xf.dbt node. Publishing an already-provisioned
@@ -342,6 +349,9 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 stop_web_panel_silent();
                 let _ = agent_manager::agent_stop_sync();
+                // Best effort: queued run metrics not yet written are rebuilt
+                // from run history the next time the app starts.
+                duckle_duckdb_engine::metrics_bus::flush(std::time::Duration::from_secs(2));
             }
         });
 }
@@ -548,6 +558,12 @@ async fn run_pipeline(
         pipeline_id.as_deref().unwrap_or("pipeline"),
         "desktop",
     );
+    // #259: the same id in the log and the run history as in the receipt.
+    let run_id = receipt.as_ref().map(|(_, r)| r.run_id.clone());
+    let engine = match &run_id {
+        Some(id) => engine.with_run_id(id),
+        None => engine,
+    };
     let joined = tokio::task::spawn_blocking(move || {
         engine.execute_pipeline_with_events(&pipeline, None, name.as_deref(), |evt| {
             let _ = on_event.send(evt);
@@ -564,7 +580,7 @@ async fn run_pipeline(
             duckle_duckdb_engine::retry::nodes_of(&result),
         );
     }
-    record_history(&pipeline_id, &workspace_path, &result, "manual");
+    record_history(&pipeline_id, &workspace_path, &result, "manual", run_id.as_deref());
     Ok(result)
 }
 
@@ -630,9 +646,11 @@ fn record_history(
     workspace_path: &Option<String>,
     result: &RunResult,
     trigger: &str,
+    run_id: Option<&str>,
 ) {
     if let (Some(id), Some(ws)) = (pipeline_id, workspace_path) {
-        let record = RunRecord::from_result_in(std::path::Path::new(ws), id, result, trigger);
+        let mut record = RunRecord::from_result_in(std::path::Path::new(ws), id, result, trigger);
+        record.run_id = run_id.map(str::to_string);
         if let Err(e) = append_run_record(std::path::Path::new(ws), id, record) {
             tracing::warn!("Failed to record run history: {}", e);
         }
@@ -676,6 +694,11 @@ async fn run_pipeline_partial(
         pipeline_id.as_deref().unwrap_or("pipeline"),
         "desktop-partial",
     );
+    let run_id = receipt.as_ref().map(|(_, r)| r.run_id.clone());
+    let engine = match &run_id {
+        Some(id) => engine.with_run_id(id),
+        None => engine,
+    };
     let joined = tokio::task::spawn_blocking(move || {
         engine.execute_pipeline_with_events(
             &pipeline,
@@ -697,7 +720,7 @@ async fn run_pipeline_partial(
             duckle_duckdb_engine::retry::nodes_of(&result),
         );
     }
-    record_history(&pipeline_id, &workspace_path, &result, "partial");
+    record_history(&pipeline_id, &workspace_path, &result, "partial", run_id.as_deref());
     Ok(result)
 }
 
@@ -2804,6 +2827,36 @@ fn mcp_inject_config(app: tauri::AppHandle, client: String) -> Result<String, St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plan 003: a canvas run's history record names the run its receipt does,
+    /// and a run with no workspace records nothing and begins nothing.
+    #[test]
+    fn a_canvas_runs_record_carries_its_receipts_run_id() {
+        let ws = tempfile::tempdir().unwrap();
+        let ws_str = Some(ws.path().display().to_string());
+        let pipeline: PipelineDoc = serde_json::from_value(serde_json::json!({ "nodes": [], "edges": [] })).unwrap();
+        let (_, receipt) = begin_desktop_run(&ws_str, &pipeline, "orders", "desktop").expect("a workspace run begins");
+        let result: RunResult = RunResult {
+            cache_keys: Default::default(),
+            status: "ok".into(),
+            duration_ms: 1,
+            nodes: Default::default(),
+            preview: Vec::new(),
+            error: None,
+            category: None,
+            unchanged: false,
+            incomplete: false,
+            incomplete_reason: None,
+            artifacts: Vec::new(),
+            artifacts_truncated: false,
+        };
+        record_history(&Some("orders".into()), &ws_str, &result, "manual", Some(&receipt.run_id));
+        let history = duckle_duckdb_engine::load_run_history(ws.path(), "orders");
+        assert_eq!(history[0].run_id.as_deref(), Some(receipt.run_id.as_str()));
+
+        assert!(begin_desktop_run(&None, &pipeline, "orders", "desktop").is_none());
+        assert!(begin_desktop_run(&Some(String::new()), &pipeline, "orders", "desktop").is_none());
+    }
 
     /// #363: Plan compiled the pipeline without resolving its saved
     /// connections, so a SQL Server node that took its host from one failed
