@@ -89,8 +89,12 @@ fn quoting_doubles_quotes_and_refuses_nul() {
 fn status_merge_only_moves_forward() {
     let c = col("status", "VARCHAR", Merge::Status(RUN_OPEN));
     let sql = merged(&c, "t", "n");
-    assert!(sql.starts_with("CASE WHEN n.status IS NULL THEN t.status"), "{sql}");
-    assert!(sql.contains("WHEN 'queued' THEN 0 WHEN 'running' THEN 1 ELSE 2"), "{sql}");
+    assert_eq!(
+        sql,
+        "CASE WHEN n.status IS NULL THEN t.status \
+         WHEN n.status IN ('queued', 'running') AND NOT t.status IN ('queued', 'running') THEN t.status \
+         ELSE n.status END"
+    );
     assert_eq!(merged(&col("x", "BIGINT", Merge::KeepFirst), "t", "n"), "COALESCE(t.x, n.x)");
     assert_eq!(merged(&col("x", "BIGINT", Merge::Overwrite), "t", "n"), "COALESCE(n.x, t.x)");
 }
@@ -209,6 +213,9 @@ fn a_patch_without_identity_never_creates_a_run() {
 fn a_final_status_is_never_reopened() {
     let (_ws, s) = store_or_skip!();
     s.apply_run_patch(&begun("r1", "orders", "2026-10-04T10:00:00Z")).unwrap();
+    s.apply_run_patch(&PipelineRunPatch { run_key: "r1".into(), status: Some(RunStatus::Queued), ..Default::default() })
+        .unwrap();
+    assert_eq!(one_run(&s, "r1").status, RunStatus::Queued, "a begun run may still wait for a permit");
     s.apply_run_patch(&PipelineRunPatch { run_key: "r1".into(), status: Some(RunStatus::Cancelled), ..Default::default() })
         .unwrap();
     s.apply_run_patch(&PipelineRunPatch { run_key: "r1".into(), status: Some(RunStatus::Running), ..Default::default() })

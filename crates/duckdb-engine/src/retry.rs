@@ -332,6 +332,10 @@ pub fn begin(
     // Best effort: a run that cannot record itself is still a run that happens.
     let _ = write(workspace, &receipt);
     export_lineage(workspace, &receipt, crate::openlineage::EventType::Start);
+    crate::metrics_bus::publish_with(|| crate::metrics_bus::MetricsEvent::RunBegun {
+        workspace: workspace.to_path_buf(),
+        id: crate::metrics_bus::RunIdentity::of(&receipt),
+    });
     receipt
 }
 
@@ -386,6 +390,24 @@ pub fn finish(
     // After the receipt is durable, so a crash between the two loses the
     // telemetry rather than the record.
     export_lineage(workspace, &receipt, crate::openlineage::EventType::from_status(status));
+    crate::metrics_bus::publish_with(|| crate::metrics_bus::MetricsEvent::RunEnded {
+        workspace: workspace.to_path_buf(),
+        id: crate::metrics_bus::RunIdentity::of(&receipt),
+        status: status.to_string(),
+        ran_from: receipt.started_at.clone().unwrap_or_else(|| receipt.at.clone()),
+        at: chrono::Utc::now().to_rfc3339(),
+        nodes: receipt
+            .nodes
+            .iter()
+            .map(|(id, n)| crate::metrics_bus::EndedNode {
+                node_id: id.clone(),
+                status: n.status.clone(),
+                stage_kind: n.kind.clone(),
+                rows: n.rows,
+                duration_ms: n.duration_ms,
+            })
+            .collect(),
+    });
 }
 
 /// Turn abandoned `running` receipts into an honest `interrupted`.
@@ -409,6 +431,10 @@ pub fn enqueue(workspace: &Path, receipt: &mut RunReceipt, pool: &str, reason: &
     receipt.queue_reason = Some(reason.to_string());
     receipt.queued_at = Some(chrono::Utc::now().to_rfc3339());
     let _ = write(workspace, receipt);
+    crate::metrics_bus::publish_with(|| crate::metrics_bus::MetricsEvent::RunQueued {
+        workspace: workspace.to_path_buf(),
+        id: crate::metrics_bus::RunIdentity::of(receipt),
+    });
 }
 
 /// The permit arrived; the run is now executing.
@@ -419,6 +445,11 @@ pub fn admitted(workspace: &Path, receipt: &mut RunReceipt, waited_ms: u64) {
     receipt.started_at = Some(chrono::Utc::now().to_rfc3339());
     receipt.queue_ms = Some(waited_ms);
     let _ = write(workspace, receipt);
+    crate::metrics_bus::publish_with(|| crate::metrics_bus::MetricsEvent::RunAdmitted {
+        workspace: workspace.to_path_buf(),
+        id: crate::metrics_bus::RunIdentity::of(receipt),
+        queue_ms: waited_ms,
+    });
 }
 
 pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<String> {
@@ -461,6 +492,11 @@ pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<Strin
             // place `interrupted` is ever produced; without it here the ABORT
             // mapping is unreachable from anywhere but a unit test.
             export_lineage(workspace, &r, crate::openlineage::EventType::Abort);
+            crate::metrics_bus::publish_with(|| crate::metrics_bus::MetricsEvent::RunInterrupted {
+                workspace: workspace.to_path_buf(),
+                id: crate::metrics_bus::RunIdentity::of(&r),
+                at: chrono::Utc::now().to_rfc3339(),
+            });
             // And into the run history, which is where monitoring reads.
             //
             // `append_run_record` is only called when a run FINISHES, so an

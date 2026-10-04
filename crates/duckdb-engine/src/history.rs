@@ -345,6 +345,17 @@ pub fn append_run_record(
     // Refresh the OpenMetrics textfile alongside the history. Best-effort:
     // monitoring must never fail a run.
     let _ = write_metrics_textfile(workspace);
+    // The metrics store hears about it last, and outside the history lock: a
+    // direct-mode store write runs a CLI, and holding the lock across that
+    // would make the next run of this pipeline wait on it.
+    drop(_guard);
+    if publication.run_id.is_some() {
+        crate::metrics_bus::publish_with(|| crate::metrics_bus::MetricsEvent::RunRecorded {
+            workspace: workspace.to_path_buf(),
+            pipeline_id: pipeline_id.to_string(),
+            record: publication,
+        });
+    }
     Ok(())
 }
 

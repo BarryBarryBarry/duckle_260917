@@ -507,7 +507,7 @@ enum Merge {
     Overwrite,
     /// The first value written stays.
     KeepFirst,
-    /// Moves forward only: open states never replace a final one.
+    /// Moves forward only: an open state never replaces a final one.
     Status(&'static [&'static str]),
 }
 
@@ -583,12 +583,12 @@ fn merged(c: &Col, old: &str, new: &str) -> String {
         Merge::Overwrite => format!("COALESCE({n}, {o})"),
         Merge::KeepFirst => format!("COALESCE({o}, {n})"),
         Merge::Status(open) => {
-            let rank = |x: &str| {
-                let arms: String =
-                    open.iter().enumerate().map(|(i, s)| format!(" WHEN '{s}' THEN {i}")).collect();
-                format!("CASE {x}{arms} ELSE {} END", open.len())
-            };
-            format!("CASE WHEN {n} IS NULL THEN {o} WHEN {} >= {} THEN {n} ELSE {o} END", rank(&n), rank(&o))
+            // Open states replace each other freely (a run is begun as
+            // running and may then be queued for a permit); only a final
+            // state is sticky against an open one.
+            let words: Vec<String> = open.iter().map(|s| format!("'{s}'")).collect();
+            let is_open = |x: &str| format!("{x} IN ({})", words.join(", "));
+            format!("CASE WHEN {n} IS NULL THEN {o} WHEN {} AND NOT {} THEN {o} ELSE {n} END", is_open(&n), is_open(&o))
         }
     }
 }
