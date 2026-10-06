@@ -36,6 +36,7 @@ import {
 } from './tauri-bridge';
 import ScheduleEditorModal from './workflow-ui/ScheduleEditorModal';
 import PlansModal from './workflow-ui/PlansModal';
+import RunMetricsModal from './workflow-ui/RunMetricsModal';
 import DeployModal from './workflow-ui/DeployModal';
 import BackfillModal from './workflow-ui/BackfillModal';
 import RunParametersModal from './workflow-ui/RunParametersModal';
@@ -2508,6 +2509,7 @@ export default function App() {
         return () => window.removeEventListener('duckle:dives-visibility', onChange);
     }, []);
     const [showLineage, setShowLineage] = useState(false);
+    const [showRunMetrics, setShowRunMetrics] = useState(false);
     const [showTrust, setShowTrust] = useState(false);
     const [showCatalog, setShowCatalog] = useState(false);
     const [showPlans, setShowPlans] = useState(false);
@@ -2828,6 +2830,7 @@ export default function App() {
                     onBackfillPipeline={handleBackfillPipeline}
                     onBuildPipeline={handleBuildPipeline}
                     onDeployPipeline={isInTauri() ? setDeployModalPipelineId : undefined}
+                    onOpenRunMetrics={() => setShowRunMetrics(true)}
                 />
                 <section className="canvas-shell" data-tour="canvas">
                     <EditorHeader
@@ -3101,6 +3104,9 @@ export default function App() {
                     }}
                     onClose={() => setShowDivesGallery(false)}
                 />
+            ) : null}
+            {showRunMetrics ? (
+                <RunMetricsModal workspacePath={workspacePathState} onClose={() => setShowRunMetrics(false)} />
             ) : null}
             {showLineage ? (
                 <LineageModal nodes={nodes} edges={edges} onClose={() => setShowLineage(false)} />

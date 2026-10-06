@@ -42,6 +42,11 @@ pub mod backfill;
 pub mod backfill_exec;
 pub mod capabilities;
 pub mod materialize;
+pub mod metrics_backfill;
+pub mod metrics_bus;
+pub mod metrics_model;
+pub mod metrics_query;
+pub mod metrics_store;
 pub mod subscribe;
 pub mod chunk_exec;
 pub mod chunking;
@@ -226,6 +231,11 @@ pub struct DuckdbEngine {
     /// run executes on, so a called child inherits it and arms no second one:
     /// the limit is on the run that was started.
     deadline: Option<Arc<Deadline>>,
+    /// Plan 003: whether a run on this engine has already taken the job of
+    /// reporting stages to the metrics store. Shared by clones, so the child
+    /// pipelines a run calls - which run on clones - never report as if they
+    /// were the run; a new run identity gets a fresh one.
+    metrics_claim: Arc<AtomicBool>,
 }
 
 /// A run's time limit, and whether it has been hit.
@@ -399,6 +409,7 @@ impl DuckdbEngine {
             probing: false,
             webhook_acks: None,
             deadline: None,
+            metrics_claim: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -475,7 +486,33 @@ impl DuckdbEngine {
     pub fn with_run_id(mut self, run_id: impl Into<String>) -> Self {
         let id = run_id.into();
         self.run_id = (!id.trim().is_empty()).then_some(id);
+        // A new identity is a new run, which reports its own stages.
+        self.metrics_claim = Arc::new(AtomicBool::new(false));
         self
+    }
+
+    /// Plan 003: the stage reporter for this run, if it is the run that
+    /// should report. Only a run with a durable id whose ledger entry this
+    /// process published, and only the first run on this engine - a child
+    /// pipeline shares the claim and finds it taken. A probe never reports.
+    fn metrics_tap(&self, stages: &[plan::Stage]) -> Option<metrics_bus::StageTap> {
+        let run_key = self.run_id.as_deref()?;
+        if self.probing || !metrics_bus::enabled() {
+            return None;
+        }
+        let workspace = metrics_bus::workspace_of(run_key)?;
+        self.metrics_claim.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).ok()?;
+        let planned = stages
+            .iter()
+            .enumerate()
+            .map(|(i, st)| metrics_bus::PlannedStage {
+                node_id: st.node_id.clone(),
+                component: Some(st.component_id.clone()),
+                kind: capabilities::component_kind(&st.component_id).map(str::to_string),
+                ordinal: i64::try_from(i).unwrap_or(i64::MAX),
+            })
+            .collect();
+        Some(metrics_bus::StageTap::new(workspace, run_key.to_string(), planned))
     }
 
     /// Stop fetching per-node preview rows.
@@ -517,6 +554,7 @@ impl DuckdbEngine {
             probing: false,
             webhook_acks: None,
             deadline: None,
+            metrics_claim: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -539,6 +577,7 @@ impl DuckdbEngine {
             probing: true,
             webhook_acks: None,
             deadline: None,
+            metrics_claim: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1705,9 +1744,13 @@ impl DuckdbEngine {
             .clone()
             .unwrap_or_else(|| format!("run-{}-{}", std::process::id(), now_nanos()));
         let mut runlog = run_log::RunLog::open(pipeline_name, run_id, node_meta);
+        let mut metrics_tap = self.metrics_tap(&compiled.stages);
         let mut on_event = |evt: PipelineEvent| {
             if runlog.enabled() {
                 runlog.record(&evt);
+            }
+            if let Some(tap) = metrics_tap.as_mut() {
+                tap.observe(&evt);
             }
             user_on_event(evt);
         };
@@ -2041,6 +2084,8 @@ impl DuckdbEngine {
                         error: None,
                         category: None,
                         sql: None,
+                        started_at: Some(now_rfc3339()),
+                        rejected_rows: None,
                     },
                 );
                 on_event(PipelineEvent::StageFinished {
@@ -2083,6 +2128,7 @@ impl DuckdbEngine {
                 }
             }
             let started = Instant::now();
+            let started_wall = now_rfc3339();
             // Advanced settings: memoryLimitMb prepends a PRAGMA so heavy
             // aggregations can be capped per stage. The PRAGMA only lives
             // for the duration of this CLI invocation.
@@ -2424,6 +2470,8 @@ impl DuckdbEngine {
                                             error: st.error.clone(),
                                             category: st.category.clone(),
                                             sql: st.sql.clone(),
+                                            started_at: st.started_at.clone(),
+                                            rejected_rows: st.rejected_rows,
                                         },
                                     );
                                 }
@@ -2998,6 +3046,8 @@ impl DuckdbEngine {
                             error: None,
                             category: None,
                             sql: None,
+                            started_at: Some(started_wall.clone()),
+                            rejected_rows: None,
                         },
                     );
                     on_event(PipelineEvent::StageFinished {
@@ -3073,6 +3123,8 @@ impl DuckdbEngine {
                             error: Some(msg.clone()),
                             category: Some(category.into()),
                             sql: failing_sql.clone(),
+                            started_at: Some(started_wall.clone()),
+                            rejected_rows: None,
                         },
                     );
                     on_event(PipelineEvent::StageFinished {
@@ -3143,6 +3195,8 @@ impl DuckdbEngine {
                         error: None,
                         category: None,
                         sql: None,
+                        started_at: None,
+                        rejected_rows: None,
                     },
                 );
             }
@@ -3776,6 +3830,8 @@ impl DuckdbEngine {
                         error: Some(msg.clone()),
                         category: Some(error_category::categorize_error(&msg).into()),
                         sql: failing_sql.clone(),
+                        started_at: Some(rfc3339_ms_ago(elapsed)),
+                        rejected_rows: None,
                     },
                 );
                 on_event(PipelineEvent::StageFinished {
@@ -4608,6 +4664,8 @@ fn drain_batched_markers(
                 error: None,
                 category: None,
                 sql: None,
+                started_at: Some(rfc3339_ms_ago(elapsed)),
+                rejected_rows: None,
             },
         );
         on_event(PipelineEvent::StageFinished {
@@ -7794,7 +7852,15 @@ fn end_of_run(
         let rows_in = nodes.get(&w.input).and_then(|n| n.rows);
         let rows_out = nodes.get(&stage.node_id).and_then(|n| n.rows);
         let (Some(rows_in), Some(rows_out)) = (rows_in, rows_out) else { continue };
-        let Some(rejected) = rows_in.checked_sub(rows_out).filter(|n| *n > 0) else { continue };
+        let Some(rejected) = rows_in.checked_sub(rows_out) else { continue };
+        // Recorded before the zero check: a check that rejected nothing is a
+        // figure (0), not an absence of one.
+        if let Some(st) = nodes.get_mut(&stage.node_id) {
+            st.rejected_rows = Some(rejected);
+        }
+        if rejected == 0 {
+            continue;
+        }
         let what = if w.wired {
             format!("{rejected} rows failed the check and went to its reject port")
         } else {
@@ -7877,6 +7943,30 @@ pub struct NodeRunStatus {
     /// rejected (easy tracebacks for every node).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sql: Option<String>,
+    /// RFC3339 UTC time the stage began. Absent for a stage that never ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// Rows a reject-splitting quality check turned away: its input count
+    /// minus its output count, `Some(0)` when it rejected nothing. Absent for
+    /// every other node and when either count is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rejected_rows: Option<u64>,
+}
+
+fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
+/// When a stage that has just finished after `elapsed_ms` began. For the
+/// batched path, which times stages with `Instant` and has no wall clock.
+fn rfc3339_ms_ago(elapsed_ms: u64) -> String {
+    let now = chrono::Utc::now();
+    i64::try_from(elapsed_ms)
+        .ok()
+        .and_then(chrono::TimeDelta::try_milliseconds)
+        .and_then(|d| now.checked_sub_signed(d))
+        .unwrap_or(now)
+        .to_rfc3339()
 }
 
 #[derive(Debug, Serialize)]

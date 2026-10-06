@@ -745,6 +745,7 @@ mod tests {
                 rows: Some(1),
             }],
             nodes: Vec::new(),
+            ..Default::default()
         }
     }
 }
@@ -1049,6 +1050,7 @@ mod parameter_binding {
                 rows: Some(5),
             }],
             nodes: Vec::new(),
+            ..Default::default()
         };
         crate::materialize::append(tmp, "source.accounts", &record).unwrap();
     }
@@ -1364,6 +1366,7 @@ mod failed_deliveries_can_be_retried {
                     rows: Some(5),
                 }],
                 nodes: Vec::new(),
+                ..Default::default()
             },
         )
         .unwrap();

@@ -325,8 +325,21 @@ pub fn run() -> Result<(), String> {
     std::env::set_var("DUCKLE_WORKSPACE", &workspace);
     std::env::set_var("DUCKLE_LOG_DIR", workspace.join("logs"));
     apply_workspace_memory_limit(&workspace);
+    // Plan 003: keep run metrics before reconciling, so the runs a previous
+    // life left `running` are closed in the metrics store too.
+    duckle_duckdb_engine::metrics_bus::configure(
+        duckdb.clone(),
+        duckle_duckdb_engine::metrics_bus::DeliveryMode::Queued,
+    );
 
     reconcile_at_startup(&workspace);
+    // Plan 003: bring the run metrics store up to date from run history, and
+    // keep DUCKLE_METRICS_RETENTION_DAYS of it (30 unless set; 0 keeps all).
+    // On its own thread: a large history must not hold up the console.
+    {
+        let (ws, bin) = (workspace.clone(), duckdb.clone());
+        std::thread::spawn(move || duckle_duckdb_engine::metrics_backfill::at_startup(&ws, &bin, true));
+    }
 
     // Decide who may use this console before binding anything. An exposed bind
     // with no credential does not refuse to start any more - it comes up
@@ -532,8 +545,21 @@ pub fn run_web() -> Result<(), String> {
     std::env::set_var("DUCKLE_WORKSPACE", &workspace);
     std::env::set_var("DUCKLE_LOG_DIR", workspace.join("logs"));
     apply_workspace_memory_limit(&workspace);
+    // Plan 003: keep run metrics before reconciling, so the runs a previous
+    // life left `running` are closed in the metrics store too.
+    duckle_duckdb_engine::metrics_bus::configure(
+        duckdb.clone(),
+        duckle_duckdb_engine::metrics_bus::DeliveryMode::Queued,
+    );
 
     reconcile_at_startup(&workspace);
+    // Plan 003: bring the run metrics store up to date from run history, and
+    // keep DUCKLE_METRICS_RETENTION_DAYS of it (30 unless set; 0 keeps all).
+    // On its own thread: a large history must not hold up the console.
+    {
+        let (ws, bin) = (workspace.clone(), duckdb.clone());
+        std::thread::spawn(move || duckle_duckdb_engine::metrics_backfill::at_startup(&ws, &bin, true));
+    }
     // The editor writes files, edits connections and runs pipelines, so it is
     // at least as powerful as the console and gets the same rule: loopback is
     // open, anything else needs a credential before the socket is bound.
@@ -1001,14 +1027,17 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
                 "web",
                 Some((pool, queued_ms)),
             );
-            let result = engine.execute_pipeline_named(&doc, &name);
+            // #259: the same id in the log and the run history as in the receipt.
+            let run_id = receipt.run_id.clone();
+            let result = engine.with_run_id(&run_id).execute_pipeline_named(&doc, &name);
             duckle_duckdb_engine::retry::finish(
                 &state.workspace,
                 receipt,
                 &result.status,
                 duckle_duckdb_engine::retry::nodes_of(&result),
             );
-            record_editor_history(&state.workspace, args.get("pipelineId").and_then(|v| v.as_str()), &result, "web");
+            let pipeline_id = args.get("pipelineId").and_then(|v| v.as_str());
+            record_editor_history(&state.workspace, pipeline_id, &result, "web", Some(&run_id));
             match serde_json::to_value(&result) {
                 Ok(v) => respond_json(&v),
                 Err(e) => respond_err("500 Internal Server Error", &e.to_string()),
@@ -1041,6 +1070,15 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
         // The History tab. Same answer as the desktop's run_history: this
         // pipeline's retained runs, newest first. The id names the history file,
         // so one that is not a plain file name is refused.
+        // Plan 003: the run metrics page.
+        // Called as the desktop's command is, `{ workspacePath, query }`; the
+        // workspace is this server's own, whatever the page names.
+        "metrics_runs" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let query = args.get("query").cloned().unwrap_or(Value::Null);
+            respond_json(&crate::metrics_api::editor_runs(&state.workspace, &state.duckdb, &query))
+        }
+        "metrics_pipelines" => respond_json(&crate::metrics_api::editor_pipelines(&state.workspace)),
         "run_history" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
             match args.get("pipelineId").and_then(|v| v.as_str()).filter(|id| plain_file_name(id)) {
@@ -1427,7 +1465,7 @@ fn begin_editor_run(
 
 /// A value from the browser that may name a file: not empty, not `.` or `..`,
 /// and with no separator, drive colon or NUL.
-fn plain_file_name(s: &str) -> bool {
+pub(crate) fn plain_file_name(s: &str) -> bool {
     !s.is_empty() && s != "." && s != ".." && !s.contains(['/', '\\', ':', '\0'])
 }
 
@@ -1439,9 +1477,11 @@ fn record_editor_history(
     pipeline_id: Option<&str>,
     result: &duckle_duckdb_engine::RunResult,
     trigger: &str,
+    run_id: Option<&str>,
 ) {
     if let Some(id) = pipeline_id.filter(|id| plain_file_name(id)) {
-        let record = RunRecord::from_result_in(workspace, id, result, trigger);
+        let mut record = RunRecord::from_result_in(workspace, id, result, trigger);
+        record.run_id = run_id.map(str::to_string);
         duckle_duckdb_engine::record_run(workspace, id, record);
     }
 }
@@ -1523,6 +1563,8 @@ fn run_stream(
         if target.is_some() { "web-partial" } else { "web" },
         Some((pool, queued_ms)),
     );
+    let run_id = receipt.run_id.clone();
+    let engine = engine.with_run_id(&run_id);
     let result = engine.execute_pipeline_with_events(&doc, target.as_deref(), Some(&name), |evt| {
         if let Ok(j) = serde_json::to_string(&evt) {
             let _ = ev.write_all(format!("data: {}\n\n", j).as_bytes());
@@ -1540,6 +1582,7 @@ fn run_stream(
         args.get("pipelineId").and_then(|v| v.as_str()),
         &result,
         if target.is_some() { "web-partial" } else { "web" },
+        Some(&run_id),
     );
     let rj = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
     stream
@@ -2580,6 +2623,17 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
             None => respond_err("400 Bad Request", "missing file"),
         },
         ("GET", "/api/runs") => respond_json(&api_runs(state, req.query.get("id").map(|s| s.as_str()))),
+        // Plan 003: run metrics from the metrics store, by time, pipeline and
+        // status, with each run's nodes. Separate from /metrics, which stays
+        // the Prometheus document it was.
+        ("GET", "/api/metrics/runs") => {
+            let (status, body) = crate::metrics_api::runs(&state.workspace, &state.duckdb, &req.query);
+            respond(status, "application/json", body.to_string().as_bytes())
+        }
+        ("GET", "/api/metrics/events") => {
+            let (status, body) = crate::metrics_api::events(&state.workspace, &state.duckdb, &req.query);
+            respond(status, "application/json", body.to_string().as_bytes())
+        }
         // #295: the persisted backfill plan, addressable over the server rather
         // than only by an in-process CLI invocation.
         ("GET", "/api/backfills") => match req.query.get("id") {
@@ -6064,6 +6118,8 @@ mod tests {
             "/api/pipelines",
             "/api/runs",
             "/api/log",
+            "/api/metrics/runs",
+            "/api/metrics/events",
         ] {
             let reply = route_console(&rebound("GET", path), &state);
             assert_eq!(
@@ -7542,12 +7598,52 @@ mod tests {
             .map(|r| r["trigger"].as_str().unwrap_or_default())
             .collect();
         assert_eq!(triggers, ["web", "web", "scheduled"], "newest first, with both editor runs in it");
+        // Plan 003: each editor run's record names the run its receipt does.
+        let ids: Vec<&str> = listed.as_array().unwrap()[..2].iter().map(|r| r["run_id"].as_str().unwrap_or_default()).collect();
+        assert!(ids[0] != ids[1], "two runs, two ids: {ids:?}");
+        for id in ids {
+            assert!(duckle_duckdb_engine::retry::path_for_test(&ws, id).exists(), "no receipt for run id {id:?}");
+        }
 
         assert_eq!(cmd("run_history", serde_json::json!({ "pipelineId": "../outside" })).0, 400);
         let mut escaping = run.clone();
         escaping["pipelineId"] = "../outside".into();
         cmd("run_pipeline", escaping);
         assert!(!ws.join("outside.json").exists(), "an id that is not a file name named a history file");
+    }
+
+    /// Plan 003: the editor's run metrics page asks through commands, and a
+    /// command that cannot answer says why in the answer rather than failing
+    /// the request.
+    #[test]
+    fn the_web_metrics_page_commands_answer_or_say_why_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(ws.join("pipelines").join("orders.json"), r#"{"name":"Orders","nodes":[],"edges":[]}"#).unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from("duckdb"),
+            dist: ws.clone(),
+            host: "127.0.0.1".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "127.0.0.1", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        let cmd = |name: &str, body: serde_json::Value| {
+            let mut req = request("POST", &format!("/api/cmd/{name}"), Some("Bearer s3cret"));
+            req.body = serde_json::to_vec(&body).unwrap();
+            let reply = route_web(&req, &state);
+            (reply.code(), serde_json::from_slice::<serde_json::Value>(&reply.body).unwrap_or_default())
+        };
+        let (code, listed) = cmd("metrics_pipelines", serde_json::json!({}));
+        assert_eq!(code, 200);
+        assert_eq!(listed["pipelines"], serde_json::json!([{ "pipelineId": "orders", "pipelineName": "Orders" }]));
+        let (code, refused) = cmd("metrics_runs", serde_json::json!({ "query": { "status": ["sideways"] } }));
+        assert_eq!((code, refused["status"].clone()), (200, serde_json::json!(400)), "{refused}");
+        let (code, down) = cmd("metrics_runs", serde_json::json!({ "workspacePath": "/elsewhere", "query": { "page": 1 } }));
+        assert_eq!((code, down["status"].clone()), (200, serde_json::json!(503)), "{down}");
+        assert!(down["reason"].is_string());
     }
 
     /// The web editor's Schedules dialog reads and writes the workspace's real
@@ -7693,6 +7789,89 @@ mod tests {
         assert!(events.contains("\"status\":\"cancelled\""), "the run did not stop: {events}");
         assert!(!out.exists(), "a stopped run still wrote its sink");
         assert!(state.editor_runs.runs.lock().unwrap().is_empty(), "a finished run stayed registered");
+    }
+
+    /// Plan 003: the run metrics API is a viewer's to read, refuses a bad
+    /// filter before it reaches the store, and answers 503 - with the reason -
+    /// while the store cannot be reached, leaving the rest of the console alone.
+    #[test]
+    fn run_metrics_are_a_viewers_to_read_and_say_when_the_store_is_unavailable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let state = guarded_state(&ws);
+        let key = {
+            let store = crate::auth_store::AuthStore::open(&ws).unwrap();
+            store.create_api_key("metrics", console_auth::Role::Viewer, None).unwrap()
+        };
+        let viewer = format!("Bearer {key}");
+        for path in ["/api/metrics/runs", "/api/metrics/events"] {
+            assert_eq!(route_console(&request("GET", path, None), &state).code(), 401, "{path}");
+            let reply = route_console(&request("GET", path, Some(&viewer)), &state);
+            assert_eq!(reply.code(), 503, "{path}: this console's DuckDB does not exist");
+            let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+            assert!(body["reason"].as_str().is_some_and(|r| r.contains("not found")), "{body}");
+        }
+        let mut bad = request("GET", "/api/metrics/runs", Some(&viewer));
+        bad.query.insert("status".into(), "ok'; DROP TABLE pipeline_run; --".into());
+        assert_eq!(route_console(&bad, &state).code(), 400);
+        assert_eq!(route_console(&request("GET", "/api/runs", Some(&viewer)), &state).code(), 200);
+    }
+
+    /// Plan 003: what /api/metrics/runs answers, field for field.
+    #[test]
+    fn run_metrics_answer_in_the_documented_shape() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN").ok().map(std::path::PathBuf::from).filter(|b| b.is_file())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let store = duckle_duckdb_engine::metrics_store::MetricsStore::open(&ws, &bin).unwrap();
+        store
+            .apply_run_patch(&duckle_duckdb_engine::metrics_model::PipelineRunPatch {
+                run_key: "run-1".into(),
+                pipeline_id: Some("orders".into()),
+                status: Some(duckle_duckdb_engine::metrics_model::RunStatus::Ok),
+                started_at: Some("2026-10-04T10:00:00Z".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .apply_node_patches(&[duckle_duckdb_engine::metrics_model::NodeRunPatch {
+                run_key: "run-1".into(),
+                node_id: "a".into(),
+                ..Default::default()
+            }])
+            .unwrap();
+        let state = local_state_using(&ws, bin);
+        let reply = route_console(&request("GET", "/api/metrics/runs", None), &state);
+        assert_eq!(reply.code(), 200);
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        let fields = |v: &serde_json::Value| {
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        assert_eq!(fields(&body), ["nextCursor", "runs", "schemaVersion"]);
+        assert_eq!(
+            fields(&body["runs"][0]),
+            [
+                "category", "createdAt", "durationMs", "error", "incomplete", "incompleteReason", "nodeCount",
+                "nodes", "pipelineId", "pipelineName", "queueMs", "rejectedRows", "rows", "runId", "runKey",
+                "startedAt", "status", "trigger", "unchanged", "updatedAt",
+            ]
+        );
+        assert_eq!(
+            fields(&body["runs"][0]["nodes"][0]),
+            [
+                "category", "component", "createdAt", "durationMs", "error", "kind", "nodeId", "ordinal",
+                "rejectedRows", "rows", "startedAt", "status", "updatedAt",
+            ]
+        );
+        let reply = route_console(&request("GET", "/api/metrics/events", None), &state);
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(fields(&body), ["events", "nextCursor", "schemaVersion"]);
     }
 
     /// A --token caller is an admin, so this proves the role gate rather than the token

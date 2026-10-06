@@ -178,14 +178,15 @@ This is the part that decides your design, and it is not obvious:
 | | CLI (`--pipeline`) | HTTP (`/api/run`) |
 | --- | --- | --- |
 | Needs a running server | No | Yes |
-| Records run history | **No** | Yes |
-| Updates the metrics file | **No** | Yes |
-| Visible in the console | **No** | Yes |
+| Records run history | Yes | Yes |
+| Updates the metrics file | Yes | Yes |
+| Records run metrics (`/api/metrics/*`) | Yes | Yes |
+| Visible in the console | Yes, from its history | Yes |
 | Alerts fire | **No** | Yes |
 
-**A headless CLI run is invisible to Duckle's own observability.** It writes no run history, so it never appears in the console's Runs tab, never updates the Prometheus textfile, and never raises an alert. That is fine if your orchestrator is your source of truth for what ran; it is not fine if you expected the console to show it.
+**A headless CLI run records itself but does not alert.** Since #309 it appends to the pipeline's run history like every other surface, so it appears in the console's Runs tab and refreshes the Prometheus textfile, and it writes its run metrics as it goes. It never raises an alert: alerting belongs to the process that owns the schedule. That is fine if your orchestrator is your source of truth for what failed; it is not fine if you expected Duckle to page you.
 
-If you want your orchestrator to own the schedule *and* Duckle to keep its own history, use the HTTP route against a console.
+If you want your orchestrator to own the schedule *and* Duckle to alert on it, use the HTTP route against a console.
 
 ### A note on overlap
 
@@ -211,18 +212,78 @@ It is written atomically, so a scrape never reads a half-written file. Point nod
 | `duckle_run_last_unchanged` | gauge | 1 when the most recent run checked its sources, found nothing changed and wrote nothing. Such a run IS a success, so `duckle_run_last_status` is 1 for it too - this is what separates a poll that is working and finding nothing from one that is ingesting. |
 | `duckle_run_last_duration_seconds` | gauge | how long the most recent run took |
 | `duckle_run_last_rows` | gauge | rows the most recent run wrote |
-| `duckle_run_last_timestamp_seconds` | gauge | when the most recent run finished |
+| `duckle_run_last_timestamp_seconds` | gauge | when the most recent run finished. Its HELP text says "started"; the value has always been the time the run was recorded, which is when it finished |
 | `duckle_node_last_duration_seconds` | gauge | how long each node of the most recent run took, labelled by `node` and `component` (`src.rest`, `xf.filter`, ...) - this is what turns "the run got slower" into "the extract stage got slower" |
 | `duckle_node_last_rows` | gauge | rows each node of the most recent run reported, same labels. A node the run never reached emits nothing - absent is not zero |
 | `duckle_runs_window` | gauge | how many runs are in the retained window |
 
 > **These are windowed, not lifetime, counters.** All series are derived from the retained run history, which is a rolling window per pipeline, so `duckle_runs_window` is a count of what is retained rather than everything that has ever run. The metric names say so deliberately.
 
-> It is written when a run is **recorded**, which means console runs, scheduled runs and desktop runs. A headless `duckle-runner --pipeline` run does not update it. See the table above.
+> It is written when a run is **recorded**, which means console runs, scheduled runs, desktop runs and headless `duckle-runner --pipeline` runs. See the table above.
 
 ### The API
 
-For a dashboard of your own, the console exposes `GET /api/runs`, `GET /api/schedules`, `GET /api/summary` and `GET /api/catalog`, all with the `viewer` role. That is the right role for a monitoring integration: it can read everything and start nothing.
+For a dashboard of your own, the console exposes `GET /api/runs`, `GET /api/schedules`, `GET /api/summary`, `GET /api/catalog` and the run metrics below, all with the `viewer` role. That is the right role for a monitoring integration: it can read everything and start nothing.
+
+### Run metrics store and `/api/metrics/*`
+
+The textfile above answers "how is each pipeline doing now". To ask "what ran between Monday and Wednesday, which of it failed, and which node" Duckle keeps every run, and every node of it, in a DuckDB file of its own:
+
+```text
+<workspace>/.duckle/metrics.duckdb
+```
+
+It is written through the same DuckDB CLI the engine runs pipelines with, so it adds nothing to install. A run appears there the moment it is begun - before any work - with each of its stages `pending`; each stage turns `running` and then final as it happens; and the run's own history record settles the figures when it ends. `/metrics` and `duckle_metrics.prom` are unchanged by any of this.
+
+| Table | One row per | Key |
+| --- | --- | --- |
+| `pipeline_run` | run | `run_key` (the run id; `legacy-…` for history written before run ids existed) |
+| `node_run` | stage of a run, in stage order (`ordinal`) | `run_key`, `node_id` |
+| `pipeline_event` | `run_started` / `run_finished` of a run | `event_id` |
+
+**Status words.** A run is `queued`, `running`, `ok`, `error`, `cancelled` or `interrupted`. A node is `pending`, `running`, `ok`, `unchanged`, `skipped`, `error`, `cancelled` or `interrupted`. A cancelled run cancels the stage in flight and skips the rest; a run whose process died (found at the next start) is `interrupted`, its stage in flight `interrupted` and the rest `skipped`. Whether a run was a quiet poll is the `unchanged` flag, not a status.
+
+**`startedAt`** is when the run was begun, including any wait for a resource-pool permit; `queueMs` is that wait. A node's `kind` is its catalog kind (`source`, `transform`, `sink`, `quality`, `control`, `custom`). `rejectedRows` is what reject-splitting quality checks turned away - `0` when a check rejected nothing, absent when no check reported.
+
+**`GET /api/metrics/runs`** - runs, newest first:
+
+| Parameter | Meaning |
+| --- | --- |
+| `from`, `to` | RFC3339; `from <= startedAt < to` |
+| `pipeline` | one or more pipeline ids, comma-separated (at most 50) |
+| `status` | one or more statuses, comma-separated. `pending` adds every pipeline in the workspace that has never run, after the runs and regardless of `from`/`to` |
+| `includeNodes` | `true` (default) or `false` |
+| `limit`, `cursor` | page by cursor: `limit` defaults to 50 (100 with nodes, 500 without); pass back `nextCursor` for the next page |
+| `page`, `pageSize` | or page by number: `pageSize` defaults to 20, at most 100, and the answer carries `total`. Not combinable with `cursor` |
+| `runKey` | one run, with its nodes |
+
+```json
+{ "schemaVersion": 1, "nextCursor": null, "runs": [{
+  "runKey": "run-scheduled-orders-1790769600000", "runId": "run-scheduled-orders-1790769600000",
+  "pipelineId": "orders", "pipelineName": "Orders", "status": "ok", "trigger": "scheduled",
+  "startedAt": "2026-09-30T12:00:00.000000Z", "durationMs": 3120, "rows": 1000000, "rejectedRows": null,
+  "unchanged": false, "incomplete": false, "incompleteReason": null, "nodeCount": 2, "queueMs": 0,
+  "error": null, "category": null, "createdAt": "…", "updatedAt": "…",
+  "nodes": [{ "nodeId": "extract", "ordinal": 0, "component": "src.postgres", "kind": "source", "status": "ok",
+              "startedAt": "…", "durationMs": 1800, "rows": 1000000, "rejectedRows": null,
+              "error": null, "category": null, "createdAt": "…", "updatedAt": "…" }] }] }
+```
+
+**`GET /api/metrics/events`** - `run_started` / `run_finished` events, newest first, filtered by `from`, `to`, `pipeline`, `kind`, paged by `limit` (at most 500) and `cursor`. A `run_finished` event's `detail` carries `status`, `durationMs`, `rows` and the first 200 characters of `error`.
+
+A bad parameter is `400`. If the store cannot be used - no DuckDB CLI yet, another process holding it, a store written by a newer Duckle - the answer is `503` with the `reason`; `/metrics` and `/api/runs` are unaffected. The web editor and the desktop read the same answers through their `metrics_runs` and `metrics_pipelines` commands, behind the **Run metrics** page: the activity icon at the end of the left sidebar's tabs. It filters by start and end time, pipelines and statuses, pages by number, shows each run's node count as `+N`, and opens a run's stages - in order, with their node type (`fetch`, `convert`, `insert`, `check`, `control`, `custom` for the catalog kinds) - when you click its pipeline name.
+
+**Who records.** The console and web editor (every run they start, scheduled and plan runs included), the desktop and its scheduler, `duckle-runner --pipeline` and `retry`, and `follow` - whose passes are recorded once they have done work, without per-stage detail. The MCP server and the `backfill` subcommand do not record run metrics yet; their runs reach the store from run history the next time a console or the desktop starts.
+
+**Catching up.** When a console or the desktop starts it brings the store up to date from run history: a run the store never saw is added, and one it still has open is settled - from its history record, or from its receipt, or as `interrupted` if the process that ran it is gone. A store that turns out to be corrupt is moved aside as `metrics.duckdb.corrupt-<time>`, rebuilt, and refilled the same way.
+
+**Retention.** A console keeps `DUCKLE_METRICS_RETENTION_DAYS` days of run metrics, 30 if it is not set; `0` keeps everything. It prunes once at start. To prune on your own schedule:
+
+```bash
+duckle-runner retention prune --workspace /srv/duckle --metrics-days 30 [--duckdb /path/to/duckdb] [--dry-run] [--json]
+```
+
+A run goes with all of its nodes. Deleting rows does **not** make `metrics.duckdb` smaller - DuckDB reuses the space - so retention bounds what the store answers with, not the disk it takes; the file itself is never deleted.
 
 ---
 

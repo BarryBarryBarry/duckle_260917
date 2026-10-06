@@ -50,6 +50,7 @@ mod follow;
 mod listen;
 mod import;
 mod manifest;
+mod metrics_api;
 mod pipetest;
 mod python;
 mod selfextract;
@@ -543,6 +544,13 @@ fn run_with(args: Args) -> Result<bool, String> {
     // nothing to look at, so this is the one case where a headless run keeps its
     // previews: stopping early is only useful if you can see where you stopped.
     let target = args.target.clone();
+    // Plan 003: a one-shot run writes its metrics as it goes - a queue would
+    // still be draining when the process exits - and before reconciling below,
+    // so runs a killed predecessor left `running` are closed in the store too.
+    duckle_duckdb_engine::metrics_bus::configure(
+        duckdb.clone(),
+        duckle_duckdb_engine::metrics_bus::DeliveryMode::Direct,
+    );
     let engine = match target.is_some() {
         true => DuckdbEngine::new(duckdb),
         false => DuckdbEngine::new(duckdb).without_previews(),
@@ -3009,9 +3017,12 @@ fn run_retention() -> ExitCode {
     let mut json_out = false;
     let mut dry_run = false;
     let mut policy = retention::Policy::default();
+    let mut duckdb_flag: Option<PathBuf> = None;
     while let Some(a) = it.next() {
         match a.as_str() {
             "--workspace" => workspace = it.next().map(PathBuf::from).unwrap_or(workspace),
+            "--duckdb" => duckdb_flag = it.next().map(PathBuf::from),
+            "--metrics-days" => policy.metrics_days = it.next().and_then(|v| v.parse().ok()),
             "--json" => json_out = true,
             "--dry-run" => dry_run = true,
             "--cache-days" => policy.cache_days = it.next().and_then(|v| v.parse().ok()),
@@ -3055,6 +3066,29 @@ fn run_retention() -> ExitCode {
             ExitCode::from(0)
         }
         "prune" => {
+            // Plan 003: the run metrics store is read and pruned through the
+            // DuckDB CLI, so a prune that includes it needs one - and says so
+            // before touching anything else, rather than half-pruning.
+            let metrics = match retention::metrics_horizon(&policy) {
+                None => None,
+                Some(h) => match resolve_duckdb(duckdb_flag.clone()) {
+                    Ok(bin) => Some((bin, h)),
+                    Err(e) => {
+                        eprintln!("duckle-runner retention: --metrics-days needs the DuckDB CLI: {e}");
+                        return ExitCode::from(2);
+                    }
+                },
+            };
+            let metrics_plan = match &metrics {
+                None => None,
+                Some((bin, h)) => match retention::plan_metrics(&workspace, bin, *h) {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        eprintln!("duckle-runner retention: the run metrics store could not be read: {e}");
+                        return ExitCode::from(1);
+                    }
+                },
+            };
             let plan = retention::plan(&workspace, &policy);
             // #303: the ledgers under `.duckle/` are operational history, not
             // correctness state, and they are pruned by REWRITING rather than
@@ -3074,6 +3108,12 @@ fn run_retention() -> ExitCode {
                         l.category, l.records, l.kept, l.reason
                     );
                 }
+                if let Some(m) = &metrics_plan {
+                    println!(
+                        "{:<10} {:>10} run(s), {} node(s), {} event(s)  (started before {})",
+                        "metrics", m.runs, m.nodes, m.events, m.horizon
+                    );
+                }
             }
             // The JSON is emitted AFTER the work, and carries what was actually
             // done. It used to be printed first, so a real prune handed back
@@ -3087,6 +3127,17 @@ fn run_retention() -> ExitCode {
                     Some((n, freed, retention::apply_ledgers(&workspace, &policy)))
                 }
             };
+            let metrics_done = match (&metrics, dry_run) {
+                (Some((bin, h)), false) => match retention::apply_metrics(&workspace, bin, *h) {
+                    Ok(m) => Some(m),
+                    Err(e) => {
+                        eprintln!("duckle-runner retention: the run metrics store was not pruned: {e}");
+                        None
+                    }
+                },
+                _ => None,
+            };
+            let metrics_out = if dry_run { metrics_plan.as_ref() } else { metrics_done.as_ref() };
             if json_out {
                 let (files, size, rows) = match &done {
                     Some((n, freed, pruned)) => (*n, *freed, pruned),
@@ -3102,6 +3153,7 @@ fn run_retention() -> ExitCode {
                         "bytes": size,
                         "removals": plan,
                         "ledgers": rows,
+                        "metrics": metrics_out,
                     }))
                     .unwrap_or_default()
                 );
@@ -3115,6 +3167,13 @@ fn run_retention() -> ExitCode {
                                 println!("removed {} {} record(s)", l.records, l.category);
                             }
                         }
+                        if let Some(m) = metrics_out {
+                            println!(
+                                "removed {} run metric(s), {} node(s), {} event(s); \
+                                 .duckle/metrics.duckdb keeps its size",
+                                m.runs, m.nodes, m.events
+                            );
+                        }
                     }
                 }
             }
@@ -3124,7 +3183,8 @@ fn run_retention() -> ExitCode {
             eprintln!(
                 "usage: duckle-runner retention status|prune [--workspace DIR] [--json] \
                  [--dry-run] [--cache-days N] [--logs-days N] [--receipts-keep N] \
-                 [--materializations-days N] [--deliveries-days N]"
+                 [--materializations-days N] [--deliveries-days N] \
+                 [--metrics-days N [--duckdb PATH]]"
             );
             ExitCode::from(2)
         }

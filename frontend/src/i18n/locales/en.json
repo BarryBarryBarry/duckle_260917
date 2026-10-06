@@ -282,5 +282,70 @@
       "govern": "Govern"
     },
     "groupCount": "{{ready}} of {{total}} ready"
+  },
+  "metrics": {
+    "title": "Run metrics",
+    "open": "Run metrics - every pipeline's runs, by time, pipeline and status",
+    "loading": "Loading run metrics...",
+    "empty": "No runs match these filters.",
+    "noWorkspace": "Open a workspace to see its run metrics.",
+    "unavailable": "The run metrics store is unavailable:",
+    "unavailableHint": "Each pipeline's History tab still shows its recent runs.",
+    "nodeCount": "{{count}} nodes in this run",
+    "filters": {
+      "from": "Start time",
+      "to": "End time",
+      "pipelines": "Pipelines",
+      "allPipelines": "All pipelines",
+      "statuses": "Statuses",
+      "allStatuses": "All statuses",
+      "search": "Search",
+      "chosen": "{{count}} chosen"
+    },
+    "columns": {
+      "pipeline": "Pipeline name",
+      "status": "Pipeline status",
+      "executedTime": "Executed time",
+      "cost": "Cost",
+      "rows": "Rows written"
+    },
+    "nodes": {
+      "title": "Stages of {{name}}",
+      "node": "Node",
+      "status": "Node status",
+      "executeTime": "Execute time",
+      "type": "Node type",
+      "neverRun": "This pipeline has never run, so it has no stages to show.",
+      "none": "No stage detail was recorded for this run."
+    },
+    "status": {
+      "ok": "Succeeded",
+      "error": "Failed",
+      "running": "Running",
+      "queued": "Queued",
+      "cancelled": "Cancelled",
+      "interrupted": "Interrupted",
+      "pending": "Never run",
+      "unchanged": "Unchanged",
+      "skipped": "Skipped"
+    },
+    "kind": {
+      "fetch": "fetch",
+      "convert": "convert",
+      "insert": "insert",
+      "check": "check",
+      "control": "control",
+      "custom": "custom"
+    },
+    "pager": {
+      "ariaLabel": "Pages",
+      "total": "{{count}} in total",
+      "first": "First page",
+      "previous": "Previous page",
+      "next": "Next page",
+      "last": "Last page",
+      "pageSize": "Rows per page",
+      "perPage": "{{count}} / page"
+    }
   }
 }

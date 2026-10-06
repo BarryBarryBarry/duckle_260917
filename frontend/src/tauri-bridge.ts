@@ -324,6 +324,7 @@ export async function runPipelinePartial(
 }
 
 export type RunRecord = {
+    /** When the record was written, i.e. when the run finished. */
     at: string;
     status: string;
     duration_ms: number;
@@ -333,6 +334,31 @@ export type RunRecord = {
     error?: string;
     /** Coarse error bucket (auth/network/timeout/oom/disk/schema/syntax/...). */
     category?: string;
+    run_id?: string;
+    unchanged?: boolean;
+    incomplete?: boolean;
+    incomplete_reason?: string;
+    /** When execution began (`at` minus `duration_ms`); absent on older records. */
+    started_at?: string;
+    /** Rows the reject-splitting quality checks turned away, summed. */
+    rejected_rows?: number;
+    /** Per-node detail; kept on the newest record of a pipeline only. */
+    nodes?: RunNodeMetric[];
+};
+
+/** One node of a run record. The backend writes these fields in camelCase. */
+export type RunNodeMetric = {
+    node: string;
+    component?: string;
+    durationMs?: number;
+    rows?: number;
+    /** Catalog kind: source / transform / sink / quality / control / custom. */
+    kind?: string;
+    status?: string;
+    startedAt?: string;
+    error?: string;
+    category?: string;
+    rejectedRows?: number;
 };
 
 export type CatalogFreshness = {
@@ -340,6 +366,110 @@ export type CatalogFreshness = {
     pipelineId: string;
     rows?: number;
 };
+
+// ---- Plan 003: run metrics ------------------------------------------------
+
+/** One stage of a run, from the run metrics store. */
+export type MetricsNode = {
+    nodeId: string;
+    ordinal: number | null;
+    component: string | null;
+    /** Catalog kind: source / transform / sink / quality / control / custom. */
+    kind: string | null;
+    status: string;
+    startedAt: string | null;
+    durationMs: number | null;
+    rows: number | null;
+    rejectedRows: number | null;
+    error: string | null;
+    category: string | null;
+    createdAt: string;
+    updatedAt: string;
+};
+
+/** One run. `status: 'pending'` with no `startedAt` is a pipeline that has never run. */
+export type MetricsRun = {
+    runKey: string;
+    runId: string | null;
+    pipelineId: string;
+    pipelineName: string;
+    status: string;
+    trigger: string | null;
+    startedAt: string | null;
+    durationMs: number | null;
+    rows: number | null;
+    rejectedRows: number | null;
+    unchanged: boolean | null;
+    incomplete: boolean | null;
+    incompleteReason: string | null;
+    nodeCount: number | null;
+    queueMs: number | null;
+    error: string | null;
+    category: string | null;
+    createdAt: string | null;
+    updatedAt: string | null;
+    nodes?: MetricsNode[];
+};
+
+export type MetricsRunsPage = {
+    schemaVersion: number;
+    runs: MetricsRun[];
+    total?: number;
+    page?: number;
+    pageSize?: number;
+    nextCursor?: string | null;
+};
+
+/** A query the metrics store could not answer: `status` 400 for a bad
+ *  parameter, 503 (with `reason`) when the store is unavailable. */
+export type MetricsFailure = { error: string; reason?: string; status?: number };
+
+export type MetricsRunQuery = {
+    from?: string;
+    to?: string;
+    pipeline?: string[];
+    status?: string[];
+    page?: number;
+    pageSize?: number;
+    runKey?: string;
+    includeNodes?: boolean;
+};
+
+export type MetricsPipeline = { pipelineId: string; pipelineName: string };
+
+export function isMetricsFailure(v: unknown): v is MetricsFailure {
+    return typeof v === 'object' && v !== null && typeof (v as { error?: unknown }).error === 'string';
+}
+
+/** Runs from the workspace's run metrics store, through the desktop's or the
+ *  web server's `metrics_runs`. Never throws: a failure comes back as a
+ *  `MetricsFailure` for the page to show. */
+export async function metricsRuns(
+    workspacePath: string,
+    query: MetricsRunQuery,
+): Promise<MetricsRunsPage | MetricsFailure> {
+    if (!isTauri() && !isWebBackend()) {
+        return { error: 'Run metrics need the desktop app or a Duckle server.' };
+    }
+    try {
+        const answer = await invoke<MetricsRunsPage | MetricsFailure | null>('metrics_runs', { workspacePath, query });
+        return answer ?? { error: 'The server did not answer.' };
+    } catch (err) {
+        return { error: err instanceof Error ? err.message : String(err) };
+    }
+}
+
+/** Every pipeline in the workspace, with the name it is shown under. */
+export async function metricsPipelines(workspacePath: string): Promise<MetricsPipeline[]> {
+    if (!isTauri() && !isWebBackend()) return [];
+    try {
+        const answer = await invoke<{ pipelines?: MetricsPipeline[] } | null>('metrics_pipelines', { workspacePath });
+        return answer?.pipelines ?? [];
+    } catch (err) {
+        console.warn('metricsPipelines failed', err);
+        return [];
+    }
+}
 
 export type CatalogAsset = {
     id: string;

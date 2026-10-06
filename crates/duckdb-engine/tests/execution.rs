@@ -1073,6 +1073,8 @@ fn a_quality_check_says_how_many_rows_it_rejected_on_both_paths() {
             assert_eq!(r.status, "ok", "{path}/{wired}: {:?}", r.error);
             let note = r.nodes.get("q").and_then(|n| n.note.clone()).unwrap_or_default();
             assert!(note.contains("2 rows failed the check"), "{path}/{wired}: {note}");
+            assert_eq!(r.nodes["q"].rejected_rows, Some(2), "{path}/{wired}");
+            assert_eq!(r.nodes["s"].rejected_rows, None, "{path}/{wired}: not a quality check");
             if wired {
                 assert!(note.contains("reject port"), "{path}: {note}");
                 assert!(warnings.is_empty(), "{path}: rows that went somewhere are not a warning: {warnings:?}");
@@ -1102,6 +1104,40 @@ fn a_quality_check_that_rejects_nothing_stays_quiet() {
     assert_eq!(r.status, "ok", "{:?}", r.error);
     let note = r.nodes.get("q").and_then(|n| n.note.clone()).unwrap_or_default();
     assert!(!note.contains("failed the check"), "{note}");
+    assert_eq!(r.nodes["q"].rejected_rows, Some(0), "rejecting nothing is a figure, not an absence");
+}
+
+/// Plan 003: every stage that ran says when it began, on both execution paths,
+/// and a check whose On failure keeps every row reports no rejected figure.
+#[test]
+fn executed_stages_record_their_start_and_only_rejecting_checks_count_rejects() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,email\n1,a@x.io\n2,\n");
+    for (path, target) in [("batched", None), ("per-stage", Some("k"))] {
+        let out = out_path(tmp.path(), &format!("{path}.csv"));
+        let before = chrono::Utc::now() - chrono::TimeDelta::seconds(1);
+        let r = engine.execute_pipeline_with_events(
+            &doc(
+                json!([
+                    node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                    node("q", "qa.notnull", json!({ "columns": ["email"], "onFail": "warn" })),
+                    node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+                ]),
+                json!([main_edge("e1", "s", "q"), main_edge("e2", "q", "k")]),
+            ),
+            target,
+            None,
+            |_| {},
+        );
+        assert_eq!(r.status, "ok", "{path}: {:?}", r.error);
+        for id in ["s", "q", "k"] {
+            let at = r.nodes[id].started_at.as_deref().unwrap_or_else(|| panic!("{path}/{id}: no start"));
+            let at = chrono::DateTime::parse_from_rfc3339(at).expect("RFC3339");
+            assert!(at >= before, "{path}/{id}: {at} is before the run");
+        }
+        assert_eq!(r.nodes["q"].rejected_rows, None, "{path}: warn keeps every row, nothing is rejected");
+    }
 }
 
 /// #329 / #296: a run that outlives its `maxRunSeconds` is stopped and reported

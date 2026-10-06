@@ -1836,6 +1836,7 @@ mod tests {
             nodes: Vec::new(),
             run_id: None,
             unchanged: false,
+            ..Default::default()
         };
 
         std::fs::write(
@@ -2642,6 +2643,7 @@ mod freshness_and_the_history_window {
             category: None,
             assets: vec![AssetTouch { id: asset.into(), direction: "write".into(), rows: Some(1) }],
             nodes: Vec::new(),
+            ..Default::default()
         }
     }
 

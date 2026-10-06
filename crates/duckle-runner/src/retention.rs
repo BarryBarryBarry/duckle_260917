@@ -122,6 +122,9 @@ pub struct Policy {
     /// #303: drop DELIVERED delivery records older than this many days.
     /// Pending and failed deliveries are never aged out.
     pub deliveries_days: Option<u64>,
+    /// Plan 003: drop runs from the run metrics store that started more than
+    /// this many days ago, with their nodes, and events as old.
+    pub metrics_days: Option<u64>,
 }
 
 /// What a prune would drop from an append-only ledger.
@@ -573,6 +576,59 @@ pub fn apply(workspace: &Path, plan: &[Removal]) -> (usize, u64) {
     (n, bytes)
 }
 
+/// Plan 003: what pruning the run metrics store removes.
+///
+/// Rows, not a file: `.duckle/metrics.duckdb` is never deleted, and deleting
+/// rows does not shrink it - DuckDB reuses the space - so this bounds what the
+/// store answers with, not the disk it takes.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetricsPrune {
+    pub days: u64,
+    /// Runs that started before this instant, and events that occurred
+    /// before it, are removed.
+    pub horizon: String,
+    pub runs: u64,
+    pub nodes: u64,
+    pub events: u64,
+}
+
+/// The horizon a policy sets for the metrics store, computed ONCE so a dry
+/// run and the prune it previews ask about the same instant.
+pub fn metrics_horizon(policy: &Policy) -> Option<(u64, chrono::DateTime<chrono::Utc>)> {
+    policy.metrics_days.map(|d| (d, duckle_duckdb_engine::metrics_backfill::horizon(d)))
+}
+
+/// What a prune of the metrics store would remove.
+pub fn plan_metrics(
+    workspace: &Path,
+    duckdb: &Path,
+    (days, horizon): (u64, chrono::DateTime<chrono::Utc>),
+) -> Result<MetricsPrune, String> {
+    let store = duckle_duckdb_engine::metrics_store::MetricsStore::open(workspace, duckdb).map_err(|e| e.to_string())?;
+    let c = store.count_before(horizon).map_err(|e| e.to_string())?;
+    Ok(MetricsPrune { days, horizon: horizon.to_rfc3339(), runs: c.runs, nodes: c.nodes, events: c.events })
+}
+
+/// Remove what [`plan_metrics`] counted, for the same horizon, and say what was removed.
+pub fn apply_metrics(
+    workspace: &Path,
+    duckdb: &Path,
+    (days, horizon): (u64, chrono::DateTime<chrono::Utc>),
+) -> Result<MetricsPrune, String> {
+    let store = duckle_duckdb_engine::metrics_store::MetricsStore::open(workspace, duckdb).map_err(|e| e.to_string())?;
+    let c = store.delete_before(horizon).map_err(|e| e.to_string())?;
+    if c.runs + c.events > 0 {
+        duckle_duckdb_engine::audit::note(
+            workspace,
+            "retention.prune",
+            "workspace",
+            Some(format!("removed {} run metric(s), {} node(s), {} event(s)", c.runs, c.nodes, c.events)),
+        );
+    }
+    Ok(MetricsPrune { days, horizon: horizon.to_rfc3339(), runs: c.runs, nodes: c.nodes, events: c.events })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -724,6 +780,7 @@ mod reference_aware {
                     rows: Some(5),
                 }],
                 nodes: Vec::new(),
+                ..Default::default()
             },
         )
         .unwrap();

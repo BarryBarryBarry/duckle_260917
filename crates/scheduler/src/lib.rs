@@ -172,7 +172,7 @@ fn run_one_blocking(
     workspace: &Path,
     pipeline_id: &str,
     values: &std::collections::BTreeMap<String, String>,
-) -> Result<RunResult, String> {
+) -> Result<(RunResult, String), String> {
     // Normalised because a plan step may name a pipeline the console's way, as a
     // workspace-relative file. `resolve_workspace` takes a bare id and builds the path
     // itself, so an un-normalised step asked it for `pipelines/pipelines/orders.json.json`.
@@ -216,6 +216,9 @@ fn run_one_blocking(
 /// addressable the same way as a `duckle-runner` run. Before this, neither
 /// recorded a run id at all - `execute_one` hard-codes `None` - so "which run
 /// was that?" had no answer for anything the scheduler started.
+///
+/// Answers with the run id too, so the run history names the same run the
+/// receipt and the log do.
 fn run_recorded(
     engine: &DuckdbEngine,
     workspace: &Path,
@@ -223,7 +226,7 @@ fn run_recorded(
     pipeline_id: &str,
     trigger: &str,
     pipeline_path: &str,
-) -> RunResult {
+) -> (RunResult, String) {
     let hash = duckle_duckdb_engine::retry::pipeline_hash(pipeline);
     let run_id = duckle_duckdb_engine::retry::new_run_id(pipeline_id, trigger);
     let receipt = duckle_duckdb_engine::retry::begin(
@@ -240,13 +243,14 @@ fn run_recorded(
         .for_new_run()
         .with_run_id(&receipt.run_id)
         .execute_pipeline_named(pipeline, pipeline_id);
+    let run_id = receipt.run_id.clone();
     duckle_duckdb_engine::retry::finish(
         workspace,
         receipt,
         &result.status,
         duckle_duckdb_engine::retry::nodes_of(&result),
     );
-    result
+    (result, run_id)
 }
 
 /// A run that never started, as a result.
@@ -525,7 +529,7 @@ impl Scheduler {
         if sched.plan_id.is_some() {
             let started = Utc::now();
             let result = self.run_plan(&workspace, &sched).await?;
-            self.record_run(id, started, &result);
+            self.record_run(id, started, &result, None);
             return Ok(result);
         }
         let pipeline_id = sched.pipeline_id.clone();
@@ -593,6 +597,9 @@ impl Scheduler {
             &hash,
             None,
         );
+        // #259: the same id in the log and the run history as in the receipt.
+        let run_id = receipt.run_id.clone();
+        let engine = engine.with_run_id(&run_id);
         let result =
             tokio::task::spawn_blocking(move || engine.execute_pipeline_named(&pipeline, &log_name))
                 .await
@@ -603,7 +610,7 @@ impl Scheduler {
             &result.status,
             duckle_duckdb_engine::retry::nodes_of(&result),
         );
-        self.record_run(id, started, &result);
+        self.record_run(id, started, &result, Some(&run_id));
         Ok(result)
     }
 
@@ -719,7 +726,7 @@ impl Scheduler {
                 };
                 let result = run_one_blocking(&engine, &ws, pipeline, values);
                 let answer = match &result {
-                    Ok(r) if r.status == "error" => {
+                    Ok((r, _)) if r.status == "error" => {
                         Err(r.error.clone().unwrap_or_else(|| "the run failed".into()))
                     }
                     Ok(_) => Ok(()),
@@ -728,16 +735,15 @@ impl Scheduler {
                 // Every pipeline gets its own history entry and its own alert, exactly as
                 // it would under a schedule of its own. Whoever watches a pipeline does not
                 // have to know it was a plan that ran it.
-                let record = match result {
-                    Ok(r) => r,
-                    Err(e) => failed_run(started, &e),
+                // A step that failed before it began has no run, so no run id.
+                let (record, run_id) = match result {
+                    Ok((r, run_id)) => (r, Some(run_id)),
+                    Err(e) => (failed_run(started, &e), None),
                 };
                 duckle_duckdb_engine::alerts::notify(&ws, pipeline, &record);
-                duckle_duckdb_engine::record_run(
-                    &ws,
-                    pipeline,
-                    RunRecord::from_result_in(&ws, pipeline, &record, &trigger),
-                );
+                let mut entry = RunRecord::from_result_in(&ws, pipeline, &record, &trigger);
+                entry.run_id = run_id;
+                duckle_duckdb_engine::record_run(&ws, pipeline, entry);
                 answer
             })
         })
@@ -783,10 +789,11 @@ impl Scheduler {
             artifacts: Vec::new(),
             artifacts_truncated: false,
         };
-        self.record_run(id, started, &result);
+        // It never started, so there is no run id to name.
+        self.record_run(id, started, &result, None);
     }
 
-    fn record_run(&self, id: &str, started: DateTime<Utc>, result: &RunResult) {
+    fn record_run(&self, id: &str, started: DateTime<Utc>, result: &RunResult, run_id: Option<&str>) {
         let mut g = self.inner.lock().expect("scheduler poisoned");
         // A plan schedule has no run history of its own: `run_plan` already wrote one entry
         // per pipeline it actually ran, and adding another under the schedule's label would
@@ -827,7 +834,8 @@ impl Scheduler {
         // cannot cost a run its history entry, and it never raises: see
         // duckle_duckdb_engine::alerts::notify.
         if let (Some(path), Some(pid)) = (workspace, pipeline_id) {
-            let record = RunRecord::from_result_in(&path, &pid, result, "scheduled");
+            let mut record = RunRecord::from_result_in(&path, &pid, result, "scheduled");
+            record.run_id = run_id.map(str::to_string);
             duckle_duckdb_engine::record_run(&path, &pid, record);
             duckle_duckdb_engine::alerts::notify(&path, &pid, result);
         }
@@ -2122,6 +2130,41 @@ mod tests {
             !ws.join("runs").join("pipelines").exists(),
             "the raw step was used as the history key, so these runs are invisible"
         );
+        // Plan 003: the history names the run its receipt and log do.
+        let history = duckle_duckdb_engine::load_run_history(&ws, "orders");
+        let run_id = history[0].run_id.clone().expect("a plan step's record carries its run id");
+        assert!(duckle_duckdb_engine::retry::path_for_test(&ws, &run_id).exists(), "no receipt for {run_id}");
+    }
+
+    /// Plan 003: a scheduled run's history record carries the id its receipt
+    /// was written under, and one that failed before it began carries none.
+    #[test]
+    fn a_scheduled_runs_record_names_its_receipt_and_a_run_that_never_began_names_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(ws.join("pipelines").join("orders.json"), r#"{"name":"orders","nodes":[],"edges":[]}"#).unwrap();
+        let sched = Scheduler::new(DuckdbEngine::new(PathBuf::from("duckdb")));
+        sched.set_workspace(Some(ws.clone()));
+        let add = |pipeline: &str| {
+            let mut s = plan_schedule("unused");
+            s.plan_id = None;
+            s.id = String::new();
+            s.pipeline_id = pipeline.into();
+            sched.upsert(s).expect("schedule accepted").id
+        };
+        let (real, gone) = (add("orders"), add("renamed"));
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            sched.fire_and_record(&real, "Test").await;
+            sched.fire_and_record(&gone, "Test").await;
+        });
+        let ran = duckle_duckdb_engine::load_run_history(&ws, "orders");
+        let run_id = ran[0].run_id.clone().expect("the scheduled run's record carries its id");
+        assert!(duckle_duckdb_engine::retry::path_for_test(&ws, &run_id).exists(), "no receipt for {run_id}");
+        let never = duckle_duckdb_engine::load_run_history(&ws, "renamed");
+        assert_eq!(never.len(), 1, "the failure is still recorded");
+        assert_eq!(never[0].run_id, None, "a run that never began has no id to name");
     }
 
     /// Every file under a directory, for an assertion that needs to say what it found.
