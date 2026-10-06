@@ -31,6 +31,7 @@ import {
     formatRows,
     kindLabelKey,
     localInputToUtc,
+    sinkRowLines,
     pageItems,
     toLocalInput,
     totalPages,
@@ -1438,6 +1439,18 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         firstLine('\nBinder Error: x\nLINE 1: ...') === 'Binder Error: x' && firstLine(null) === '' && firstLine('y'.repeat(200)).length === 160,
         firstLine('\nBinder Error: x\nLINE 1: ...'),
     );
+    const sinks = sinkRowLines([
+        { nodeId: 's1', kind: 'source', rows: 16434 },
+        { nodeId: 'k1', kind: 'sink', rows: 16434 },
+        { nodeId: 'k2', kind: 'sink', rows: 6166 },
+        { nodeId: 'k3', kind: 'sink', rows: 0 },
+        { nodeId: 'k4', kind: 'sink', rows: null },
+    ]);
+    check(
+        '003: a run total breaks down into what each sink wrote',
+        JSON.stringify(sinks) === JSON.stringify(['k1: 16,434', 'k2: 6,166', 'k3: 0', 'k4: —']) && sinkRowLines(undefined).length === 0,
+        JSON.stringify(sinks),
+    );
     const pages = (c: number, n: number) => JSON.stringify(pageItems(c, n));
     check('003: few pages are all shown', pages(1, 1) === '[1]' && pages(4, 7) === '[1,2,3,4,5,6,7]', pages(4, 7));
     check('003: page 1 of 8', pages(1, 8) === '[1,2,3,4,"gap",8]', pages(1, 8));
@@ -1447,8 +1460,8 @@ function context(name: string, vars: Record<string, string>): RepoItem {
 
     const q = buildRunsQuery({ from: '', to: '2026-10-05T00:30', pipelines: ['a', 'b'], statuses: ['ok', 'pending'] }, 2, 50);
     check(
-        '003: the query carries only what was chosen, nodes left to the popover',
-        JSON.stringify(q) === JSON.stringify({ page: 2, pageSize: 50, includeNodes: false, to: utc, pipeline: ['a', 'b'], status: ['ok', 'pending'] }),
+        '003: the query carries only what was chosen, with nodes for the per-sink breakdown',
+        JSON.stringify(q) === JSON.stringify({ page: 2, pageSize: 50, includeNodes: true, to: utc, pipeline: ['a', 'b'], status: ['ok', 'pending'] }),
         JSON.stringify(q),
     );
 

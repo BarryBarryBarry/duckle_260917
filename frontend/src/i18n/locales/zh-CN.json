@@ -276,7 +276,9 @@
       "status": "Pipeline 状态",
       "executedTime": "执行时间",
       "cost": "耗时",
-      "rows": "成功写入行数"
+      "rows": "受影响行数（所有目标表合计）",
+      "rowsHint": "本次运行所有写入节点（sink）的受影响行数之和。鼠标悬停数字可查看各节点明细，或点开该运行。",
+      "rowsBySink": "各写入节点的受影响行数："
     },
     "nodes": {
       "title": "{{name}} 的节点",
@@ -285,7 +287,8 @@
       "executeTime": "执行时间",
       "type": "节点类型",
       "neverRun": "该 pipeline 从未运行，没有节点记录。",
-      "none": "本次运行没有记录节点明细。"
+      "none": "本次运行没有记录节点明细。",
+      "rows": "行数"
     },
     "status": {
       "ok": "成功",

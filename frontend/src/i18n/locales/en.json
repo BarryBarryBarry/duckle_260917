@@ -307,7 +307,9 @@
       "status": "Pipeline status",
       "executedTime": "Executed time",
       "cost": "Cost",
-      "rows": "Rows written"
+      "rows": "Affected rows (all sinks)",
+      "rowsHint": "Rows affected by every sink of the run, added together. Hover a figure to see each sink, or open the run.",
+      "rowsBySink": "Rows affected, by sink:"
     },
     "nodes": {
       "title": "Stages of {{name}}",
@@ -316,7 +318,8 @@
       "executeTime": "Execute time",
       "type": "Node type",
       "neverRun": "This pipeline has never run, so it has no stages to show.",
-      "none": "No stage detail was recorded for this run."
+      "none": "No stage detail was recorded for this run.",
+      "rows": "Rows"
     },
     "status": {
       "ok": "Succeeded",

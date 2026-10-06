@@ -38,6 +38,7 @@ import {
     formatLocalTime,
     formatRows,
     kindLabelKey,
+    sinkRowLines,
     toLocalInput,
     type RunFilters,
 } from './run-metrics-format';
@@ -164,7 +165,7 @@ function NodePanel({ run, state, onClose }: { run: MetricsRun; state: NodeState;
                             <th>{t('metrics.nodes.executeTime')}</th>
                             <th className="run-num">{t('metrics.columns.cost')}</th>
                             <th>{t('metrics.nodes.type')}</th>
-                            <th className="run-num">{t('metrics.columns.rows')}</th>
+                            <th className="run-num">{t('metrics.nodes.rows')}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -296,6 +297,12 @@ function Filters({
     );
 }
 
+/** The hover text of a run's row total: what it adds up, sink by sink. */
+function rowsTitle(run: MetricsRun, t: (key: string) => string): string {
+    const lines = sinkRowLines(run.nodes);
+    return lines.length ? [t('metrics.columns.rowsBySink'), ...lines].join('\n') : t('metrics.columns.rowsHint');
+}
+
 function RunRow({ run, open, onToggle }: { run: MetricsRun; open: boolean; onToggle: () => void }) {
     const { t } = useTranslation();
     return (
@@ -323,7 +330,9 @@ function RunRow({ run, open, onToggle }: { run: MetricsRun; open: boolean; onTog
             </td>
             <td>{formatLocalTime(run.startedAt)}</td>
             <td className="run-num">{formatCost(run.durationMs)}</td>
-            <td className="run-num">{formatRows(run.rows)}</td>
+            <td className="run-num" title={rowsTitle(run, t)}>
+                {formatRows(run.rows)}
+            </td>
         </tr>
     );
 }
@@ -351,7 +360,9 @@ function RunsTable({
                         <th>{t('metrics.columns.status')}</th>
                         <th>{t('metrics.columns.executedTime')}</th>
                         <th className="run-num">{t('metrics.columns.cost')}</th>
-                        <th className="run-num">{t('metrics.columns.rows')}</th>
+                        <th className="run-num" title={t('metrics.columns.rowsHint')}>
+                            {t('metrics.columns.rows')}
+                        </th>
                     </tr>
                 </thead>
                 <tbody>

@@ -107,9 +107,10 @@ export type RunFilters = {
 };
 
 /** The query the page asks for one page of runs. Empty filters are left out,
- *  so they mean "any". Nodes are fetched per run, when one is opened. */
+ *  so they mean "any". Nodes come too: a run's rows are the sum of its
+ *  sinks, and the table says which sink wrote what. */
 export function buildRunsQuery(f: RunFilters, page: number, pageSize: number): MetricsRunQuery {
-    const q: MetricsRunQuery = { page, pageSize, includeNodes: false };
+    const q: MetricsRunQuery = { page, pageSize, includeNodes: true };
     const from = localInputToUtc(f.from);
     const to = localInputToUtc(f.to);
     if (from) q.from = from;
@@ -117,6 +118,12 @@ export function buildRunsQuery(f: RunFilters, page: number, pageSize: number): M
     if (f.pipelines.length) q.pipeline = [...f.pipelines];
     if (f.statuses.length) q.status = [...f.statuses];
     return q;
+}
+
+/** What each sink of a run wrote, in stage order, as `node: rows` lines - the
+ *  parts a run's row total adds up. Empty when the run has no sink detail. */
+export function sinkRowLines(nodes: ReadonlyArray<{ nodeId: string; kind: string | null; rows: number | null }> | undefined): string[] {
+    return (nodes ?? []).filter((n) => n.kind === 'sink').map((n) => `${n.nodeId}: ${formatRows(n.rows)}`);
 }
 
 /** Run statuses a filter can pick, `pending` being "never run". */
