@@ -91,10 +91,10 @@ export default function LeftSidebar({
                         type="button"
                         className="left-sidebar-tab left-sidebar-action"
                         title={t('metrics.open')}
-                        aria-label={t('metrics.title')}
                         onClick={onOpenRunMetrics}
                     >
                         <Activity className="left-sidebar-tab-icon" size={13} aria-hidden="true" />
+                        {t('metrics.title')}
                     </button>
                 ) : null}
             </div>

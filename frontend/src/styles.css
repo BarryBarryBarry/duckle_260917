@@ -10720,7 +10720,9 @@ select.modal-select:focus {
 
 /* Plan 003: run metrics page (RunMetricsModal.tsx). */
 .left-sidebar-action {
-    flex: 0 0 32px;
+    flex: 0 0 auto;
+    padding: 0 8px;
+    white-space: nowrap;
 }
 .run-metrics-modal {
     background: var(--bg-1);
