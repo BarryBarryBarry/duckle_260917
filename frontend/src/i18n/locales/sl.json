@@ -196,6 +196,7 @@
     "quality": "Kakovost",
     "custom": "Po meri",
     "needsConfig": "Zahtevana polja manjkajo - za konfiguracijo odprite zavihek Osnovno",
+    "sequence": "Step {{n}} in run order",
     "disabled": "onemogočen",
     "running": "tek",
     "failed": "Ni uspelo",

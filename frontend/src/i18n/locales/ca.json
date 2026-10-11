@@ -196,6 +196,7 @@
     "quality": "Qualitat",
     "custom": "Personalitzat",
     "needsConfig": "Falten camps obligatoris: obriu la pestanya Bàsic per configurar-lo",
+    "sequence": "Step {{n}} in run order",
     "disabled": "discapacitat",
     "running": "Córrer",
     "failed": "Ha fallat",

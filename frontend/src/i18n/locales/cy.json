@@ -196,6 +196,7 @@
     "quality": "Ansawdd",
     "custom": "Custom",
     "needsConfig": "Meysydd gofynnol ar goll - agorwch y tab Sylfaenol i'w ffurfweddu",
+    "sequence": "Step {{n}} in run order",
     "disabled": "anabl",
     "running": "Rhedeg",
     "failed": "Wedi methu",

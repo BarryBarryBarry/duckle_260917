@@ -196,6 +196,7 @@
     "quality": "Calidad",
     "custom": "Personalizado",
     "needsConfig": "Faltan campos obligatorios: abra la pestaña Básico para configurar",
+    "sequence": "Step {{n}} in run order",
     "disabled": "desactivado",
     "running": "Marcha",
     "failed": "Error",

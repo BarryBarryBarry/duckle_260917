@@ -196,6 +196,7 @@
     "quality": "Qualidade",
     "custom": "Personalizado",
     "needsConfig": "Campos obrigatórios em falta - abra o separador Básico para configurar",
+    "sequence": "Step {{n}} in run order",
     "disabled": "inativo",
     "running": "Funcionamento",
     "failed": "Falha",

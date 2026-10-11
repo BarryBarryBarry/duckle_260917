@@ -196,6 +196,7 @@
     "quality": "Kvalita",
     "custom": "Vlastné",
     "needsConfig": "Chýbajú povinné polia – na konfiguráciu otvorte kartu Základné",
+    "sequence": "Step {{n}} in run order",
     "disabled": "zdravotne postihnutých",
     "running": "Beh",
     "failed": "Nepodarilo sa",

@@ -208,6 +208,7 @@
     "quality": "Kvalitet",
     "custom": "Beställnings",
     "needsConfig": "Obligatoriska fält saknas - öppna fliken Grundläggande för att konfigurera",
+    "sequence": "Step {{n}} in run order",
     "disabled": "funktionshindrade",
     "running": "Spring",
     "failed": "Misslyckades",

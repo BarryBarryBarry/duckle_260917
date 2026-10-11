@@ -208,6 +208,7 @@
     "quality": "якість",
     "custom": "Custom",
     "needsConfig": "Відсутні обов’язкові поля – відкрийте вкладку Основне для налаштування",
+    "sequence": "Step {{n}} in run order",
     "disabled": "вимкнено",
     "running": "Біг",
     "failed": "Не вдалося",

@@ -23,6 +23,7 @@ import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
 import { deriveNodeSubtitle } from '../src/node-subtitle';
 import { resolveOutputSchema } from '../src/schema-resolve';
+import { layoutByDependency, NODE_WIDTH, nodeSequence, nodesOverlap } from '../src/canvas/layout';
 import {
     buildRunsQuery,
     firstLine,
@@ -1487,6 +1488,87 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     check('003: an unavailable store reaches the page as a failure with its reason', isMetricsFailure(failed) && failed.reason === 'no CLI', JSON.stringify(failed));
     check('003: no answer at all is a failure too, not an empty page', isMetricsFailure(silent), JSON.stringify(silent));
     check('003: the pipeline filter lists the workspace', listed.length === 1 && listed[0].pipelineName === 'Orders', JSON.stringify(listed));
+}
+
+// ---------------------------------------------------------------------------
+// Canvas layout. Agent-written pipelines opened with cards piled on each other:
+// positions on a 240px grid while long labels made cards up to 1930px wide.
+// Cards now have a fixed width; auto-layout must leave no two overlapping, keep
+// every edge pointing right, and the run-order numbers on the icons must put
+// each node after everything that feeds it.
+// ---------------------------------------------------------------------------
+{
+    const sized = (id: string, height: number, x: number, y: number) =>
+        ({ ...node(id, 'code.sql', {}), position: { x, y }, measured: { width: 1930, height } }) as Node<DuckleNodeData>;
+    // The shape of 0929_new_order_entry: one source fanned out into three chains.
+    const chainA = ['copy', 'primary', 'source_flag', 'ext_parse', 'ext_info', 'migrated', 'project', 'sink_entry'];
+    const chainB = ['filter_in', 'line_amount', 'sum', 'backfill', 'sink_backfill'];
+    const chainC = ['filter_out', 'distinct', 'delete_flag', 'sink_cleanup'];
+    const ids = ['src', 'tee', ...chainA, ...chainB, ...chainC];
+    const nodes = ids.map((id, i) => sized(id, 100 + (i % 4) * 30, (i % 9) * 240, Math.floor(i / 9) * 120));
+    const edges: Edge[] = [];
+    const link = (s: string, t: string) => edges.push({ id: `${s}-${t}`, source: s, target: t });
+    link('src', 'tee');
+    for (const chain of [chainA, chainB, chainC]) {
+        link('tee', chain[0]);
+        chain.slice(1).forEach((t, i) => link(chain[i], t));
+    }
+    const boxes = (ns: Node<DuckleNodeData>[]) =>
+        ns.map(n => ({ id: n.id, x: n.position.x, y: n.position.y, width: NODE_WIDTH, height: n.measured!.height! }));
+
+    check('layout: the agent-written grid is seen as overlapping', nodesOverlap(boxes(nodes)), 'no overlap found');
+    const touching = [0, 240, 480].map((x, i) => ({ id: String(i), x, y: 0, width: NODE_WIDTH, height: 100 }));
+    check(
+        'layout: cards edge to edge are cramped, though they do not overlap',
+        !nodesOverlap(touching) && nodesOverlap(touching, 16),
+        JSON.stringify(touching),
+    );
+    const laid = layoutByDependency(nodes, edges);
+    const at = new Map(laid.map(n => [n.id, n.position]));
+    check('layout: every card keeps at least 40px of space after auto-layout', !nodesOverlap(boxes(laid), 40), JSON.stringify(boxes(laid)));
+    const backwards = edges.filter(e => at.get(e.target)!.x < at.get(e.source)!.x + NODE_WIDTH);
+    check('layout: every edge points right, past the card it leaves', backwards.length === 0, JSON.stringify(backwards));
+    check(
+        'layout: the arrangement starts at the canvas origin on whole pixels',
+        Math.min(...laid.map(n => n.position.x)) === 80 &&
+            Math.min(...laid.map(n => n.position.y)) === 80 &&
+            laid.every(n => Number.isInteger(n.position.x) && Number.isInteger(n.position.y)),
+        JSON.stringify(laid.map(n => n.position)),
+    );
+    check('layout: nodes keep their data', laid.every((n, i) => n.data === nodes[i].data && n.id === nodes[i].id), 'data replaced');
+    check('layout: an empty canvas stays empty', layoutByDependency([], []).length === 0, 'nodes invented');
+    const loop = layoutByDependency([sized('a', 100, 0, 0), sized('b', 100, 0, 0)], [
+        { id: 'ab', source: 'a', target: 'b' },
+        { id: 'ba', source: 'b', target: 'a' },
+    ]);
+    check('layout: a cycle is laid out without overlap', !nodesOverlap(boxes(loop)), JSON.stringify(loop.map(n => n.position)));
+
+    const seq = nodeSequence(laid, edges);
+    const numbers = [...seq.values()].sort((a, b) => a - b);
+    check('sequence: every node gets one number from 1 to n', numbers.join() === ids.map((_, i) => i + 1).join(), numbers.join());
+    const early = edges.filter(e => seq.get(e.source)! >= seq.get(e.target)!);
+    check('sequence: a node is numbered after everything that feeds it', early.length === 0, JSON.stringify(early));
+    check('sequence: the source is 1 and the fan-out 2', seq.get('src') === 1 && seq.get('tee') === 2, JSON.stringify([...seq]));
+    const column = [
+        { ...sized('low', 100, 0, 300) },
+        { ...sized('high', 100, 0, 10) },
+        { ...sized('mid', 100, 0, 150) },
+    ];
+    const byHeight = nodeSequence(column, []);
+    check(
+        'sequence: nodes in one column are numbered top to bottom',
+        byHeight.get('high') === 1 && byHeight.get('mid') === 2 && byHeight.get('low') === 3,
+        JSON.stringify([...byHeight]),
+    );
+    const cyc = nodeSequence(
+        [sized('root', 100, 0, 0), sized('x', 100, 0, 0), sized('y', 100, 0, 0)],
+        [
+            { id: 'rx', source: 'root', target: 'x' },
+            { id: 'xy', source: 'x', target: 'y' },
+            { id: 'yx', source: 'y', target: 'x' },
+        ],
+    );
+    check('sequence: nodes in a cycle come after the rest', cyc.get('root') === 1 && cyc.get('x')! > 1 && cyc.get('y')! > 1, JSON.stringify([...cyc]));
 }
 
 if (failures.length) {

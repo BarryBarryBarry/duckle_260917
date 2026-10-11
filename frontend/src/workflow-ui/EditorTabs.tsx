@@ -46,6 +46,8 @@ type Props = {
     onEdgeDelete: (edgeId: string) => void;
     onEdgeEdit: (edgeId: string) => void;
     nodeAutodetectAvailable: (nodeId: string) => boolean;
+    /** Bumped after an auto-layout so the canvas fits the new arrangement. */
+    fitRequest?: number;
 };
 
 export default function EditorTabs({
@@ -70,6 +72,7 @@ export default function EditorTabs({
     onEdgeDelete,
     onEdgeEdit,
     nodeAutodetectAvailable,
+    fitRequest,
 }: Props) {
     const { t } = useTranslation();
     const [active, setActive] = useState<TabId>('canvas');
@@ -122,6 +125,7 @@ export default function EditorTabs({
                         onEdgeDelete={onEdgeDelete}
                         onEdgeEdit={onEdgeEdit}
                         nodeAutodetectAvailable={nodeAutodetectAvailable}
+                        fitRequest={fitRequest}
                     />
                 </div>
                 <div className={'tab-panel' + (active === 'plan' ? ' tab-panel-active' : '')}>

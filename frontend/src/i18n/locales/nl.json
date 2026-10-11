@@ -208,6 +208,7 @@
     "quality": "Kwaliteit",
     "custom": "Aangepast",
     "needsConfig": "Verplichte velden ontbreken - open het tabblad Basis om te configureren",
+    "sequence": "Step {{n}} in run order",
     "disabled": "gehandicapt",
     "running": "Rennen",
     "failed": "Mislukt",

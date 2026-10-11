@@ -196,6 +196,7 @@
     "quality": "Laatu",
     "custom": "Mukautettu",
     "needsConfig": "Pakolliset kentät puuttuvat – avaa Perus-välilehti määrittääksesi",
+    "sequence": "Step {{n}} in run order",
     "disabled": "pois käytöstä",
     "running": "Juoksemassa",
     "failed": "Epäonnistui",

@@ -240,6 +240,7 @@
     "quality": "Quality",
     "custom": "Custom",
     "needsConfig": "Required fields missing - open the Basic tab to configure",
+    "sequence": "Step {{n}} in run order",
     "disabled": "disabled",
     "running": "Running",
     "failed": "Failed",

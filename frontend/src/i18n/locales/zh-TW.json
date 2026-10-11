@@ -231,6 +231,7 @@
     "quality": "品質",
     "custom": "自訂",
     "needsConfig": "缺少必填欄位-開啟「基本」索引標籤進行設定",
+    "sequence": "執行順序第 {{n}} 步",
     "disabled": "禁用",
     "running": "運行中",
     "failed": "失敗",

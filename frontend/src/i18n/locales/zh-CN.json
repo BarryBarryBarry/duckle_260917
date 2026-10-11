@@ -233,6 +233,7 @@
     "quality": "质量",
     "custom": "自定义",
     "needsConfig": "缺失必填字段 - 打开基础标签页进行配置",
+    "sequence": "执行顺序第 {{n}} 步",
     "disabled": "已禁用",
     "running": "运行中",
     "failed": "失败",

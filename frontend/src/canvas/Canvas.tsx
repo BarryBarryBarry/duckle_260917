@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ReactFlow,
     ReactFlowProvider,
     Background,
     Controls,
     MiniMap,
+    useNodesInitialized,
     useReactFlow,
     type Connection,
     type Edge,
@@ -44,8 +45,12 @@ import type { ComponentDef } from '../workflow-ui/palette-data';
 import { useContextMenu, type MenuItem } from '../workflow-ui/ContextMenu';
 import { getManifest } from '../workflow-ui/fields/component-manifests';
 import { useTheme } from '../theme';
+import { NODE_WIDTH, nodeSequence, nodesOverlap } from './layout';
+import { NodeSequenceContext } from './node-sequence-context';
 
 const ICON_SIZE = 14;
+// Cards closer than this read as piled up, and opening the pipeline lays it out.
+const CRAMPED_GAP = 16;
 
 const nodeTypes = {
     source: DuckleNode,
@@ -103,6 +108,8 @@ type Props = {
     nodeAutodetectAvailable: (nodeId: string) => boolean;
     /** Active pipeline id - used to remember pan/zoom per pipeline. */
     pipelineId?: string | null;
+    /** Bumped after an auto-layout so the canvas fits the new arrangement. */
+    fitRequest?: number;
 };
 
 function CanvasInner({
@@ -121,8 +128,9 @@ function CanvasInner({
     onEdgeEdit,
     nodeAutodetectAvailable,
     pipelineId,
+    fitRequest,
 }: Props) {
-    const { screenToFlowPosition, setViewport, fitView } = useReactFlow();
+    const { screenToFlowPosition, setViewport, fitView, getInternalNode, getViewport } = useReactFlow();
     const { theme } = useTheme();
 
     // Remember pan/zoom per pipeline (per user = localStorage on this machine),
@@ -130,53 +138,109 @@ function CanvasInner({
     // a default fit. Restore-in-progress is tracked so the programmatic
     // setViewport doesn't immediately overwrite the saved value via onMoveEnd.
     const viewportRestoredFor = useRef<string | null>(null);
-    const viewportKey = (id: string) => `duckle.viewport.${id}`;
-    useEffect(() => {
-        const id = pipelineId;
-        if (!id) return;
-        viewportRestoredFor.current = null;
-        // rAF so React Flow has the new pipeline's nodes before we fit/restore.
-        const raf = requestAnimationFrame(() => {
-            const saved = localStorage.getItem(viewportKey(id));
-            if (saved) {
-                try {
-                    const vp = JSON.parse(saved);
-                    if (
-                        typeof vp?.x === 'number' &&
-                        typeof vp?.y === 'number' &&
-                        typeof vp?.zoom === 'number'
-                    ) {
-                        setViewport(vp);
-                    } else {
-                        fitView();
-                    }
-                } catch {
-                    fitView();
+    // v2: cards became fixed-width and pipelines were re-laid out, so a pan/zoom
+    // saved against the old arrangement would open on empty canvas.
+    const viewportKey = (id: string) => `duckle.viewport.v2.${id}`;
+    const restoreViewport = useCallback(
+        (id: string) => {
+            try {
+                const vp = JSON.parse(localStorage.getItem(viewportKey(id)) ?? 'null');
+                if (typeof vp?.x === 'number' && typeof vp?.y === 'number' && typeof vp?.zoom === 'number') {
+                    setViewport(vp);
+                    return;
                 }
-            } else {
-                fitView();
+            } catch {
+                /* unreadable entry - fall through to a fit */
             }
-            viewportRestoredFor.current = id;
-        });
-        return () => cancelAnimationFrame(raf);
-    }, [pipelineId, setViewport, fitView]);
+            void fitView();
+        },
+        [setViewport, fitView],
+    );
+
+    const saveViewport = useCallback((id: string, vp: { x: number; y: number; zoom: number }) => {
+        try {
+            localStorage.setItem(viewportKey(id), JSON.stringify({ x: vp.x, y: vp.y, zoom: vp.zoom }));
+        } catch {
+            /* localStorage full / unavailable - non-fatal */
+        }
+    }, []);
 
     const handleMoveEnd = useCallback(
         (_: unknown, vp: { x: number; y: number; zoom: number }) => {
             const id = pipelineId;
             // Skip saves triggered by the restore itself (before it completes).
             if (!id || viewportRestoredFor.current !== id) return;
-            try {
-                localStorage.setItem(
-                    viewportKey(id),
-                    JSON.stringify({ x: vp.x, y: vp.y, zoom: vp.zoom }),
-                );
-            } catch {
-                /* localStorage full / unavailable - non-fatal */
-            }
+            saveViewport(id, vp);
         },
-        [pipelineId],
+        [pipelineId, saveViewport],
     );
+
+    const fitAndRemember = useCallback(() => {
+        const id = pipelineId;
+        void fitView({ padding: 0.12, duration: 200 }).then(() => {
+            if (id) saveViewport(id, getViewport());
+        });
+    }, [pipelineId, fitView, getViewport, saveViewport]);
+
+    // After an auto-layout, show the whole new arrangement.
+    const lastFitRequest = useRef(fitRequest ?? 0);
+    useEffect(() => {
+        if (fitRequest === undefined || fitRequest === lastFitRequest.current) return;
+        lastFitRequest.current = fitRequest;
+        const raf = requestAnimationFrame(fitAndRemember);
+        return () => cancelAnimationFrame(raf);
+    }, [fitRequest, fitAndRemember]);
+
+    // Opening a pipeline: once React Flow has measured its cards, lay it out if
+    // any cards overlap or touch (an agent-written pipeline, or one saved before
+    // cards had a fixed width) and fit it; otherwise restore the saved pan/zoom,
+    // or fit when there is none. The layout is an ordinary edit, so Undo
+    // restores the original arrangement.
+    const nodesInitialized = useNodesInitialized();
+    const onPaneActionRef = useRef(onPaneAction);
+    onPaneActionRef.current = onPaneAction;
+    const nodesRef = useRef(nodes);
+    nodesRef.current = nodes;
+    const hasNodes = nodes.length > 0;
+    useEffect(() => {
+        const id = pipelineId;
+        if (!id || viewportRestoredFor.current === id) return;
+        if (hasNodes && !nodesInitialized) return;
+        // Two frames, so cards whose saved size predates the fixed width are re-measured.
+        let raf2 = 0;
+        const raf1 = requestAnimationFrame(() => {
+            raf2 = requestAnimationFrame(() => {
+                const boxes = nodesRef.current.flatMap(n => {
+                    const internal = getInternalNode(n.id);
+                    if (!internal) return [];
+                    const { x, y } = internal.internals.positionAbsolute;
+                    return [{ id: n.id, x, y, width: NODE_WIDTH, height: internal.measured.height ?? 0 }];
+                });
+                if (nodesOverlap(boxes, CRAMPED_GAP)) onPaneActionRef.current('auto-layout');
+                else restoreViewport(id);
+                viewportRestoredFor.current = id;
+            });
+        });
+        return () => {
+            cancelAnimationFrame(raf1);
+            cancelAnimationFrame(raf2);
+        };
+    }, [pipelineId, hasNodes, nodesInitialized, getInternalNode, restoreViewport]);
+
+    const sequence = useMemo(() => nodeSequence(nodes, edges), [nodes, edges]);
+
+    // Ctrl/Cmd+0, as the canvas menu advertises: fit the whole pipeline.
+    useEffect(() => {
+        const onKey = (e: KeyboardEvent) => {
+            if (!(e.ctrlKey || e.metaKey) || e.key !== '0') return;
+            const el = e.target as HTMLElement | null;
+            if (el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))) return;
+            e.preventDefault();
+            fitAndRemember();
+        };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [fitAndRemember]);
     const menu = useContextMenu();
     const mouseRef = useRef({ x: 0, y: 0 });
     // The minimap eats a corner of the canvas, which on a dense graph is the
@@ -513,7 +577,7 @@ function CanvasInner({
                     label: 'Fit to view',
                     icon: <Maximize2 size={ICON_SIZE} />,
                     shortcut: 'Ctrl+0',
-                    onClick: () => onPaneAction('fit-view'),
+                    onClick: fitAndRemember,
                 },
                 {
                     kind: 'item',
@@ -551,7 +615,7 @@ function CanvasInner({
             ];
             menu.open(e, items);
         },
-        [menu, onPaneAction],
+        [menu, onPaneAction, fitAndRemember],
     );
 
     return (
@@ -562,30 +626,34 @@ function CanvasInner({
             onDrop={handleDrop}
             onMouseMove={onMouseMove}
         >
-            <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={handleConnect}
-                onConnectStart={handleConnectStart}
-                onSelectionChange={onSelectionChange}
-                onNodeContextMenu={handleNodeContextMenu}
-                onEdgeContextMenu={handleEdgeContextMenu}
-                onEdgeDoubleClick={(_, edge) => onEdgeEdit(edge.id)}
-                onPaneContextMenu={handlePaneContextMenu}
-                nodeTypes={nodeTypes}
-                edgeTypes={edgeTypes}
-                defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
-                deleteKeyCode={DELETE_KEYS}
-                proOptions={PRO_OPTIONS}
-                onMoveEnd={handleMoveEnd}
-                colorMode={theme}
-            >
-                <Background gap={16} />
-                {showMinimap ? <MiniMap pannable zoomable /> : null}
-                <Controls />
-            </ReactFlow>
+            <NodeSequenceContext.Provider value={sequence}>
+                <ReactFlow
+                    nodes={nodes}
+                    edges={edges}
+                    onNodesChange={onNodesChange}
+                    onEdgesChange={onEdgesChange}
+                    onConnect={handleConnect}
+                    onConnectStart={handleConnectStart}
+                    onSelectionChange={onSelectionChange}
+                    onNodeContextMenu={handleNodeContextMenu}
+                    onEdgeContextMenu={handleEdgeContextMenu}
+                    onEdgeDoubleClick={(_, edge) => onEdgeEdit(edge.id)}
+                    onPaneContextMenu={handlePaneContextMenu}
+                    nodeTypes={nodeTypes}
+                    edgeTypes={edgeTypes}
+                    defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+                    deleteKeyCode={DELETE_KEYS}
+                    proOptions={PRO_OPTIONS}
+                    onMoveEnd={handleMoveEnd}
+                    // Lower than React Flow's 0.5 so a long pipeline fits on screen whole.
+                    minZoom={0.2}
+                    colorMode={theme}
+                >
+                    <Background gap={16} />
+                    {showMinimap ? <MiniMap pannable zoomable /> : null}
+                    <Controls />
+                </ReactFlow>
+            </NodeSequenceContext.Provider>
             {menu.element}
             {pickerPos ? (
                 <ConnectionTypePicker

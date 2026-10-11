@@ -208,6 +208,7 @@
     "quality": "Calitate",
     "custom": "Personalizat",
     "needsConfig": "Câmpuri obligatorii lipsesc - deschideți fila De bază pentru a configura",
+    "sequence": "Step {{n}} in run order",
     "disabled": "dezactivat",
     "running": "Funcţionare",
     "failed": "A eșuat",

@@ -196,6 +196,7 @@
     "quality": "Kokybė",
     "custom": "Pasirinktinis",
     "needsConfig": "Trūksta būtinų laukų – atidarykite pagrindinį skirtuką, kad sukonfigūruotumėte",
+    "sequence": "Step {{n}} in run order",
     "disabled": "neįgalus",
     "running": "Bėgimas",
     "failed": "Nepavyko",

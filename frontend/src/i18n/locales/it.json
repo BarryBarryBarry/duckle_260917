@@ -208,6 +208,7 @@
     "quality": "Qualità",
     "custom": "Costume",
     "needsConfig": "Campi obbligatori mancanti: apri la scheda Base per configurare",
+    "sequence": "Step {{n}} in run order",
     "disabled": "disabilitato",
     "running": "Corsa",
     "failed": "Fallito",

@@ -196,6 +196,7 @@
     "quality": "Cáilíocht",
     "custom": "Saincheaptha",
     "needsConfig": "Réimsí riachtanacha in easnamh - oscail an cluaisín Bunúsach chun é a chumrú",
+    "sequence": "Step {{n}} in run order",
     "disabled": "faoi ​​mhíchumas",
     "running": "Ag rith",
     "failed": "Theip",

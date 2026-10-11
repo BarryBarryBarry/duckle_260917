@@ -208,6 +208,7 @@
     "quality": "Minőség",
     "custom": "Szokás",
     "needsConfig": "Hiányoznak a kötelező mezők – nyissa meg az Alap lapot a konfiguráláshoz",
+    "sequence": "Step {{n}} in run order",
     "disabled": "letiltva",
     "running": "Futás",
     "failed": "Sikertelen",

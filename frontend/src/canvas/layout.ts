@@ -1,32 +1,31 @@
+import dagre from '@dagrejs/dagre';
 import type { Edge, Node } from '@xyflow/react';
 import type { DuckleNodeData } from '../pipeline-types';
 
-// Node cards are min-width 220px and grow with longer labels. Horizontal
-// placement accounts for each column's actual rendered width (issue #36: a long
-// source-file label widens the node, and a fixed center-to-center gap let it
-// crowd / overlap the next column). COL_GAP is the constant empty space left
-// between a column's right edge and the next column's left edge - for edges and
-// side connectors to breathe - so the gap stays consistent regardless of label
-// length. NODE_GAP_Y is the vertical gap between siblings sharing a level.
-const COL_GAP = 200; // horizontal breathing room between dependency levels
-const NODE_GAP_Y = 210; // vertical distance between nodes sharing a level
+/** Every node card renders at this width (see `.node` in styles.css). */
+export const NODE_WIDTH = 240;
+const RANK_GAP = 120; // horizontal space between dependency columns
+const NODE_GAP = 48; // vertical space between nodes in one column
 const ORIGIN_X = 80;
-const ORIGIN_Y = 140;
-const DEFAULT_NODE_W = 240; // fallback when a node hasn't been measured yet
+const ORIGIN_Y = 80;
+// Header plus one port row: used until React Flow has measured a node.
+const FALLBACK_NODE_H = 120;
 
-// Rendered width of a node, preferring the live measured width and falling
-// back to the persisted measured width, then a sensible default.
-function nodeWidth(n: Node<DuckleNodeData>): number {
-    const measured = (n.measured?.width ?? n.width) as number | undefined;
-    return measured && measured > 0 ? measured : DEFAULT_NODE_W;
+function nodeHeight(n: Node): number {
+    const h = (n.measured?.height ?? n.height) as number | undefined;
+    return h && h > 0 ? h : FALLBACK_NODE_H;
+}
+
+function linksBetween(nodes: Node[], edges: Edge[]): Edge[] {
+    const ids = new Set(nodes.map(n => n.id));
+    return edges.filter(e => ids.has(e.source) && ids.has(e.target) && e.source !== e.target);
 }
 
 /**
- * Arrange nodes left-to-right by dependency depth so the canvas reads in the
- * direction of the edges: roots on the left, every node one column to the right
- * of its deepest upstream, siblings stacked and vertically centered. Replaces
- * the old layout that ignored edges and flattened every node onto a single row
- * (issue #36).
+ * Arrange nodes left-to-right in dependency columns with dagre: every node to
+ * the right of what feeds it, columns spaced by the fixed card width, nodes in
+ * a column stacked by their real height and ordered to keep edges from
+ * crossing. Cycles and disconnected nodes are placed too.
  */
 export function layoutByDependency(
     nodes: Node<DuckleNodeData>[],
@@ -34,90 +33,81 @@ export function layoutByDependency(
 ): Node<DuckleNodeData>[] {
     if (nodes.length === 0) return nodes;
 
-    const ids = new Set(nodes.map(n => n.id));
-    const outgoing = new Map<string, string[]>();
-    const indegree = new Map<string, number>();
-    for (const n of nodes) {
-        outgoing.set(n.id, []);
-        indegree.set(n.id, 0);
-    }
-    for (const e of edges) {
-        // Skip self-loops and edges whose endpoints aren't both on the canvas.
-        if (!ids.has(e.source) || !ids.has(e.target) || e.source === e.target) continue;
-        outgoing.get(e.source)!.push(e.target);
-        indegree.set(e.target, (indegree.get(e.target) ?? 0) + 1);
-    }
+    const g = new dagre.graphlib.Graph({ multigraph: true });
+    g.setGraph({ rankdir: 'LR', ranksep: RANK_GAP, nodesep: NODE_GAP, marginx: 0, marginy: 0 });
+    g.setDefaultEdgeLabel(() => ({}));
+    for (const n of nodes) g.setNode(n.id, { width: NODE_WIDTH, height: nodeHeight(n) });
+    linksBetween(nodes, edges).forEach((e, i) => g.setEdge(e.source, e.target, {}, e.id ?? String(i)));
+    dagre.layout(g);
 
-    // Kahn's algorithm, assigning each node the longest path length from any
-    // root so a node always sits to the right of everything it depends on.
-    const rank = new Map<string, number>();
-    const remaining = new Map(indegree);
-    const queue: string[] = [];
+    let minX = Infinity;
+    let minY = Infinity;
     for (const n of nodes) {
-        if ((indegree.get(n.id) ?? 0) === 0) {
-            rank.set(n.id, 0);
-            queue.push(n.id);
+        const p = g.node(n.id);
+        minX = Math.min(minX, p.x - p.width / 2);
+        minY = Math.min(minY, p.y - p.height / 2);
+    }
+    return nodes.map(n => {
+        const p = g.node(n.id);
+        return {
+            ...n,
+            position: {
+                x: Math.round(p.x - p.width / 2 - minX + ORIGIN_X),
+                y: Math.round(p.y - p.height / 2 - minY + ORIGIN_Y),
+            },
+        };
+    });
+}
+
+export type NodeBox = { id: string; x: number; y: number; width: number; height: number };
+
+/** Whether any two node cards overlap, or sit closer than `minGap` pixels. */
+export function nodesOverlap(boxes: NodeBox[], minGap = 0): boolean {
+    const sorted = [...boxes].sort((a, b) => a.x - b.x);
+    for (let i = 0; i < sorted.length; i++) {
+        const a = sorted[i];
+        for (let j = i + 1; j < sorted.length; j++) {
+            const b = sorted[j];
+            if (b.x >= a.x + a.width + minGap) break;
+            if (b.y < a.y + a.height + minGap && a.y < b.y + b.height + minGap) return true;
         }
     }
+    return false;
+}
+
+/**
+ * A 1-based number per node in dependency order: columns by longest path from
+ * a source, then top to bottom (left to right on a tie) inside a column. Every
+ * node is numbered after everything that feeds it; nodes caught in a cycle
+ * come last.
+ */
+export function nodeSequence(nodes: Node[], edges: Edge[]): Map<string, number> {
+    const outgoing = new Map<string, string[]>(nodes.map(n => [n.id, []]));
+    const remaining = new Map<string, number>(nodes.map(n => [n.id, 0]));
+    for (const e of linksBetween(nodes, edges)) {
+        outgoing.get(e.source)!.push(e.target);
+        remaining.set(e.target, remaining.get(e.target)! + 1);
+    }
+    const rank = new Map<string, number>();
+    const queue = nodes.filter(n => remaining.get(n.id) === 0).map(n => n.id);
+    for (const id of queue) rank.set(id, 0);
     while (queue.length > 0) {
         const id = queue.shift()!;
-        const r = rank.get(id) ?? 0;
-        for (const t of outgoing.get(id) ?? []) {
-            rank.set(t, Math.max(rank.get(t) ?? 0, r + 1));
-            const left = (remaining.get(t) ?? 0) - 1;
+        for (const t of outgoing.get(id)!) {
+            rank.set(t, Math.max(rank.get(t) ?? 0, rank.get(id)! + 1));
+            const left = remaining.get(t)! - 1;
             remaining.set(t, left);
             if (left === 0) queue.push(t);
         }
     }
-    // A node left unranked is inside a cycle; park it one column past the
-    // longest acyclic chain so it stays visible and out of the flow.
-    let maxRank = 0;
-    for (const r of rank.values()) maxRank = Math.max(maxRank, r);
-    for (const n of nodes) {
-        if (!rank.has(n.id)) rank.set(n.id, maxRank + 1);
-    }
-
-    // Group node ids by rank, preserving their original order for stability.
-    const byRank = new Map<number, string[]>();
-    for (const n of nodes) {
-        const r = rank.get(n.id)!;
-        if (!byRank.has(r)) byRank.set(r, []);
-        byRank.get(r)!.push(n.id);
-    }
-    const indexInRank = new Map<string, number>();
-    for (const list of byRank.values()) {
-        list.forEach((id, i) => indexInRank.set(id, i));
-    }
-
-    // Each column's left x is the previous column's left x plus that column's
-    // widest node plus COL_GAP, so wide nodes push later columns right instead
-    // of overlapping them. Ranks are walked in ascending order; gaps in the
-    // rank sequence (possible after cycle-parking) are handled by iterating the
-    // sorted present ranks.
-    const byId = new Map(nodes.map(n => [n.id, n] as const));
-    const maxWidthByRank = new Map<number, number>();
-    for (const [r, list] of byRank) {
-        let w = DEFAULT_NODE_W;
-        for (const id of list) w = Math.max(w, nodeWidth(byId.get(id)!));
-        maxWidthByRank.set(r, w);
-    }
-    const rankX = new Map<number, number>();
-    let x = ORIGIN_X;
-    for (const r of [...byRank.keys()].sort((a, b) => a - b)) {
-        rankX.set(r, x);
-        x += maxWidthByRank.get(r)! + COL_GAP;
-    }
-
-    return nodes.map(n => {
-        const r = rank.get(n.id)!;
-        const i = indexInRank.get(n.id)!;
-        const count = byRank.get(r)!.length;
-        return {
-            ...n,
-            position: {
-                x: rankX.get(r)!,
-                y: ORIGIN_Y + (i - (count - 1) / 2) * NODE_GAP_Y,
-            },
-        };
-    });
+    const settled = (id: string) => remaining.get(id) === 0;
+    const cycleRank = Math.max(-1, ...nodes.filter(n => settled(n.id)).map(n => rank.get(n.id)!)) + 1;
+    const rankOf = (id: string) => (settled(id) ? rank.get(id)! : cycleRank);
+    const ordered = [...nodes].sort(
+        (a, b) =>
+            rankOf(a.id) - rankOf(b.id) ||
+            a.position.y - b.position.y ||
+            a.position.x - b.position.x,
+    );
+    return new Map(ordered.map((n, i) => [n.id, i + 1]));
 }

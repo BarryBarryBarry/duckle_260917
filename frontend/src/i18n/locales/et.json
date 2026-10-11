@@ -196,6 +196,7 @@
     "quality": "Kvaliteet",
     "custom": "Kohandatud",
     "needsConfig": "Kohustuslikud väljad puuduvad – konfigureerimiseks avage vahekaart Põhiline",
+    "sequence": "Step {{n}} in run order",
     "disabled": "puudega",
     "running": "Jooksmine",
     "failed": "Ebaõnnestunud",

@@ -208,6 +208,7 @@
     "quality": "Kualiti",
     "custom": "Adat",
     "needsConfig": "Medan yang diperlukan tiada - buka tab Asas untuk mengkonfigurasi",
+    "sequence": "Step {{n}} in run order",
     "disabled": "kurang upaya",
     "running": "Berlari",
     "failed": "gagal",

@@ -863,7 +863,11 @@ textarea:focus-visible {
 
 /* Nodes -------------------------------------------------------------------- */
 .node {
-    min-width: 220px;
+    /* Fixed card width: long labels and subtitles truncate (full text on
+       hover) instead of widening the card over its neighbours. Keep in step
+       with NODE_WIDTH in canvas/layout.ts. */
+    width: 240px;
+    box-sizing: border-box;
     background:
         linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 60%),
         var(--bg-2);
@@ -944,10 +948,40 @@ textarea:focus-visible {
     opacity: 0.92;
 }
 
+.node-icon-wrap {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+}
+
+/* Run-order number pinned to the node's icon. */
+.node-seq {
+    position: absolute;
+    top: -8px;
+    left: -9px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 3px;
+    box-sizing: border-box;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 15px;
+    text-align: center;
+    box-shadow: 0 0 0 1.5px var(--bg-2);
+    font-variant-numeric: tabular-nums;
+    pointer-events: auto;
+}
+
 .node-subtitle {
     margin-top: 2px;
     color: var(--text-3);
     font-size: 0.9231rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .node-source {
@@ -978,7 +1012,7 @@ textarea:focus-visible {
 /* Multi-port layout ------------------------------------------------------ */
 .node-ports {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     padding: 6px 0;
 }
 

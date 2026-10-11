@@ -196,6 +196,7 @@
     "quality": "Сапасы",
     "custom": "Арнаулы",
     "needsConfig": "Міндетті өрістер жоқ - конфигурациялау үшін Негізгі қойындысын ашыңыз",
+    "sequence": "Step {{n}} in run order",
     "disabled": "мүгедек",
     "running": "Жүгіру",
     "failed": "Сәтсіз",

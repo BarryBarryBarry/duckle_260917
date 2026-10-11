@@ -196,6 +196,7 @@
     "quality": "गुणस्तर",
     "custom": "अनुकूलन",
     "needsConfig": "आवश्यक क्षेत्रहरू छुटेका छन् - कन्फिगर गर्न आधारभूत ट्याब खोल्नुहोस्",
+    "sequence": "Step {{n}} in run order",
     "disabled": "असक्षम",
     "running": "दौडिरहेको",
     "failed": "असफल",

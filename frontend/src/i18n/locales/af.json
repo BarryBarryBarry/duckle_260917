@@ -196,6 +196,7 @@
     "quality": "Kwaliteit",
     "custom": "Pasgemaak",
     "needsConfig": "Vereiste velde ontbreek - maak die Basiese-oortjie oop om op te stel",
+    "sequence": "Step {{n}} in run order",
     "disabled": "gestremd",
     "running": "Hardloop",
     "failed": "Misluk",

@@ -196,6 +196,7 @@
     "quality": "គុណភាព",
     "custom": "ផ្ទាល់ខ្លួន",
     "needsConfig": "បាត់វាលដែលត្រូវការ - បើកផ្ទាំង Basic ដើម្បីកំណត់រចនាសម្ព័ន្ធ",
+    "sequence": "Step {{n}} in run order",
     "disabled": "ពិការ",
     "running": "កំពុងរត់",
     "failed": "បរាជ័យ",

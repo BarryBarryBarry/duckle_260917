@@ -5,8 +5,9 @@ import type { DuckleNodeData } from '../pipeline-types';
 type FlowType = 'source' | 'transform' | 'sink';
 
 const FLOW_TYPES = new Set<string>(['source', 'transform', 'sink']);
-const X_STEP = 280;
-const Y_STEP = 150;
+// A 240px card plus a 120px gap across; room for a card with several ports down.
+const X_STEP = 360;
+const Y_STEP = 200;
 
 /**
  * The canvas node type for a component. The canvas registers only these three;

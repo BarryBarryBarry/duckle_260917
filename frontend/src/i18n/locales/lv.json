@@ -196,6 +196,7 @@
     "quality": "Kvalitāte",
     "custom": "Pielāgots",
     "needsConfig": "Trūkst obligāto lauku — atveriet cilni Pamata, lai konfigurētu",
+    "sequence": "Step {{n}} in run order",
     "disabled": "invalīds",
     "running": "Skriešana",
     "failed": "Neizdevās",

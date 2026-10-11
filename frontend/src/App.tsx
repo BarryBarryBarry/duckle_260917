@@ -442,6 +442,7 @@ export default function App() {
     const [workspaceLoadError, setWorkspaceLoadError] = useState<string | null>(null);
     // Bumped by "Reload from disk" to re-trigger the load effect for the same path (#92).
     const [reloadNonce, setReloadNonce] = useState(0);
+    const [layoutFitRequest, setLayoutFitRequest] = useState(0);
     // True while a brand-new workspace is being seeded with sample pipelines +
     // generated data (Tauri only), so we can show a blocking init overlay.
     const [seeding, setSeeding] = useState(false);
@@ -1915,6 +1916,7 @@ export default function App() {
     const handleAutoLayout = useCallback(() => {
         setNodes(ns => layoutByDependency(ns, edges));
         markDirty();
+        setLayoutFitRequest(n => n + 1);
     }, [setNodes, edges, markDirty]);
 
     const handleDropComponent = useCallback(
@@ -2880,6 +2882,7 @@ export default function App() {
                         onEdgeDelete={handleEdgeDelete}
                         onEdgeEdit={handleEdgeEdit}
                         nodeAutodetectAvailable={nodeAutodetectAvailable}
+                        fitRequest={layoutFitRequest}
                     />
                 </section>
                 <PropertiesPanel

@@ -208,6 +208,7 @@
     "quality": "คุณภาพ",
     "custom": "กำหนดเอง",
     "needsConfig": "ฟิลด์ที่จำเป็นขาดหายไป - เปิดแท็บพื้นฐานเพื่อกำหนดค่า",
+    "sequence": "Step {{n}} in run order",
     "disabled": "พิการ",
     "running": "วิ่ง",
     "failed": "ล้มเหลว",

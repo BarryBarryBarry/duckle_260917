@@ -196,6 +196,7 @@
     "quality": "Kvaliteta",
     "custom": "Običaj",
     "needsConfig": "Nedostaju obavezna polja - otvorite karticu Osnovno za konfiguraciju",
+    "sequence": "Step {{n}} in run order",
     "disabled": "onemogućeno",
     "running": "Trčanje",
     "failed": "neuspješno",

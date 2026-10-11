@@ -196,6 +196,7 @@
     "quality": "الجودة",
     "custom": "المخصص",
     "needsConfig": "الحقول المطلوبة مفقودة - افتح علامة التبويب الأساسية لتكوينها",
+    "sequence": "Step {{n}} in run order",
     "disabled": "معطّل",
     "running": "الركض",
     "failed": "فشل",

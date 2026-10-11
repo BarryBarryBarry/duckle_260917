@@ -208,6 +208,7 @@
     "quality": "Kualitas",
     "custom": "Kebiasaan",
     "needsConfig": "Bidang yang wajib diisi tidak ada - buka tab Dasar untuk mengonfigurasi",
+    "sequence": "Step {{n}} in run order",
     "disabled": "dengan disabilitas",
     "running": "Berlari",
     "failed": "Gagal",

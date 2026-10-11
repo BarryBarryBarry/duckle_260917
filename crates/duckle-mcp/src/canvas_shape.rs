@@ -13,8 +13,10 @@ use serde_json::{json, Map, Value};
 
 use crate::catalog;
 
-const X_STEP: f64 = 280.0;
-const Y_STEP: f64 = 150.0;
+// The canvas draws every card 240px wide: one card plus a 120px gap across,
+// and room for a card with several ports down.
+const X_STEP: f64 = 360.0;
+const Y_STEP: f64 = 200.0;
 
 /// The canvas node type for a component: the canvas registers only these
 /// three, and control / quality / custom components render as transforms, as

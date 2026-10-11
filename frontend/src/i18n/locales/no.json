@@ -196,6 +196,7 @@
     "quality": "Kvalitet",
     "custom": "Skikk",
     "needsConfig": "Nødvendige felt mangler - åpne fanen Grunnleggende for å konfigurere",
+    "sequence": "Step {{n}} in run order",
     "disabled": "funksjonshemmet",
     "running": "Løper",
     "failed": "Mislyktes",

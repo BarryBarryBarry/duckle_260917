@@ -196,6 +196,7 @@
     "quality": "Cilësia",
     "custom": "Me porosi",
     "needsConfig": "Mungojnë fushat e kërkuara - hapni skedën Bazë për ta konfiguruar",
+    "sequence": "Step {{n}} in run order",
     "disabled": "me aftësi të kufizuara",
     "running": "Vrapimi",
     "failed": "Dështoi",

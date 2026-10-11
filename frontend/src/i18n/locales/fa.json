@@ -208,6 +208,7 @@
     "quality": "کیفیت",
     "custom": "سفارشی",
     "needsConfig": "فیلدهای الزامی وجود ندارد - برای پیکربندی، تب Basic را باز کنید",
+    "sequence": "Step {{n}} in run order",
     "disabled": "از کار افتاده است",
     "running": "در حال دویدن",
     "failed": "شکست خورد",

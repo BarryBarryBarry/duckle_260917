@@ -196,6 +196,7 @@
     "quality": "Kvalitet",
     "custom": "Skik",
     "needsConfig": "Påkrævede felter mangler - åbn fanen Grundlæggende for at konfigurere",
+    "sequence": "Step {{n}} in run order",
     "disabled": "handicappet",
     "running": "Løb",
     "failed": "Mislykkedes",

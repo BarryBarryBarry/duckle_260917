@@ -196,6 +196,7 @@
     "quality": "Gæði",
     "custom": "Sérsniðin",
     "needsConfig": "Nauðsynlegir reiti vantar - opnaðu Basic flipann til að stilla",
+    "sequence": "Step {{n}} in run order",
     "disabled": "fatlaður",
     "running": "Hlaupandi",
     "failed": "Mistókst",

@@ -16,6 +16,7 @@ import { metaFor } from '../connection-types';
 import type { PortDef } from '../../workflow-ui/fields/types';
 import { resolveOutputSchema } from '../../schema-resolve';
 import { useRunStatus } from '../run-status-context';
+import { useNodeSequence } from '../node-sequence-context';
 import { deriveNodeSubtitle } from '../../node-subtitle';
 import ComponentIcon from '../../workflow-ui/ComponentIcon';
 import type { NodeKind } from '../../workflow-ui/palette-data';
@@ -85,6 +86,7 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
     }, [manifest, data.properties]);
 
     const runStatus = useRunStatus(id);
+    const sequence = useNodeSequence(id);
 
     const classes =
         'node node-' + kind +
@@ -108,12 +110,19 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
                     ) : null}
                 </div>
                 <div className="node-label-row">
-                    <ComponentIcon
-                        componentId={data.componentId ?? ''}
-                        kind={kind as NodeKind}
-                        size={16}
-                        className="node-icon"
-                    />
+                    <span className="node-icon-wrap">
+                        <ComponentIcon
+                            componentId={data.componentId ?? ''}
+                            kind={kind as NodeKind}
+                            size={16}
+                            className="node-icon"
+                        />
+                        {sequence !== undefined ? (
+                            <span className="node-seq" title={t('node.sequence', { n: sequence })}>
+                                {sequence}
+                            </span>
+                        ) : null}
+                    </span>
                     <div className="node-label" title={data.label}>{data.label}</div>
                 </div>
                 {(() => {

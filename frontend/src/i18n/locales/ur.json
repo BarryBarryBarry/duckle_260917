@@ -208,6 +208,7 @@
     "quality": "معیار",
     "custom": "حسب ضرورت",
     "needsConfig": "مطلوبہ فیلڈز غائب ہیں - کنفیگر کرنے کے لیے بنیادی ٹیب کو کھولیں۔",
+    "sequence": "Step {{n}} in run order",
     "disabled": "معذور",
     "running": "چل رہا ہے۔",
     "failed": "ناکام",

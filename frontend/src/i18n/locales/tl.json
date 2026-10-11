@@ -208,6 +208,7 @@
     "quality": "Kalidad",
     "custom": "Custom",
     "needsConfig": "Nawawala ang mga kinakailangang field - buksan ang Basic na tab upang i-configure",
+    "sequence": "Step {{n}} in run order",
     "disabled": "may kapansanan",
     "running": "Tumatakbo",
     "failed": "Nabigo",
