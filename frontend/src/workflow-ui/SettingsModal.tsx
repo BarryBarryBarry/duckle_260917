@@ -26,6 +26,8 @@ import {
     setFontSize as applyAndSaveFontSize,
 } from '../font-size';
 import { DUCKIE_ENABLED } from '../features';
+import { isTauri } from '../tauri-dialog';
+import { getIdleLockMinutes, IDLE_LOCK_CHOICES, setIdleLockMinutes } from '../auth/idle';
 
 // With DSH hidden it cannot be picked, so a workspace still on it (the backend
 // default) shows, and saves as, the external endpoint the Agent uses.
@@ -76,6 +78,8 @@ export function SettingsModal({
     // is how you find a node on a large graph; off for anyone who would rather
     // have the corner of the canvas back.
     const [showMinimap, setShowMinimap] = useState(() => !loadPersisted('hideMinimap', false));
+    // Local UI pref: lock the desktop app after this many idle minutes (0 = never).
+    const [idleLock, setIdleLock] = useState(getIdleLockMinutes);
     // Local UI pref: global font size (applies live, no Save).
     const [fontSize, setFontSize] = useState(() => getFontSize());
     const [loaded, setLoaded] = useState(false);
@@ -611,6 +615,35 @@ export function SettingsModal({
                             Bundled local Qwen via llama.cpp
                         </label>
                     </SettingsSection>
+
+                    {isTauri() ? (
+                        <SettingsSection {...sectionState('signin')} title="Sign-in and lock">
+                            <p style={help}>
+                                Lock Duckle after a while without keyboard or mouse input. Locking keeps
+                                open pipelines, unsaved edits and running work as they are; the password
+                                opens it again. Applies immediately.
+                            </p>
+                            <label htmlFor="settings-idle-lock" style={{ fontSize: '0.9231rem', opacity: 0.8 }}>
+                                Lock when idle for
+                            </label>
+                            <select
+                                id="settings-idle-lock"
+                                value={idleLock}
+                                onChange={e => {
+                                    const minutes = Number(e.target.value);
+                                    setIdleLock(minutes);
+                                    setIdleLockMinutes(minutes);
+                                }}
+                                style={aiInput}
+                            >
+                                {IDLE_LOCK_CHOICES.map(m => (
+                                    <option key={m} value={m}>
+                                        {m === 0 ? 'Never' : `${m} minutes`}
+                                    </option>
+                                ))}
+                            </select>
+                        </SettingsSection>
+                    ) : null}
 
                     <SettingsSection {...sectionState('toolbar')} title="Toolbar">
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem', cursor: 'pointer' }}>

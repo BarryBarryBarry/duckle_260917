@@ -65,15 +65,9 @@ import { resolveForRun, discoverParams, builtinVars, buildContextVars, pipelineR
 import type { ParamSpec } from './run-resolve';
 import { livePreviewable } from './live-preview';
 import WorkspacePickerModal from './workflow-ui/WorkspacePickerModal';
-import { AccountChip, ProfileSetupModal } from './workflow-ui/AccountMenu';
-import {
-    type Account,
-    loadAccounts,
-    saveAccounts,
-    loadActiveAccountId,
-    saveActiveAccountId,
-    newAccountId,
-} from './accounts';
+import { AccountChip } from './workflow-ui/AccountMenu';
+import { useAuth } from './auth/AuthGate';
+import { rememberedWorkspace, rememberWorkspace } from './auth/user-workspace';
 import {
     deleteItemPayload,
     deletePipelineFile,
@@ -431,14 +425,18 @@ export default function App() {
         };
     }, []);
 
+    // The editor mounts once per sign-in (signing out unmounts it), so the
+    // signed-in user's last workspace is decided here, once.
+    const auth = useAuth();
+    const signedInUser = auth?.user.username;
     const [workspacePathState, setWorkspacePathState] = useState<string | null>(() => {
-        // Multi-account: on cold start the active account's bound workspace is
-        // authoritative (so reopening lands in the right account's context),
-        // falling back to the last global path for pre-account installs.
-        const accs = loadAccounts();
-        const active = accs.find(a => a.id === loadActiveAccountId()) ?? accs[0];
-        return active ? active.workspacePath ?? null : getWorkspacePath();
+        const path = rememberedWorkspace(signedInUser, getWorkspacePath());
+        if (path && path !== getWorkspacePath()) setWorkspacePath(path);
+        return path;
     });
+    useEffect(() => {
+        if (signedInUser && workspacePathState) rememberWorkspace(signedInUser, workspacePathState);
+    }, [signedInUser, workspacePathState]);
     // In Tauri AND the web edition: stay un-ready until the workspace has
     // hydrated, so auto-save can't overwrite the server/disk files with empty
     // in-memory defaults. Pure browser (no backend) is ready immediately.
@@ -455,24 +453,10 @@ export default function App() {
     // generated data (Tauri only), so we can show a blocking init overlay.
     const [seeding, setSeeding] = useState(false);
     const [corruptFiles, setCorruptFiles] = useState<string[]>([]);
-    // ---- local multi-account profiles: username + optional avatar, each bound
-    // to its own workspace (= data / pipeline context). Stored only on this
-    // device, never transmitted; no password. ----
-    const [accounts, setAccounts] = useState<Account[]>(loadAccounts);
-    const [activeAccountId, setActiveAccountId] = useState<string | null>(loadActiveAccountId);
-    useEffect(() => {
-        saveAccounts(accounts);
-    }, [accounts]);
-    useEffect(() => {
-        saveActiveAccountId(activeAccountId);
-    }, [activeAccountId]);
-    const activeAccount = accounts.find(a => a.id === activeAccountId) ?? accounts[0] ?? null;
-    // Engine setup comes first; then (first run) account setup; then the
-    // workspace picker.
+    // Engine setup comes first; then the workspace picker. Sign-in has already
+    // happened: the editor does not mount before it (auth/AuthGate.tsx).
     const showEngineSetup = isInTauri() && engineGate === 'engine-setup';
-    const showProfileSetup = isInTauri() && engineGate === 'ready' && accounts.length === 0;
-    const showWorkspacePicker =
-        isInTauri() && engineGate === 'ready' && accounts.length > 0 && !workspacePathState;
+    const showWorkspacePicker = isInTauri() && engineGate === 'ready' && !workspacePathState;
     // The one question of the first run, asked after there is a workspace to answer it
     // about and never again once answered. Someone trying Duckle out should meet a canvas,
     // so "local" is a click that changes nothing.
@@ -486,7 +470,6 @@ export default function App() {
     const showSetupWizard =
         isInTauri() &&
         engineGate === 'ready' &&
-        accounts.length > 0 &&
         !!workspacePathState &&
         !setupChoice;
 
@@ -516,11 +499,11 @@ export default function App() {
     );
     const [showHome, setShowHome] = useState(false);
     // Open it once, after the startup gates have cleared, so Home is never
-    // stacked behind the engine, profile or workspace dialogs.
+    // stacked behind the engine or workspace dialogs.
     const homeShownRef = useRef(false);
     useEffect(() => {
         if (homeShownRef.current) return;
-        if (showEngineSetup || showProfileSetup || showWorkspacePicker) return;
+        if (showEngineSetup || showWorkspacePicker) return;
         if (isInTauri() && !workspacePathState) return;
         // On a first run the tour goes first and Home waits its turn. Two screens both
         // introducing the product at the same moment is worse than either alone, and Home
@@ -529,7 +512,7 @@ export default function App() {
         if (!tourAlreadySeen()) return;
         homeShownRef.current = true;
         if (showHomeOnStartup) setShowHome(true);
-    }, [showEngineSetup, showProfileSetup, showWorkspacePicker, workspacePathState, showHomeOnStartup]);
+    }, [showEngineSetup, showWorkspacePicker, workspacePathState, showHomeOnStartup]);
 
     // The tour has finished (or been skipped): now Home may open, once.
     useEffect(() => {
@@ -949,105 +932,6 @@ export default function App() {
         setPendingReloadPipelineId(pipelineId);
         handleReloadWorkspace();
     }, [handleReloadWorkspace]);
-
-    // Keep the active account pointed at whatever workspace is open.
-    useEffect(() => {
-        if (!activeAccountId || !workspacePathState) return;
-        setAccounts(prev =>
-            prev.map(a =>
-                a.id === activeAccountId && a.workspacePath !== workspacePathState
-                    ? { ...a, workspacePath: workspacePathState }
-                    : a,
-            ),
-        );
-    }, [workspacePathState, activeAccountId]);
-
-    // Load an account's workspace context, reusing the workspace-switch reset
-    // so the canvas re-hydrates cleanly (quick context switch).
-    const loadAccountContext = useCallback(
-        (path: string | null) => {
-            // Already on this workspace: the in-memory state is already the
-            // right one. Resetting to INITIAL here would blank the canvas down
-            // to the default orders_etl sample and NOT re-hydrate, because the
-            // loadWorkspace effect keys off workspacePathState (which wouldn't
-            // change). Two accounts pointing at the same folder legitimately
-            // share its data, so keep what's loaded.
-            if (path === workspacePathState) return;
-            setWorkspaceReady(false);
-            setPipelineData(INITIAL_PIPELINE_DATA);
-            setRepo(INITIAL_REPO);
-            setJobs(INITIAL_JOBS);
-            setActiveJobId('j1');
-            prevPipelineDataRef.current = null;
-            prevRepoRef.current = null;
-            if (path) {
-                setWorkspacePath(path);
-                setWorkspacePathState(path);
-            } else {
-                setWorkspacePathState(null);
-            }
-        },
-        [workspacePathState],
-    );
-
-    const handleCreateFirstAccount = useCallback(
-        (v: { username: string; avatar?: string }) => {
-            const acc: Account = {
-                id: newAccountId(),
-                username: v.username,
-                avatar: v.avatar,
-                workspacePath: workspacePathState ?? undefined,
-            };
-            setAccounts([acc]);
-            setActiveAccountId(acc.id);
-        },
-        [workspacePathState],
-    );
-
-    const handleSwitchAccount = useCallback(
-        (id: string) => {
-            if (id === activeAccountId) return;
-            const acc = accounts.find(a => a.id === id);
-            setActiveAccountId(id);
-            if (isInTauri()) loadAccountContext(acc?.workspacePath ?? null);
-        },
-        [accounts, activeAccountId, loadAccountContext],
-    );
-
-    const handleAddAccount = useCallback(
-        (v: { username: string; avatar?: string }) => {
-            const acc: Account = { id: newAccountId(), username: v.username, avatar: v.avatar };
-            setAccounts(prev => [...prev, acc]);
-            setActiveAccountId(acc.id);
-            if (isInTauri()) loadAccountContext(null); // new account picks its own workspace
-        },
-        [loadAccountContext],
-    );
-
-    const handleEditAccount = useCallback(
-        (id: string, v: { username: string; avatar?: string }) => {
-            setAccounts(prev =>
-                prev.map(a => (a.id === id ? { ...a, username: v.username, avatar: v.avatar } : a)),
-            );
-        },
-        [],
-    );
-
-    const handleRemoveAccount = useCallback(
-        (id: string) => {
-            setAccounts(prev => {
-                if (prev.length <= 1) return prev; // keep at least one account
-                const next = prev.filter(a => a.id !== id);
-                if (id === activeAccountId) {
-                    const fallback = next[0];
-                    setActiveAccountId(fallback.id);
-                    if (isInTauri()) loadAccountContext(fallback.workspacePath ?? null);
-                }
-                return next;
-            });
-        },
-        [activeAccountId, loadAccountContext],
-    );
 
     const workspaceFolderName = useMemo(() => {
         if (!workspacePathState) return null;
@@ -2713,16 +2597,7 @@ export default function App() {
                     </button>
                 ) : null}
                 <LanguageSelector />
-                {accounts.length > 0 && activeAccount ? (
-                    <AccountChip
-                        accounts={accounts}
-                        activeId={activeAccount.id}
-                        onSwitch={handleSwitchAccount}
-                        onAdd={handleAddAccount}
-                        onEdit={handleEditAccount}
-                        onRemove={handleRemoveAccount}
-                    />
-                ) : null}
+                <AccountChip />
                 <button
                     type="button"
                     className="topbar-theme-toggle"
@@ -2790,7 +2665,6 @@ export default function App() {
             <GuidedTour
                 ready={
                     !showEngineSetup &&
-                    !showProfileSetup &&
                     !showWorkspacePicker &&
                     !showSetupWizard &&
                     !showHome &&
@@ -2977,10 +2851,6 @@ export default function App() {
                         </div>
                     </div>
                 </div>
-            ) : null}
-
-            {showProfileSetup ? (
-                <ProfileSetupModal onCreate={handleCreateFirstAccount} />
             ) : null}
 
             {DUCKIE_ENABLED && (showChatPanel || chatPanelMounted) ? (

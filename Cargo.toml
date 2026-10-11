@@ -124,3 +124,11 @@ opt-level = 0
 # a build here more than once. Set CARGO_PROFILE_DEV_DEBUG=true for a session
 # that needs a stepping debugger.
 debug = "line-tables-only"
+
+# Argon2 at opt-level 0 takes seconds per hash, which made signing in to a dev
+# build (and the local_auth tests) crawl. Optimise just the hash crates.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

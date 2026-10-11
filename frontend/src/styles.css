@@ -9787,6 +9787,220 @@ select.modal-select:focus {
 .acct-btn-primary:hover { background: var(--btn-primary-bg-strong, var(--accent)); }
 .acct-btn-primary:disabled { opacity: .5; cursor: not-allowed; }
 
+/* Desktop sign-in (auth/AuthGate.tsx) ------------------------------------ */
+.auth-screen,
+.auth-lock {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 56px 20px 24px;
+    overflow-y: auto;
+}
+.auth-screen {
+    z-index: 5000;
+    background:
+        radial-gradient(1200px 600px at 15% -10%, rgba(161, 0, 255, 0.12), transparent 60%),
+        var(--bg-0, var(--bg-1));
+}
+.auth-lock {
+    z-index: 20000;
+    background: rgba(10, 8, 16, 0.55);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+}
+.auth-drag {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: var(--topbar-h);
+    display: flex;
+    align-items: center;
+}
+.auth-drag-spacer {
+    flex: 1;
+    align-self: stretch;
+}
+.auth-card {
+    max-width: 400px;
+    margin: auto;
+}
+.auth-card-wide {
+    max-width: 520px;
+}
+.auth-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+    font-size: 1.2308rem;
+    font-weight: 700;
+    color: var(--text-1);
+}
+.auth-busy {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-2);
+}
+.auth-select {
+    font: inherit;
+    font-size: 1.0769rem;
+    font-weight: 400;
+    color: var(--text-1);
+    background: var(--bg-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm, 8px);
+    padding: 8px 10px;
+}
+.auth-select:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+.auth-hint {
+    margin: -8px 0 0;
+    font-size: 0.8462rem;
+    color: var(--text-3);
+}
+.auth-error {
+    margin: 0;
+    font-size: 0.9231rem;
+    color: var(--danger, #e5484d);
+}
+.auth-success {
+    margin: 0 0 4px;
+    font-size: 0.9231rem;
+    color: var(--ok, #30a46c);
+}
+.auth-actions-split {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+.auth-actions-split .acct-link {
+    align-self: center;
+}
+.auth-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9231rem;
+    color: var(--text-2);
+    cursor: pointer;
+}
+.auth-code-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.auth-code,
+.auth-path {
+    flex: 1;
+    min-width: 0;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm, 8px);
+    background: var(--bg-2);
+    border: 1px dashed var(--border-strong);
+    color: var(--text-1);
+    font-family: ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    user-select: all;
+}
+.auth-code {
+    font-size: 1.1538rem;
+    letter-spacing: 0.06em;
+    text-align: center;
+}
+.auth-path {
+    font-size: 0.8462rem;
+    word-break: break-all;
+}
+.auth-section {
+    margin: 0 0 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+}
+.auth-section h4 {
+    margin: 0 0 10px;
+    font-size: 1rem;
+    color: var(--text-1);
+}
+.auth-lock-icon {
+    display: inline-flex;
+    padding: 10px;
+    margin-bottom: 10px;
+    border-radius: 50%;
+    background: var(--bg-2);
+    color: var(--accent);
+}
+.auth-user-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm, 8px);
+    max-height: 280px;
+    overflow-y: auto;
+}
+.auth-user-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 10px;
+}
+.auth-user-row + .auth-user-row {
+    border-top: 1px solid var(--border);
+}
+.auth-user-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--text-1);
+    font-weight: 600;
+}
+.auth-user-actions {
+    display: flex;
+    gap: 4px;
+}
+.auth-badge {
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    color: var(--text-3);
+    font-size: 0.7692rem;
+    font-weight: 600;
+}
+.auth-badge-admin {
+    color: var(--accent);
+    border-color: var(--accent);
+}
+.acct-menu-user {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px 10px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+}
+.acct-menu-user-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.acct-menu-role {
+    font-size: 0.8462rem;
+    color: var(--text-3);
+}
+.acct-menu-auth .acct-menu-add {
+    margin-top: 0;
+    border-top: none;
+}
+
 /* Review prompt (G2) - bottom-right nudge after ~30s of use */
 .review-prompt {
     position: fixed;

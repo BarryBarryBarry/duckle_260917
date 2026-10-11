@@ -54,6 +54,10 @@ duckle-duckdb-engine = { workspace = true }
 duckle-scheduler = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 sha2 = "0.11"
+# Local sign-in (local_auth.rs): Argon2id password hashes and random recovery
+# codes. Same versions as duckle-runner, so no new crates enter the lockfile.
+argon2 = "0.6"
+getrandom = "0.4"
 zip = "8"
 # tar + gzip for the llama.cpp archives on Linux/macOS - they ship
 # as .tar.gz where Windows ships as .zip.

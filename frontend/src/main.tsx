@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import '@fontsource-variable/inter';
 import './i18n';            // bootstraps i18next; sets document.dir for RTL
 import App from './App';
+import AuthGate from './auth/AuthGate';
 import { ShareView } from './ShareView';
 import { ThemeProvider } from './theme';
 import { isTauri } from './tauri-dialog';
@@ -28,7 +29,9 @@ createRoot(rootEl).render(
             {shareMatch ? (
                 <ShareView kind={shareMatch[1] as 'dive' | 'dash'} id={decodeURIComponent(shareMatch[2])} />
             ) : (
-                <App />
+                <AuthGate>
+                    <App />
+                </AuthGate>
             )}
         </ThemeProvider>
     </StrictMode>,

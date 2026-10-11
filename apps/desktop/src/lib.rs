@@ -29,6 +29,7 @@ mod deploy;
 mod duckie_history;
 mod engine_manager;
 mod llama_chat;
+mod local_auth;
 mod pixeltable_engine;
 mod samples;
 mod secrets;
@@ -289,6 +290,18 @@ pub fn run() {
             chat_close_session,
             ai_models,
             chat_extract_pipeline,
+            local_auth::auth_status,
+            local_auth::auth_setup,
+            local_auth::auth_sign_in,
+            local_auth::auth_unlock,
+            local_auth::auth_sign_out,
+            local_auth::auth_change_password,
+            local_auth::auth_list_users,
+            local_auth::auth_create_user,
+            local_auth::auth_delete_user,
+            local_auth::auth_reset_password,
+            local_auth::auth_recover,
+            local_auth::auth_regenerate_recovery,
             duckie_history::duckie_conversations_list,
             duckie_history::duckie_conversation_get,
             duckie_history::duckie_conversation_save,

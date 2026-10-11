@@ -24,6 +24,9 @@ import { validatePipeline } from '../src/validation';
 import { deriveNodeSubtitle } from '../src/node-subtitle';
 import { resolveOutputSchema } from '../src/schema-resolve';
 import { layoutByDependency, NODE_WIDTH, nodeSequence, nodesOverlap } from '../src/canvas/layout';
+import { lockReason } from '../src/auth/idle';
+import { pickWorkspace, withWorkspace } from '../src/auth/user-workspace';
+import { authErrorMessage } from '../src/auth/auth-api';
 import {
     buildRunsQuery,
     firstLine,
@@ -1569,6 +1572,34 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         ],
     );
     check('sequence: nodes in a cycle come after the rest', cyc.get('root') === 1 && cyc.get('x')! > 1 && cyc.get('y')! > 1, JSON.stringify([...cyc]));
+}
+
+// ---------------------------------------------------------------------------
+// Desktop sign-in. The app locks after the configured idle time, or when a
+// remembered sign-in lapses while it is open; 0 minutes turns the idle lock
+// off. Backend errors arrive as codes and must reach the user as text.
+// ---------------------------------------------------------------------------
+{
+    const t0 = 1_000_000;
+    const min = 60_000;
+    check('lock: not before the idle limit', lockReason(t0 + 29 * min, t0, 30, null) === null, 'locked early');
+    check('lock: at the idle limit', lockReason(t0 + 30 * min, t0, 30, null) === 'idle', 'did not lock');
+    check('lock: 0 minutes never locks for idleness', lockReason(t0 + 600 * min, t0, 0, null) === null, 'locked with idle off');
+    check('lock: a lapsed remembered sign-in locks even while active', lockReason(t0 + 5, t0 + 5, 30, t0) === 'expired', 'not locked');
+    check('lock: a remembered sign-in still running does not lock', lockReason(t0, t0, 30, t0 + 1) === null, 'locked');
+
+    const tr = ((key: string, opts?: Record<string, unknown>) =>
+        `${key}${opts && 'seconds' in opts ? `(${opts.seconds})` : ''}${opts && 'defaultValue' in opts ? `|${opts.defaultValue}` : ''}`) as never;
+    check('auth error: a code maps to its message key', authErrorMessage(tr, new Error('invalid_credentials')).startsWith('auth.error.invalid_credentials'), authErrorMessage(tr, new Error('invalid_credentials')));
+    check('auth error: a pause names its seconds', authErrorMessage(tr, 'throttled:29') === 'auth.error.throttled(29)', authErrorMessage(tr, 'throttled:29'));
+    check('auth error: a code with detail maps by its code and keeps the detail as fallback', authErrorMessage(tr, 'store_unreadable:denied') === 'auth.error.store_unreadable|store_unreadable:denied', authErrorMessage(tr, 'store_unreadable:denied'));
+
+    // Each signed-in user reopens their own last workspace.
+    check('workspace: the first sign-in keeps the workspace already open', pickWorkspace({}, 'Admin', '/ws/a') === '/ws/a', 'changed');
+    const remembered = withWorkspace(withWorkspace({}, 'Admin', '/ws/a'), 'ann', '/ws/b');
+    check('workspace: a user gets their own, whatever is open', pickWorkspace(remembered, 'ANN', '/ws/a') === '/ws/b', String(pickWorkspace(remembered, 'ANN', '/ws/a')));
+    check('workspace: a new user gets the picker, not someone else\'s', pickWorkspace(remembered, 'bob', '/ws/a') === null, 'inherited');
+    check('workspace: recording the same path changes nothing', withWorkspace(remembered, 'admin', '/ws/a') === remembered, 'rewrote');
 }
 
 if (failures.length) {
