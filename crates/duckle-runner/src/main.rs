@@ -149,7 +149,8 @@ under --workspace (or the pipeline's parent):
     --set-snapshot <node=id>     Set a DuckLake CDC snapshot id; repeatable
     --clear-watermark <node>     Delete a node's saved state (forces full reload); repeatable
 
-    -h, --help           Print this help";
+    -h, --help           Print this help
+    -V, --version        Print the Duckle release this runner was built from";
 
 struct Args {
     pipeline: Option<PathBuf>,
@@ -309,6 +310,10 @@ fn parse_args() -> Result<Args, String> {
                 println!("{}", usage_for_invocation());
                 std::process::exit(0);
             }
+            "-V" | "--version" => {
+                println!("duckle-runner {}", duckle_duckdb_engine::VERSION);
+                std::process::exit(0);
+            }
             // Allow a bare pipeline path as the first positional argument.
             other if pipeline.is_none() && !other.starts_with('-') => {
                 pipeline = Some(PathBuf::from(other));
@@ -372,7 +377,19 @@ pub(crate) fn resolve_duckdb(flag: Option<PathBuf>) -> Result<PathBuf, String> {
             }
         }
     }
-    // Fall back to PATH; the engine spawns it by name.
+    // Fall back to PATH; the engine spawns it by name. Looked for here, because
+    // a run that cannot find its engine never started: exit 2, as the README
+    // states, rather than the 1 of a pipeline that ran and failed.
+    let on_path = std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths)
+            .any(|dir| ["duckdb", "duckdb.exe"].iter().any(|name| dir.join(name).is_file()))
+    });
+    if !on_path {
+        return Err("DuckDB engine not found: DUCKLE_DUCKDB_BIN is unset or names no file, there is no duckdb \
+             next to this runner, and none on PATH. Point DUCKLE_DUCKDB_BIN (or --duckdb) at a \
+             DuckDB CLI, or install one on PATH."
+            .into());
+    }
     Ok(PathBuf::from("duckdb"))
 }
 

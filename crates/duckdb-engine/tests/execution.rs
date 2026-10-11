@@ -471,6 +471,289 @@ fn parquet_sink_counts_its_own_file_not_a_glob_sibling() {
     assert_eq!(filt.rows, Some(2), "filter should report 2 rows");
 }
 
+/// The StageFinished row counts a run announced for one node, in order.
+fn announced_rows(
+    engine: &duckle_duckdb_engine::DuckdbEngine,
+    d: &PipelineDoc,
+    target: Option<&str>,
+    node_id: &str,
+) -> (duckle_duckdb_engine::RunResult, Vec<Option<u64>>) {
+    let mut finished: Vec<(String, Option<u64>)> = Vec::new();
+    let result = engine.execute_pipeline_with_events(d, target, None, |ev| {
+        if let duckle_duckdb_engine::PipelineEvent::StageFinished { node_id, rows, .. } = ev {
+            finished.push((node_id.clone(), rows));
+        }
+    });
+    let rows = finished
+        .iter()
+        .filter(|(id, _)| id == node_id)
+        .map(|(_, r)| *r)
+        .collect();
+    (result, rows)
+}
+
+#[test]
+fn duckdb_sink_counts_its_table_so_its_source_is_read_once() {
+    // A source is a VIEW, so its own COUNT(*) reads the whole file again.
+    // Loading 80M taxi rows into a DuckDB file spent 84 s of 209 s on that
+    // count alone, for the same number the load then produced. A DuckDB sink
+    // that replaces its table can count it from metadata, so the source takes
+    // the sink's figure: it finishes with no count and is back-filled. Both
+    // execution paths: naming a target forces the per-stage one.
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n3,c\n");
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let dbfile = out_path(tmp.path(), &format!("{}.duckdb", path_name));
+        // Five rows already there: an overwrite must report the three it wrote,
+        // never the table as it stood before.
+        duckdb_exec(
+            &dbfile,
+            "CREATE TABLE people AS SELECT range AS id, 'old' AS name FROM range(5)",
+        );
+        let d = doc(
+            json!([
+                node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("k1", "snk.duckdb", json!({ "database": dbfile, "tableName": "people" })),
+            ]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, s1) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        assert_eq!(
+            s1,
+            vec![None, Some(3)],
+            "{path_name}: the source should take the sink's figure, not count itself"
+        );
+        assert_eq!(result.nodes.get("s1").and_then(|n| n.rows), Some(3), "{path_name}");
+        assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(3), "{path_name}");
+        let n = scalar_string(&format!(
+            "ATTACH '{}' AS d (READ_ONLY); SELECT CAST(count(*) AS VARCHAR) AS n FROM d.people",
+            dbfile
+        ));
+        assert_eq!(n, "3", "{path_name}: table rows");
+    }
+}
+
+#[test]
+fn a_duckdb_sink_reports_what_its_table_holds() {
+    // The figure must come from the table, not from evaluating the upstream
+    // again. A source whose every read returns a different number of rows tells
+    // the two apart: only the table agrees with itself. On the per-stage path a
+    // failed table count falls back to re-counting the source, which is right
+    // for a deterministic source - so no other test would notice it broken.
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let dbfile = out_path(tmp.path(), &format!("{}.duckdb", path_name));
+        let d = doc(
+            json!([
+                node("s1", "code.sql", json!({
+                    "sql": "SELECT range AS id FROM range(100000) WHERE random() < 0.5"
+                })),
+                node("k1", "snk.duckdb", json!({ "database": dbfile, "tableName": "t" })),
+            ]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, _) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        let held: u64 = scalar_string(&format!(
+            "ATTACH '{}' AS d (READ_ONLY); SELECT CAST(count(*) AS VARCHAR) AS n FROM d.t",
+            dbfile
+        ))
+        .parse()
+        .expect("table count");
+        assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(held), "{path_name}: sink");
+        assert_eq!(result.nodes.get("s1").and_then(|n| n.rows), Some(held), "{path_name}: source");
+    }
+}
+
+#[test]
+fn a_parquet_sink_reports_what_its_file_holds() {
+    // The same proof for the Parquet footer count. The per-stage path publishes
+    // a staged file before it counts, so a count of the staged name finds
+    // nothing and falls back to re-running the upstream - right for a
+    // deterministic source, which is why the back-fill test cannot see it.
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let out = out_path(tmp.path(), &format!("{}.parquet", path_name));
+        let d = doc(
+            json!([
+                node("s1", "code.sql", json!({
+                    "sql": "SELECT range AS id FROM range(100000) WHERE random() < 0.5"
+                })),
+                node("k1", "snk.parquet", json!({ "path": out })),
+            ]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, _) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        let held = count(&format!("read_parquet('{}')", out)) as u64;
+        assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(held), "{path_name}: sink");
+        assert_eq!(result.nodes.get("s1").and_then(|n| n.rows), Some(held), "{path_name}: source");
+    }
+}
+
+#[test]
+fn a_csv_sink_reports_what_its_file_holds() {
+    // A CSV sink counts the records in the file it wrote, so the step whose
+    // rows it writes need not run again to count itself. A source that returns
+    // a different number of rows on every read proves the figure is the file's.
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let out = out_path(tmp.path(), &format!("{}.csv", path_name));
+        let d = doc(
+            json!([
+                node("s1", "code.sql", json!({
+                    "sql": "SELECT range AS id FROM range(100000) WHERE random() < 0.5"
+                })),
+                node("k1", "snk.csv", json!({ "path": out })),
+            ]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, _) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        let held = count(&format!("read_csv_auto('{}')", out)) as u64;
+        assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(held), "{path_name}: sink");
+        assert_eq!(result.nodes.get("s1").and_then(|n| n.rows), Some(held), "{path_name}: source");
+    }
+}
+
+#[test]
+fn a_csv_sink_lends_its_count_to_the_step_it_writes() {
+    // TPC-H over CSV read every table three times: once to count the source,
+    // once to count the query, once to write the result. The query's own count
+    // is the one a CSV sink can stand in for.
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(
+        tmp.path(),
+        "orders.csv",
+        "order_id,status\n1,paid\n2,pending\n3,paid\n4,refunded\n",
+    );
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let out = out_path(tmp.path(), &format!("{}.csv", path_name));
+        let d = doc(
+            json!([
+                node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("f1", "xf.filter", json!({ "predicate": "status = 'paid'" })),
+                node("k1", "snk.csv", json!({ "path": out })),
+            ]),
+            json!([main_edge("e1", "s1", "f1"), main_edge("e2", "f1", "k1")]),
+        );
+        let (result, f1) = announced_rows(&engine, &d, target, "f1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        assert_eq!(f1, vec![None, Some(2)], "{path_name}: the filter should take the sink's figure");
+        assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(2), "{path_name}");
+    }
+}
+
+#[test]
+fn a_csv_sink_counts_quoted_line_breaks_and_gzip_exactly() {
+    // The records are counted outside DuckDB's reader, by line breaks outside
+    // quotes. A value holding a line break, a quote, the delimiter or nothing at
+    // all is where that could go wrong, and a .gz file has to be decoded first.
+    let tmp = tempfile::tempdir().unwrap();
+    let engine = engine_or_skip!();
+    let rows = "SELECT * FROM (VALUES (1, 'plain'), (2, 'has \"quote\"'), (3, E'two\\nlines'), \
+                (4, ''), (5, NULL), (6, 'a,b'), (7, E'tab\\there')) t(id, s)";
+    for (sink, name) in [("snk.csv", "out.csv.gz"), ("snk.tsv", "out.tsv")] {
+        for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+            let out = out_path(tmp.path(), &format!("{}_{}", path_name, name));
+            let d = doc(
+                json!([
+                    node("s1", "code.sql", json!({ "sql": rows })),
+                    node("k1", sink, json!({ "path": out })),
+                ]),
+                json!([main_edge("e1", "s1", "k1")]),
+            );
+            let (result, s1) = announced_rows(&engine, &d, target, "s1");
+            assert_eq!(result.status, "ok", "{sink} {path_name}: {:?}", result.error);
+            assert_eq!(s1, vec![None, Some(7)], "{sink} {path_name}: counted from the file");
+            assert_eq!(result.nodes.get("k1").and_then(|n| n.rows), Some(7), "{sink} {path_name}");
+        }
+    }
+}
+
+#[test]
+fn duckdb_sink_in_append_mode_reports_the_rows_it_added() {
+    // An appended table holds yesterday's rows too, so counting it would report
+    // the table, not the run. Only a replace may lend its count upstream.
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n3,c\n");
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let dbfile = out_path(tmp.path(), &format!("{}.duckdb", path_name));
+        duckdb_exec(
+            &dbfile,
+            "CREATE TABLE people AS SELECT range::VARCHAR AS id, 'old' AS name FROM range(5)",
+        );
+        let d = doc(
+            json!([
+                node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                node("k1", "snk.duckdb", json!({
+                    "database": dbfile, "tableName": "people", "mode": "append"
+                })),
+            ]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, _) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        assert_eq!(result.nodes.get("s1").and_then(|n| n.rows), Some(3), "{path_name}");
+        assert_eq!(
+            result.nodes.get("k1").and_then(|n| n.rows),
+            Some(3),
+            "{path_name}: the sink added 3 rows to a table that now holds 8"
+        );
+    }
+}
+
+#[test]
+fn a_dead_letter_sink_does_not_lend_its_count_to_the_source() {
+    // validateBeforeInsert sends rows that will not cast to a dead-letter file
+    // and inserts the rest, so the table holds FEWER rows than the source
+    // produced. Its count says nothing about the source, which keeps its own.
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\nx,c\n");
+    let engine = engine_or_skip!();
+    for (path_name, target) in [("batched", None), ("per-stage", Some("k1"))] {
+        let dbfile = out_path(tmp.path(), &format!("{}.duckdb", path_name));
+        let dlq = out_path(tmp.path(), &format!("{}_rejects.parquet", path_name));
+        let sink = json!({
+            "id": "k1",
+            "position": { "x": 0, "y": 0 },
+            "data": {
+                "label": "k1",
+                "componentId": "snk.duckdb",
+                "properties": {
+                    "database": dbfile, "tableName": "people",
+                    "validateBeforeInsert": true, "deadLetterPath": dlq
+                },
+                "schema": [
+                    { "name": "id", "type": "int64" },
+                    { "name": "name", "type": "string" }
+                ]
+            }
+        });
+        let d = doc(
+            json!([node("s1", "src.csv", json!({ "path": csv, "hasHeader": true })), sink]),
+            json!([main_edge("e1", "s1", "k1")]),
+        );
+        let (result, s1) = announced_rows(&engine, &d, target, "s1");
+        assert_eq!(result.status, "ok", "{path_name}: run failed: {:?}", result.error);
+        // The dead-letter path really ran: one row out, two rows in.
+        assert_eq!(count(&format!("read_parquet('{}')", dlq)), 1, "{path_name}: rejects");
+        let n = scalar_string(&format!(
+            "ATTACH '{}' AS d (READ_ONLY); SELECT CAST(count(*) AS VARCHAR) AS n FROM d.people",
+            dbfile
+        ));
+        assert_eq!(n, "2", "{path_name}: table rows");
+        assert_eq!(s1, vec![Some(3)], "{path_name}: the source counts its own 3 rows");
+    }
+}
+
 #[test]
 fn csv_filter_parquet_end_to_end() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1617,6 +1900,43 @@ fn raw_sql_can_name_its_upstream_by_alias() {
     );
 }
 
+/// An input whose columns nobody knows yet is said to be unknown, not missing.
+///
+/// The check stubs each input from the columns it is given, and the editor only
+/// gives the ones it knows. An SCD Type 2 node's history input has none before
+/// anything has looked at it, so it got no stub and DuckDB answered "Table with
+/// name hs does not exist! Did you mean pg_sequence?" - shown as an error in the
+/// inspector of a pipeline that was fine.
+#[test]
+fn an_input_with_unknown_columns_is_not_reported_as_a_missing_table() {
+    let engine = engine_or_skip!();
+    let col = |name: &str, t: duckle_duckdb_engine::DataType| duckle_duckdb_engine::Column {
+        tags: Vec::new(),
+        name: name.into(),
+        data_type: t,
+        nullable: true,
+        primary_key: None,
+        format: None,
+    };
+    let current = vec![
+        col("id", duckle_duckdb_engine::DataType::Int64),
+        col("v", duckle_duckdb_engine::DataType::String),
+    ];
+    let d = doc(
+        json!([
+            node("cur", "src.csv", json!({ "path": "cur.csv", "hasHeader": true })),
+            node("hs", "src.parquet", json!({ "path": "history.parquet" })),
+            node("h", "xf.cdc.scd2", json!({ "naturalKey": ["id"], "compareColumns": ["v"] })),
+        ]),
+        json!([main_edge("e1", "cur", "h"), lookup_edge("e2", "hs", "h")]),
+    );
+    let a = engine.analyze_node_sql(&d, "h", &[("cur".to_string(), current)]).unwrap();
+    assert!(a.diagnostics.is_empty(), "not an error: {:?}", a.diagnostics);
+    let note = a.note.unwrap_or_default();
+    assert!(note.contains("\"hs\""), "the note names the input it is waiting on: {note}");
+    assert!(!a.validated, "nothing was bound");
+}
+
 /// A Pure SQL node is refused, and told why in its own terms.
 #[test]
 fn a_pure_sql_node_is_refused_as_an_effect_step_not_as_a_defect() {
@@ -2377,6 +2697,89 @@ fn run_errors_redact_secrets() {
             err
         );
     }
+}
+
+#[test]
+fn the_plan_labels_a_stage_by_what_it_creates() {
+    // The Plan tab's badge read VIEW for every stage that is not a sink, though
+    // a source two steps read is created as a TABLE so it is read once. The
+    // label follows the statement. (Pure compilation - no engine needed.)
+    use duckle_duckdb_engine::compile_pipeline_sql_opts;
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let out = |n: &str| out_path(tmp.path(), n);
+    let d = doc(
+        json!([
+            node("shared", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("single", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k1", "snk.csv", json!({ "path": out("a.csv") })),
+            node("k2", "snk.csv", json!({ "path": out("b.csv") })),
+            node("k3", "snk.csv", json!({ "path": out("c.csv") })),
+        ]),
+        json!([
+            main_edge("e1", "shared", "k1"),
+            main_edge("e2", "shared", "k2"),
+            main_edge("e3", "single", "k3"),
+        ]),
+    );
+    let stages = compile_pipeline_sql_opts(&d, false).expect("compile");
+    let kind = |id: &str| {
+        let s = stages.iter().find(|s| s.node_id == id).unwrap();
+        (s.kind.clone(), s.sql.clone())
+    };
+    let (k, sql) = kind("shared");
+    assert_eq!(k, "table", "{sql}");
+    let (k, sql) = kind("single");
+    assert_eq!(k, "view", "{sql}");
+    assert_eq!(kind("k1").0, "sink");
+}
+
+#[test]
+fn lineage_of_a_star_names_every_column_not_col1() {
+    // Through DuckDB's own SQL serializer: a filter is SELECT * ... WHERE, and
+    // its lineage named the star `col1`, traced to a source column `col1` that
+    // a six-column CSV does not have.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "a,b,c,d,e,f\n1,2,3,4,5,6\n");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("f", "xf.filter", json!({ "predicate": "a > 0" })),
+            node("k", "snk.csv", json!({ "path": out_path(tmp.path(), "out.csv") })),
+        ]),
+        json!([main_edge("e1", "s", "f"), main_edge("e2", "f", "k")]),
+    );
+    let lineage = engine.pipeline_column_lineage(&d).expect("lineage");
+    let sink: Vec<(String, Vec<(String, String)>)> = lineage["k"]
+        .iter()
+        .map(|(name, roots)| (name.clone(), roots.iter().map(|r| (r.node.clone(), r.column.clone())).collect()))
+        .collect();
+    assert_eq!(sink, vec![("*".to_string(), vec![("s".to_string(), "*".to_string())])]);
+}
+
+#[test]
+fn a_table_stage_is_not_described_as_a_sink() {
+    // The column check refused every stage not labelled "view" with the note
+    // for a sink, which says it produces no relation. Once the Plan labels a
+    // stage created as a TABLE "table", that note would land on transforms.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let out = |n: &str| out_path(tmp.path(), n);
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("f", "xf.filter", json!({ "predicate": "id > 0" })),
+            node("k1", "snk.csv", json!({ "path": out("a.csv") })),
+            node("k2", "snk.csv", json!({ "path": out("b.csv") })),
+        ]),
+        json!([main_edge("e1", "s", "f"), main_edge("e2", "f", "k1"), main_edge("e3", "f", "k2")]),
+    );
+    let note = engine.analyze_node_sql(&d, "f", &[]).unwrap().note.unwrap_or_default();
+    assert!(!note.contains("produces no relation"), "{note}");
+    let sink = engine.analyze_node_sql(&d, "k1", &[]).unwrap().note.unwrap_or_default();
+    assert!(sink.contains("produces no relation"), "a sink keeps its own note: {sink}");
 }
 
 #[test]
@@ -8643,6 +9046,68 @@ fn fan_in_to_single_input_port_fails_loud() {
 }
 
 #[test]
+fn raw_sql_reads_every_upstream_wired_into_it() {
+    // Raw and Pure SQL emit the user's SQL verbatim and it names each upstream
+    // by node id, which is what the node's own help says to do. The fan-in
+    // guard refused a second input anyway, so a join of two sources in one SQL
+    // node could only be ordered by trigger links, never wired. The ordinary
+    // mode still reads one `input` and still refuses a second.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let orders = write_file(tmp.path(), "orders.csv", "id,cust\n1,10\n2,20\n3,10\n");
+    let custs = write_file(tmp.path(), "custs.csv", "cust,name\n10,ann\n20,bob\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let sql = "SELECT o.id, c.name FROM \"o\" o JOIN \"c\" c USING (cust) ORDER BY o.id";
+    let wired = |mode: &str, comp: &str| {
+        let mut props = json!({ "sql": sql });
+        if !mode.is_empty() {
+            props[mode] = json!(true);
+        }
+        doc(
+            json!([
+                node("o", "src.csv", json!({ "path": orders, "hasHeader": true })),
+                node("c", "src.csv", json!({ "path": custs, "hasHeader": true })),
+                node("q", comp, props),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "o", "q"), main_edge("e2", "c", "q"), main_edge("e3", "q", "k")]),
+        )
+    };
+    for comp in ["code.sql", "code.sqltemplate"] {
+        let res = engine.execute_pipeline(&wired("rawSql", comp));
+        assert_eq!(res.status, "ok", "{comp}: raw mode with two inputs: {:?}", res.error);
+        let names = scalar_string(&format!(
+            "SELECT string_agg(name, ',' ORDER BY id) FROM read_csv_auto('{}')",
+            out
+        ));
+        assert_eq!(names, "ann,bob,ann", "{comp}: both upstreams read");
+    }
+    // Pure mode is raw mode without the CREATE wrapper: a statement in its own
+    // right, here one that writes the join itself.
+    let pure_out = out_path(tmp.path(), "pure.csv");
+    let res = engine.execute_pipeline(&doc(
+        json!([
+            node("o", "src.csv", json!({ "path": orders, "hasHeader": true })),
+            node("c", "src.csv", json!({ "path": custs, "hasHeader": true })),
+            node("q", "code.sql", json!({
+                "pureSql": true,
+                "sql": format!("COPY ({}) TO '{}' (HEADER)", sql, pure_out)
+            })),
+        ]),
+        json!([main_edge("e1", "o", "q"), main_edge("e2", "c", "q")]),
+    ));
+    assert_eq!(res.status, "ok", "pure mode with two inputs: {:?}", res.error);
+    let names = scalar_string(&format!(
+        "SELECT string_agg(name, ',' ORDER BY id) FROM read_csv_auto('{}')",
+        pure_out
+    ));
+    assert_eq!(names, "ann,bob,ann", "pure mode: both upstreams read");
+    let res = engine.execute_pipeline(&wired("", "code.sql"));
+    assert_eq!(res.status, "error", "the wrapped mode reads one input and must still refuse two");
+    assert!(res.error.unwrap_or_default().contains("single input"));
+}
+
+#[test]
 fn anti_join_is_null_safe_on_right_keys() {
     // Regression for the NOT IN/NULL gotcha: anti-join used to silently
     // drop every left row when the right side had a single NULL in the
@@ -11079,6 +11544,151 @@ fn snk_avro_writes_container_file_with_inferred_schema() {
         out_csv
     ));
     assert_eq!(alpha, "alpha");
+}
+
+#[test]
+fn a_csv_source_can_leave_the_header_to_detection() {
+    // "First row is header" was yes or no, and yes was sent even when nobody
+    // chose it, so DuckDB never got to look: a file without a header lost its
+    // first row to column names. Detect leaves the question to DuckDB's sniffer.
+    // The form stores its choice as text, so "false" has to mean no as well.
+    let tmp = tempfile::tempdir().unwrap();
+    let headerless = write_file(tmp.path(), "bare.csv", "1,2024-01-15,4.5\n2,2024-01-16,5.5\n");
+    let headed = write_file(tmp.path(), "named.csv", "id,day,price\n1,2024-01-15,4.5\n2,2024-01-16,5.5\n");
+    let engine = engine_or_skip!();
+    let load = |path: &str, header: serde_json::Value, out: &str| {
+        let out = out_path(tmp.path(), out);
+        let r = engine.execute_pipeline(&doc(
+            json!([
+                node("s", "src.csv", json!({ "path": path, "hasHeader": header })),
+                node("k", "snk.parquet", json!({ "path": out })),
+            ]),
+            json!([main_edge("e1", "s", "k")]),
+        ));
+        assert_eq!(r.status, "ok", "{header}: {:?}", r.error);
+        let names: Vec<String> = duckdb_json(&format!("DESCRIBE SELECT * FROM read_parquet('{}')", out))
+            .iter()
+            .filter_map(|c| c.get("column_name").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        (count(&format!("read_parquet('{}')", out)), names)
+    };
+    let (rows, names) = load(&headerless, json!("detect"), "a.parquet");
+    assert_eq!(rows, 2, "no header detected, so no row taken for names: {names:?}");
+    let (rows, names) = load(&headed, json!("detect"), "b.parquet");
+    assert_eq!((rows, names), (2, vec!["id".to_string(), "day".into(), "price".into()]));
+    let (rows, _) = load(&headerless, json!("false"), "c.parquet");
+    assert_eq!(rows, 2, "the text \"false\" means no header");
+    let (rows, _) = load(&headed, json!(true), "d.parquet");
+    assert_eq!(rows, 2, "yes is still yes");
+}
+
+#[test]
+fn src_avro_types_each_column_as_its_schema_declares() {
+    // The records used to be loaded as JSON and their types re-guessed: a text
+    // date came back as DATE, an Avro date as a number, a decimal as a list of
+    // bytes. The file declares every type, so each column now gets that type.
+    use apache_avro::{types::Value, Decimal, Schema, Writer};
+
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let avro_path = format!("{}/typed.avro", tmp.path().display());
+    let schema = Schema::parse_str(
+        r#"{"type": "record", "name": "Order", "fields": [
+            {"name": "id", "type": "int"},
+            {"name": "total", "type": "long"},
+            {"name": "ratio", "type": "float"},
+            {"name": "price", "type": "double"},
+            {"name": "paid", "type": "boolean"},
+            {"name": "orderdate", "type": "string"},
+            {"name": "shipped", "type": {"type": "int", "logicalType": "date"}},
+            {"name": "at", "type": {"type": "long", "logicalType": "timestamp-millis"}},
+            {"name": "amount", "type": {"type": "bytes", "logicalType": "decimal", "precision": 10, "scale": 2}},
+            {"name": "raw", "type": "bytes"},
+            {"name": "status", "type": {"type": "enum", "name": "Status", "symbols": ["open", "closed"]}},
+            {"name": "tags", "type": {"type": "array", "items": "string"}},
+            {"name": "note", "type": ["null", "string"]},
+            {"name": "addr", "type": {"type": "record", "name": "Addr", "fields": [
+                {"name": "city", "type": "string"}, {"name": "zip", "type": "int"}]}}
+        ]}"#,
+    )
+    .expect("schema parse");
+    let record = |id: i32, amount: &[u8], note: Value| {
+        Value::Record(vec![
+            ("id".into(), Value::Int(id)),
+            ("total".into(), Value::Long(10_000_000_000)),
+            ("ratio".into(), Value::Float(0.5)),
+            ("price".into(), Value::Double(19.99)),
+            ("paid".into(), Value::Boolean(true)),
+            ("orderdate".into(), Value::String("1992-01-01".into())),
+            ("shipped".into(), Value::Date(19_737)), // 2024-01-15
+            ("at".into(), Value::TimestampMillis(1_705_314_600_000)), // 2024-01-15 10:30:00 UTC
+            ("amount".into(), Value::Decimal(Decimal::from(amount.to_vec()))),
+            ("raw".into(), Value::Bytes(vec![0x00, 0x41, 0xFF])),
+            ("status".into(), Value::Enum(1, "closed".into())),
+            ("tags".into(), Value::Array(vec![Value::String("a".into()), Value::String("b".into())])),
+            ("note".into(), note),
+            ("addr".into(), Value::Record(vec![
+                ("city".into(), Value::String("Oslo".into())),
+                ("zip".into(), Value::Int(150)),
+            ])),
+        ])
+    };
+    {
+        let file = std::fs::File::create(&avro_path).expect("create avro file");
+        let mut writer = Writer::new(&schema, file).expect("open avro writer");
+        // 123.45 and -5.00, unscaled big-endian two's complement.
+        writer.append(record(1, &[0x30, 0x39], Value::Union(1, Box::new(Value::String("hi".into())))))
+            .expect("append");
+        writer.append(record(2, &[0xFE, 0x0C], Value::Union(0, Box::new(Value::Null))))
+            .expect("append");
+        writer.flush().expect("flush avro");
+    }
+
+    let db = out_path(tmp.path(), "typed.duckdb");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("a", "src.avro", json!({ "path": &avro_path })),
+            node("k", "snk.duckdb", json!({ "database": db, "tableName": "t" })),
+        ]),
+        json!([main_edge("e1", "a", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "src.avro failed: {:?}", r.error);
+
+    let types: std::collections::BTreeMap<String, String> =
+        duckdb_json(&format!("ATTACH '{}' AS d (READ_ONLY); DESCRIBE d.t", db))
+            .iter()
+            .map(|c| {
+                let s = |k: &str| c.get(k).and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+                (s("column_name"), s("column_type"))
+            })
+            .collect();
+    for (col, ty) in [
+        ("id", "INTEGER"),
+        ("total", "BIGINT"),
+        ("ratio", "FLOAT"),
+        ("price", "DOUBLE"),
+        ("paid", "BOOLEAN"),
+        ("orderdate", "VARCHAR"),
+        ("shipped", "DATE"),
+        ("at", "TIMESTAMP"),
+        ("amount", "DECIMAL(10,2)"),
+        ("raw", "BLOB"),
+        ("status", "VARCHAR"),
+        ("tags", "VARCHAR[]"),
+        ("note", "VARCHAR"),
+        ("addr", "STRUCT(city VARCHAR, zip INTEGER)"),
+    ] {
+        assert_eq!(types.get(col).map(String::as_str), Some(ty), "{col}: all types {types:?}");
+    }
+    let row = |id: i32| {
+        scalar_string(&format!(
+            "ATTACH '{}' AS d (READ_ONLY); SELECT concat_ws('|', shipped, \"at\", amount, hex(raw), \
+             status, tags[2], coalesce(note, 'NULL'), addr.city, addr.zip, orderdate) FROM d.t WHERE id = {}",
+            db, id
+        ))
+    };
+    assert_eq!(row(1), "2024-01-15|2024-01-15 10:30:00|123.45|0041FF|closed|b|hi|Oslo|150|1992-01-01");
+    assert_eq!(row(2), "2024-01-15|2024-01-15 10:30:00|-5.00|0041FF|closed|b|NULL|Oslo|150|1992-01-01");
 }
 
 #[test]

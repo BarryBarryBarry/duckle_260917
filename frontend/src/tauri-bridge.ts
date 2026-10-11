@@ -582,9 +582,12 @@ export type WatermarkEntry = {
     editable?: boolean;
 };
 
+// The server keeps a pipeline's state under its id (its file name), as every
+// run of it does; the display name is only for a pipeline without one.
 export async function watermarkList(
     workspacePath: string,
     pipelineName: string,
+    pipelineId?: string | null,
 ): Promise<WatermarkEntry[]> {
     // The web edition's server answers watermark_list, watermark_set and
     // watermark_clear. These returned at once outside the desktop app, so the
@@ -594,6 +597,7 @@ export async function watermarkList(
         return await invoke<WatermarkEntry[]>('watermark_list', {
             workspacePath,
             pipelineName,
+            pipelineId: pipelineId ?? null,
         });
     } catch (err) {
         console.warn('watermarkList failed', err);
@@ -608,6 +612,7 @@ export async function watermarkSet(
     kind: string,
     value: string,
     valueType?: string,
+    pipelineId?: string | null,
 ): Promise<void> {
     if (!isTauri() && !isWebBackend()) return;
     await invoke('watermark_set', {
@@ -617,6 +622,7 @@ export async function watermarkSet(
         kind,
         value,
         valueType,
+        pipelineId: pipelineId ?? null,
     });
 }
 
@@ -624,9 +630,10 @@ export async function watermarkClear(
     workspacePath: string,
     pipelineName: string,
     nodeId: string,
+    pipelineId?: string | null,
 ): Promise<void> {
     if (!isTauri() && !isWebBackend()) return;
-    await invoke('watermark_clear', { workspacePath, pipelineName, nodeId });
+    await invoke('watermark_clear', { workspacePath, pipelineName, nodeId, pipelineId: pipelineId ?? null });
 }
 
 // ---- Engine install (first-run guided setup) ---------------------------
@@ -1242,7 +1249,7 @@ export async function cancelPipeline(): Promise<void> {
 export type StageSql = {
     node_id: string;
     label: string;
-    kind: 'view' | 'sink';
+    kind: 'view' | 'table' | 'sink';
     sql: string;
 };
 

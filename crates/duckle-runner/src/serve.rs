@@ -1014,7 +1014,7 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
                 return respond_err("400 Bad Request", &e);
             }
             duckle_duckdb_engine::context::apply_workspace_context_then_time(&mut doc, &state.workspace);
-            let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
+            let name = editor_state_name(&state.workspace, &args).unwrap_or_else(|| "web".to_string());
             let engine = DuckdbEngine::new(state.duckdb.clone());
             // Registered before the queue, so a Stop pressed while it waits lands.
             let _running = state.editor_runs.start(&who.label, &engine);
@@ -1092,22 +1092,22 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
         }
         "watermark_list" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-            match args.get("pipelineName").and_then(|v| v.as_str()) {
+            match editor_state_name(&state.workspace, &args) {
                 Some(name) => {
-                    let entries = duckle_duckdb_engine::watermark::list(&state.workspace, name);
+                    let entries = duckle_duckdb_engine::watermark::list(&state.workspace, &name);
                     respond_json(&serde_json::to_value(&entries).unwrap_or(json!([])))
                 }
-                None => respond_err("400 Bad Request", "missing pipelineName"),
+                None => respond_err("400 Bad Request", "missing pipelineId or pipelineName"),
             }
         }
         "watermark_set" => {
             use duckle_duckdb_engine::watermark as wm;
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-            let name = args.get("pipelineName").and_then(|v| v.as_str());
+            let name = editor_state_name(&state.workspace, &args);
             let node = args.get("nodeId").and_then(|v| v.as_str());
-            let (name, node) = match (name, node) {
+            let (name, node) = match (name.as_deref(), node) {
                 (Some(n), Some(d)) => (n, d),
-                _ => return respond_err("400 Bad Request", "missing pipelineName or nodeId"),
+                _ => return respond_err("400 Bad Request", "missing pipelineId or pipelineName, or nodeId"),
             };
             // Same engine guard as every other surface: a write that would
             // replace a different kind of state is refused, not applied.
@@ -1135,17 +1135,14 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
         }
         "watermark_clear" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-            match (
-                args.get("pipelineName").and_then(|v| v.as_str()),
-                args.get("nodeId").and_then(|v| v.as_str()),
-            ) {
+            match (editor_state_name(&state.workspace, &args), args.get("nodeId").and_then(|v| v.as_str())) {
                 (Some(name), Some(node)) => {
-                    match duckle_duckdb_engine::watermark::clear(&state.workspace, name, node) {
+                    match duckle_duckdb_engine::watermark::clear(&state.workspace, &name, node) {
                         Ok(()) => respond_json(&json!({ "ok": true })),
                         Err(e) => respond_err("400 Bad Request", &e.to_string()),
                     }
                 }
-                _ => respond_err("400 Bad Request", "missing pipelineName or nodeId"),
+                _ => respond_err("400 Bad Request", "missing pipelineId or pipelineName, or nodeId"),
             }
         }
         "plans_list" => match duckle_duckdb_engine::plans::load(&state.workspace) {
@@ -1463,6 +1460,16 @@ fn begin_editor_run(
     }
 }
 
+/// The name an editor request keeps its saved state under: the pipeline's file,
+/// as every other run of it does. See `watermark::editor_state_name`.
+fn editor_state_name(workspace: &Path, args: &Value) -> Option<String> {
+    duckle_duckdb_engine::watermark::editor_state_name(
+        Some(workspace),
+        args.get("pipelineId").and_then(|v| v.as_str()),
+        args.get("pipelineName").and_then(|v| v.as_str()),
+    )
+}
+
 /// A value from the browser that may name a file: not empty, not `.` or `..`,
 /// and with no separator, drive colon or NUL.
 pub(crate) fn plain_file_name(s: &str) -> bool {
@@ -1533,7 +1540,7 @@ fn run_stream(
         return write_reply(stream, &respond_err("400 Bad Request", &e));
     }
     duckle_duckdb_engine::context::apply_workspace_context_then_time(&mut doc, &state.workspace);
-    let name = args.get("pipelineName").and_then(|v| v.as_str()).unwrap_or("web").to_string();
+    let name = editor_state_name(&state.workspace, &args).unwrap_or_else(|| "web".to_string());
     // Optional run-to-here target: when set, the engine runs only the subgraph
     // up to and including this node (partial run).
     let target = args
@@ -2838,7 +2845,7 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
                     // A step may be spelled as a bare id by the desktop editor; the run
                     // takes a workspace-relative file. Normalised so one plans.json means
                     // the same thing in both products.
-                    &duckle_duckdb_engine::plans::step_pipeline_file(pipeline),
+                    &duckle_duckdb_engine::plans::step_pipeline_path(&state.workspace, pipeline),
                     "plan",
                     &supplied,
                     None,
@@ -3521,7 +3528,11 @@ fn deploy_into(workspace: &Path, body: &Value) -> Result<Value, String> {
     let scheduled = match body.get("schedule") {
         Some(sched) if !sched.is_null() => {
             let mut s = sched.clone();
-            s["id"] = json!(name);
+            // Under the id the scheduler and the console know the pipeline by, its file
+            // stem. The whole name filed `nightly/orders` under an id no pipeline has, so a
+            // schedule deployed into a folder never fired and was never shown.
+            let id = target.file_stem().map_or_else(|| name.clone(), |s| s.to_string_lossy().into_owned());
+            s["id"] = json!(id);
             s["enabled"] = json!(false);
             save_schedule_at(workspace, &s)?;
             json!({ "saved": true, "enabled": false })
@@ -4919,7 +4930,7 @@ fn fire_plan(state: &State, plan_id: &str) {
         // #317: each pipeline is given the values its step binds for it.
         plan_step_outcome(execute_one_with(
             state,
-            &duckle_duckdb_engine::plans::step_pipeline_file(pipeline),
+            &duckle_duckdb_engine::plans::step_pipeline_path(&state.workspace, pipeline),
             "schedule",
             &sourced(values, "plan step"),
             None,
@@ -5446,6 +5457,31 @@ mod tests {
         assert!(!saved[0].enabled, "it must arrive switched off");
     }
 
+    /// A deployment may name a folder, and the pipeline lands in it. Its schedule was filed
+    /// under the whole name while the scheduler and the console know a pipeline by its file
+    /// stem, so a schedule deployed as `nightly/orders` never fired and was never shown.
+    #[test]
+    fn a_schedule_deployed_into_a_folder_is_one_the_scheduler_can_find() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+
+        deploy_into(ws, &serde_json::json!({
+            "name": "nightly/orders",
+            "pipeline": pipeline(),
+            "schedule": { "intervalSeconds": 60 },
+        }))
+        .expect("deploys");
+
+        let known: Vec<String> = super::discover_pipelines(ws).into_iter().map(|(_, id, _)| id).collect();
+        let saved = schedules::load(ws).expect("store readable");
+        assert_eq!(saved.len(), 1, "the schedule should travel");
+        assert!(
+            known.contains(&saved[0].pipeline_id),
+            "the schedule is for {:?}, and the scheduler knows only {known:?}",
+            saved[0].pipeline_id
+        );
+    }
+
     /// Deploying again is an update, and saying so is the difference between a deploy and
     /// an accident.
     #[test]
@@ -5686,6 +5722,57 @@ mod tests {
         super::fire_plan(&state, "nightly");
         assert!(ws.join("out").join("us.csv").exists(), "the step's value did not reach the run");
         assert!(!ws.join("out").join("eu.csv").exists(), "the run fell back to the default");
+    }
+
+    /// A deploy lands a pipeline at the workspace root, and the console's plan form offers
+    /// it by that file. Every step was sent to `pipelines/<id>.json`, so a plan could never
+    /// run a deployed pipeline: "not found: pipelines/report.json".
+    #[test]
+    fn a_plan_runs_a_pipeline_deployed_to_the_workspace_root() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| std::path::Path::new(b).exists())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN");
+            return;
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        std::fs::create_dir_all(ws.join("out")).unwrap();
+        std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
+        deploy_into(&ws, &serde_json::json!({ "name": "report", "pipeline": serde_json::json!({
+            "nodes": [{"id":"s","position":{"x":0,"y":0},"data":{"label":"s","componentId":"src.csv","properties":{"path":"${workspace}/in.csv","hasHeader":true}}},
+                      {"id":"k","position":{"x":0,"y":0},"data":{"label":"k","componentId":"snk.csv","properties":{"path":"${workspace}/out/report.csv"}}}],
+            "edges": [{"id":"e","source":"s","target":"k"}]}) }))
+        .expect("deploys");
+        // spelled as the console's plan form spells it: the file /api/pipelines lists
+        let offered: Vec<String> = super::discover_pipelines(&ws).into_iter().map(|(p, _, _)| super::rel(&ws, &p)).collect();
+        assert_eq!(offered, ["report.json"], "the pipeline the form offers");
+        duckle_duckdb_engine::plans::update(&ws, |list| {
+            list.push(duckle_duckdb_engine::plans::Plan {
+                id: "nightly".into(),
+                name: String::new(),
+                stop_on_failure: true,
+                steps: vec![duckle_duckdb_engine::plans::Step {
+                    name: "Report".into(),
+                    pipelines: offered.clone(),
+                    continue_on_failure: None,
+                    params: None,
+                }],
+            })
+        })
+        .unwrap();
+
+        let state = local_state_using(&ws, std::path::PathBuf::from(bin));
+        super::fire_plan(&state, "nightly");
+        assert!(ws.join("out").join("report.csv").exists(), "the scheduled plan did not run the deployed pipeline");
+
+        // and the same plan from the console's Run now, which resolves its steps separately
+        std::fs::remove_file(ws.join("out").join("report.csv")).unwrap();
+        let mut req = request("POST", "/api/plans/run", None);
+        req.body = serde_json::to_vec(&serde_json::json!({ "id": "nightly" })).unwrap();
+        let reply = route_console(&req, &state);
+        let body: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        assert_eq!(body["status"], "ok", "{body}");
+        assert!(ws.join("out").join("report.csv").exists(), "Run now did not run the deployed pipeline");
     }
 
     #[test]
@@ -7644,6 +7731,75 @@ mod tests {
         let (code, down) = cmd("metrics_runs", serde_json::json!({ "workspacePath": "/elsewhere", "query": { "page": 1 } }));
         assert_eq!((code, down["status"].clone()), (200, serde_json::json!(503)), "{down}");
         assert!(down["reason"].is_string());
+    }
+
+    /// An editor run, and so its saved state, was named after the pipeline's
+    /// display name; the CLI, the console and both schedulers name it after its
+    /// file. One pipeline kept two watermarks, and the Backfill panel showed the
+    /// editor's only.
+    #[test]
+    fn an_editor_run_and_the_backfill_panel_keep_state_under_the_pipeline_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let state = WebState {
+            workspace: ws.clone(),
+            duckdb: std::path::PathBuf::from("duckdb"),
+            dist: ws.clone(),
+            host: "127.0.0.1".into(),
+            run_lock: Gates::new(duckle_duckdb_engine::pools::Pools::from_limits(Default::default())),
+            console: console_auth::Console::configure(&ws, "127.0.0.1", Some("s3cret")).unwrap(),
+            editor_runs: Default::default(),
+        };
+        let cmd = |name: &str, body: serde_json::Value| {
+            let mut req = request("POST", &format!("/api/cmd/{name}"), Some("Bearer s3cret"));
+            req.body = serde_json::to_vec(&body).unwrap();
+            let reply = route_web(&req, &state);
+            (reply.code(), serde_json::from_slice::<serde_json::Value>(&reply.body).unwrap_or_default())
+        };
+        let ask = |extra: serde_json::Value| {
+            let mut body = serde_json::json!({ "pipelineId": "orders", "pipelineName": "Orders (nightly)" });
+            body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            body
+        };
+        let saved = |folder: &str| ws.join("state").join(folder).join("inc.json");
+        std::fs::create_dir_all(saved("Orders _nightly_").parent().unwrap()).unwrap();
+        std::fs::write(saved("Orders _nightly_"), r#"{"value":"500","type":"BIGINT"}"#).unwrap();
+
+        // The panel shows what the editor saved, now kept under the file's name.
+        let (code, listed) = cmd("watermark_list", ask(serde_json::json!({})));
+        assert_eq!(code, 200, "{listed}");
+        assert_eq!(listed[0]["value"], "500", "{listed}");
+        assert!(saved("orders").exists() && !saved("Orders _nightly_").exists());
+        let set = ask(serde_json::json!({ "nodeId": "inc", "kind": "incremental", "value": "450", "valueType": "BIGINT" }));
+        assert_eq!(cmd("watermark_set", set).0, 200);
+        assert!(std::fs::read_to_string(saved("orders")).unwrap().contains("450"));
+
+        // Both ways the editor runs a pipeline run it under the same name.
+        let run = ask(serde_json::json!({ "pipeline": { "nodes": [], "edges": [] } }));
+        assert_eq!(cmd("run_pipeline", run.clone()).0, 200);
+        let owner = state.console.identify(Some("Bearer s3cret"), None).expect("the owner signs in");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = serde_json::to_vec(&run).unwrap();
+        std::thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let (mut stream, _) = listener.accept().unwrap();
+                super::run_stream(&mut stream, &state, &owner, &body)
+            });
+            let mut conn = std::net::TcpStream::connect(addr).unwrap();
+            let mut text = String::new();
+            let _ = std::io::Read::read_to_string(&mut conn, &mut text);
+            server.join().unwrap().expect("the stream completes");
+        });
+        let names: Vec<String> = std::fs::read_dir(duckle_duckdb_engine::retry::dir(&ws))
+            .expect("the runs left receipts")
+            .flatten()
+            .map(|r| {
+                let receipt: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(r.path()).unwrap()).unwrap();
+                receipt["pipeline_name"].as_str().or(receipt["pipelineName"].as_str()).unwrap_or_default().to_string()
+            })
+            .collect();
+        assert_eq!(names, ["orders", "orders"]);
     }
 
     /// The web editor's Schedules dialog reads and writes the workspace's real

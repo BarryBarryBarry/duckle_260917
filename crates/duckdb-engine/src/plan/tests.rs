@@ -1066,6 +1066,53 @@
         assert!(pq.contains("COMPRESSION 'zstd'"), "{pq}");
     }
 
+    /// The source form stores "First row is header" as text; a hand-written
+    /// pipeline or an import as a boolean. Every CSV source reads both the same.
+    #[test]
+    fn a_header_choice_reads_the_same_as_text_or_boolean() {
+        use builders::{header_row, HeaderRow};
+        let row = |v: serde_json::Value| header_row(&serde_json::json!({ "hasHeader": v }));
+        assert_eq!(row(serde_json::json!(true)), HeaderRow::Yes);
+        assert_eq!(row(serde_json::json!(false)), HeaderRow::No);
+        assert_eq!(row(serde_json::json!("true")), HeaderRow::Yes);
+        assert_eq!(row(serde_json::json!("false")), HeaderRow::No);
+        assert_eq!(row(serde_json::json!(" Detect ")), HeaderRow::Detect);
+        assert_eq!(header_row(&serde_json::json!({})), HeaderRow::Yes, "absent is yes, as it was");
+    }
+
+    /// A CSV sink's records are counted outside DuckDB's reader, by the line
+    /// breaks outside quotes (lib.rs, count_csv_records). A delimiter or null
+    /// string holding a quote or a line break throws that off, so such a sink
+    /// is not offered the count and its upstream counts itself, as before.
+    #[test]
+    fn a_csv_sink_is_offered_a_record_count_only_with_plain_separators() {
+        let offered = |comp: &str, props: serde_json::Value| {
+            let doc = pipeline_from_json(
+                &serde_json::json!({
+                    "nodes": [
+                        {"id":"s","position":{"x":0,"y":0},"data":{
+                            "label":"S","componentId":"src.csv","properties":{"path":"/tmp/a.csv"}}},
+                        {"id":"k","position":{"x":0,"y":0},"data":{
+                            "label":"K","componentId":comp,"properties":props}}
+                    ],
+                    "edges":[{"id":"e","source":"s","target":"k","data":{"connectionType":"main"}}]
+                })
+                .to_string(),
+            );
+            let stage = compile(&doc).unwrap().stages.into_iter().find(|s| s.node_id == "k").unwrap();
+            match stage.sink_count {
+                Some(SinkCount::CsvRecords { header }) => Some(header),
+                _ => None,
+            }
+        };
+        use serde_json::json;
+        assert_eq!(offered("snk.csv", json!({"path":"/tmp/o.csv"})), Some(true));
+        assert_eq!(offered("snk.csv", json!({"path":"/tmp/o.csv","writeHeader":false})), Some(false));
+        assert_eq!(offered("snk.tsv", json!({"path":"/tmp/o.tsv"})), Some(true));
+        assert_eq!(offered("snk.csv", json!({"path":"/tmp/o.csv","delimiter":"\""})), None);
+        assert_eq!(offered("snk.csv", json!({"path":"/tmp/o.csv","nullValue":"\n"})), None);
+    }
+
     /// #367: a line-oriented file sink appends; where adding lines to the end
     /// of the file would not add rows to it, the append is refused, as before,
     /// rather than replacing the file.
@@ -7198,6 +7245,25 @@ fn the_missing_duckdb_message_helps_a_reader_with_no_desktop_app() {
         msg.contains("PATH"),
         "installing a duckdb on PATH is the other fix, and the one a package \
          manager performs: {msg}"
+    );
+}
+
+/// The runner hands over a bare `duckdb` when PATH is where it found one, for
+/// `Command` to look up. Read as a file in the working directory, it was never
+/// there, and that message was the answer to every run.
+#[test]
+fn a_bare_duckdb_name_is_looked_up_on_path_and_a_path_is_not() {
+    let tmp = tempfile::tempdir().unwrap();
+    let name = if cfg!(windows) { "duckdb.exe" } else { "duckdb" };
+    std::fs::write(tmp.path().join(name), "").unwrap();
+    let path = Some(tmp.path().as_os_str());
+
+    assert!(crate::cli_present_on(std::path::Path::new("duckdb"), path), "on PATH is present");
+    let empty = tempfile::tempdir().unwrap();
+    assert!(!crate::cli_present_on(std::path::Path::new("duckdb"), Some(empty.path().as_os_str())), "nowhere is missing");
+    assert!(
+        !crate::cli_present_on(std::path::Path::new("bin/duckdb"), path),
+        "a path names one place to look, not a name to search for"
     );
 }
 

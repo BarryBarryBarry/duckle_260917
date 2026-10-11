@@ -204,7 +204,7 @@ Real pipelines, built and run in Duckle - not mockups.
 4. **Build a pipeline two ways:**
    - **Drag + wire**: drag a **CSV source** in, point it at [`samples/orders.csv`](samples/orders.csv), hit **Autodetect schema**. Drag a **Filter**, wire it up. Drag a **Parquet sink** with an output path. Press **Run**, watch the nodes light up.
    - **Ask Duckie**: click the **Sparkles** icon (top-right of the toolbar), type *"read orders.csv, filter where status = 'paid', write to paid.parquet"*. When Duckie streams back a pipeline, click **Insert into canvas**.
-5. **Inspect.** Click any node to see its generated SQL in the **Plan** tab and a live row sample in the **Preview** tab.
+5. **Inspect.** Click any node for a live row sample in its **Preview** tab. The **Plan** tab, beside **Canvas**, shows the SQL generated for every stage.
 
 That's a real, native ETL pipeline built and run in under a minute. CSV is just the easiest first node; swap in Parquet, JSON, S3, Snowflake, MongoDB, or Stripe the same way.
 
@@ -327,7 +327,7 @@ A worked example using the bundled `samples/orders.csv` data.
 
 - Press **Run** in the toolbar. Nodes light up in execution order; row counts appear under each.
 - Open the **Output** tab (bottom panel) to see per-stage timing.
-- Click any node to inspect generated SQL in **Plan** + sampled rows in **Preview**.
+- Click any node for sampled rows in its **Preview** tab; the **Plan** tab beside **Canvas** shows the generated SQL for every stage.
 
 ### 5. Iterate
 
@@ -815,7 +815,9 @@ finished.
 `${...}` does not address a single dataset, and it is emitted with
 `unresolved: true` rather than silently joining to the wrong thing in someone's
 graph. Datasets come from the catalog joined to the receipt **by node id**, so a
-node the run never reached is not reported as touched: absent is not zero.
+node the run never reached is not reported as touched: absent is not zero. A run
+that finds the catalog missing or out of date builds it, so a new workspace needs
+no `catalog build` before its events name anything.
 
 **Telemetry cannot fail a run.** Events are appended to
 `logs/openlineage.ndjson` first and only then POSTed, so a collector that is
@@ -1700,6 +1702,12 @@ possibly breaking      /lake/orders.parquet removes note, and nothing in this wo
 only breaking if something reads it - the same edit is additive in one workspace
 and an outage in another, and only the consumer graph can tell them apart.
 
+**Most sinks declare no schema of their own**: they take their columns from
+upstream, and the editor saves them with an empty one. Such an asset is compared
+through the node that feeds the sink, the same way in both revisions, so a
+declared schema is never set against a fallback. An asset with nothing to
+compare on one side is reported as not checked rather than counted as clean.
+
 | change | verdict |
 |---|---|
 | add a column | compatible - nothing can bind a column that did not exist |
@@ -2090,6 +2098,17 @@ duckle-runner backfill set   --pipeline ./pipelines/daily.json --node inc --valu
 duckle-runner backfill clear --pipeline ./pipelines/daily.json --node inc
 duckle-runner backfill list  --pipeline ./pipelines/daily.json --json      # for CI and agents
 ```
+
+**One pipeline, one folder.** Every run of a pipeline keeps its state under the
+pipeline's file name, `state/daily/` for `pipelines/daily.json`, whether the
+editor, the CLI, the console or either scheduler started it. So
+`backfill list --pipeline pipelines/daily.json --workspace .` shows what an
+editor run saved, and the editor's Backfill panel edits what a scheduled run
+reads. Editor runs used to file it under the display name instead, so a
+watermark built up in the editor started over the first time anything else ran
+the pipeline, and a CDC feed delivered again what the editor had applied. The
+first editor run, or Backfill panel, after upgrading moves that state across,
+node by node where the file name has none of its own yet.
 
 **Six node kinds keep state in that folder, and only two resume from a value a
 person can write down.** `xf.incremental` (a watermark) and
@@ -2728,7 +2747,9 @@ fail**. A lock resolves for every platform, so something absent here may simply
 not apply here; a package that really is needed and really is missing raises
 `ImportError` on the first row, which is already unambiguous. What does fail is
 a version that contradicts the lock, or a package the lock never mentions -
-those are the two shapes of "someone changed this environment".
+those are the two shapes of "someone changed this environment". The workspace's
+own project is not compared at all: `uv init` locks it as a virtual package,
+which uv never installs.
 
 **A deployed pipeline cannot silently run against an unprepared target.** A
 bundle built from a workspace with a `code.python` step carries `uv.lock` and
@@ -3541,7 +3562,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 
 | Group | Connectors | Status |
 |---|---|---|
-| **Files** | CSV, TSV, Parquet, JSON, JSONL / NDJSON, Excel (.xlsx), YAML, TOML, Fixed-width (mainframe / banking positional dumps), XML (slash-separated rowPath), Apache Avro (.avro / .ocf, pure-Rust) | Available |
+| **Files** | CSV, TSV, Parquet, JSON, JSONL / NDJSON, Excel (.xlsx), YAML, TOML, Fixed-width (mainframe / banking positional dumps), XML (slash-separated rowPath), Apache Avro (.avro / .ocf, pure-Rust, every column typed as the file's schema declares, decimals, dates and timestamps included) | Available |
 | **Geospatial files** | GeoJSON, Shapefile, GeoPackage, KML, GPX, GML via the `spatial` extension | Available (lazy-loaded) |
 | **File Geodatabase** | Esri File Geodatabase (`.gdb`) feature classes via `ST_Read` with a per-layer selector | Available (lazy-loaded) |
 | **Hugging Face** | Hugging Face Hub datasets over `hf://` (Parquet / CSV / JSON, globs, revisions); token for private or gated datasets | Available |
@@ -3643,7 +3664,7 @@ Validators split their input: passing rows continue on the main port, failures r
 
 | Capability | What it does |
 |---|---|
-| **Inline SQL** | Write a `SELECT`; the upstream node is exposed as `input`, result runs as a real materialized stage. A **raw SQL** mode runs verbatim SQL (a leading `WITH` / multiple CTEs / UNIONs) with no input-CTE wrapper |
+| **Inline SQL** | Write a `SELECT`; the upstream node is exposed as `input`, result runs as a real materialized stage. A **raw SQL** mode runs verbatim SQL (a leading `WITH` / multiple CTEs / UNIONs) with no input-CTE wrapper, and takes any number of wired inputs, each named by its node id |
 | **SQL Template** | Parameterized SQL with `${context.var}` substitution |
 | **SQL Routines** | Reusable, named SQL saved in the workspace |
 | **dbt** | Run a dbt project (or one inline model) as a node, against the pipeline's DuckDB. Wire several upstream sources in and the project reads them all via dbt `sources`, so one project models across Postgres, MySQL, files, and lakes at once. Powered by the dbt Fusion engine, fetched free at first launch (Apache dbt-core fallback); no Python setup. |

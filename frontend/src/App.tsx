@@ -3031,6 +3031,7 @@ export default function App() {
 
             {backfillModalPipelineId ? (
                 <BackfillModal
+                    pipelineId={backfillModalPipelineId}
                     pipelineName={
                         repo.find(r => r.id === backfillModalPipelineId)?.name ??
                         backfillModalPipelineId

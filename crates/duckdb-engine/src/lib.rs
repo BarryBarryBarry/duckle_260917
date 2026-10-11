@@ -105,6 +105,10 @@ pub(crate) use util::*;
 pub use util::{is_secret_prop_key, literal_secrets, SECRET_NEEDLES};
 pub use history::{append_run_record, load_run_history, record_run, RunRecord};
 pub use plan::{CompiledPipeline, PipelineDoc, Stage, StageKind};
+
+/// The Duckle release this was built from, as apps/desktop/tauri.conf.json
+/// names it (build.rs). The crates' own version is a 0.0.1 placeholder.
+pub const VERSION: &str = env!("DUCKLE_VERSION");
 pub use connection_test::ConnectionTest;
 use plan::{
     quote_ident, AiChunkSpec, AiClassifySpec, AiDedupeSpec, AiEmbedSpec, AiLlmSpec, AiOnInvalid,
@@ -391,6 +395,33 @@ pub(crate) fn duckdb_missing_message(bin: &std::path::Path) -> String {
     )
 }
 
+/// Whether the DuckDB CLI an engine was handed can be started.
+///
+/// A path is a file to look for. A bare name is what `Command` looks up on
+/// PATH, and the runner hands one over when PATH is where it found DuckDB;
+/// checked with `exists()` alone, the name was read against the working
+/// directory, so a DuckDB installed on PATH failed every run as "not found".
+pub(crate) fn cli_present(bin: &std::path::Path) -> bool {
+    cli_present_on(bin, std::env::var_os("PATH").as_deref())
+}
+
+fn cli_present_on(bin: &std::path::Path, path: Option<&std::ffi::OsStr>) -> bool {
+    if bin.exists() {
+        return true;
+    }
+    let mut parts = bin.components();
+    let bare = matches!((parts.next(), parts.next()), (Some(std::path::Component::Normal(_)), None));
+    if !bare {
+        return false;
+    }
+    // What `Command` also tries on Windows for a name without an extension.
+    let exe = (cfg!(windows) && bin.extension().is_none()).then(|| bin.with_extension("exe"));
+    path.is_some_and(|p| {
+        std::env::split_paths(p)
+            .any(|dir| dir.join(bin).is_file() || exe.as_ref().is_some_and(|e| dir.join(e).is_file()))
+    })
+}
+
 impl DuckdbEngine {
     /// Construct an engine pointing at a DuckDB CLI binary. The binary
     /// need not exist yet - calls fail with a clear error if it's
@@ -586,7 +617,7 @@ impl DuckdbEngine {
     }
 
     pub fn is_available(&self) -> bool {
-        self.bin.exists()
+        cli_present(&self.bin)
     }
 
     /// Signal any in-flight run to stop. The polling loop in `run` sees
@@ -628,7 +659,7 @@ impl DuckdbEngine {
     /// cancel was requested.
     fn run(&self, db: Option<&Path>, sql: &str, json: bool) -> Result<String, EngineError> {
         crate::policy::refuse_unsafe_sql(sql).map_err(EngineError::Query)?;
-        if !self.bin.exists() {
+        if !cli_present(&self.bin) {
             return Err(EngineError::Config(format!(
                 "DuckDB engine isn't installed (expected at {}). Open Setup to install it.",
                 self.bin.display()
@@ -1621,7 +1652,7 @@ impl DuckdbEngine {
             return RunResult::failed(total_start, e.to_string());
         }
 
-        if !self.bin.exists() {
+        if !cli_present(&self.bin) {
             return RunResult::failed(total_start, duckdb_missing_message(&self.bin));
         }
 
@@ -3018,7 +3049,7 @@ impl DuckdbEngine {
                             self.sink_rows(
                                 &db_path,
                                 stage.from.as_deref(),
-                                sink_self_count(stage),
+                                sink_self_count(stage, true),
                                 &nodes,
                             ),
                             None,
@@ -3461,7 +3492,7 @@ impl DuckdbEngine {
         // sink reports (see drain_batched_markers).
         let counted_by_sink: std::collections::HashSet<&str> = stages
             .iter()
-            .filter(|s| sink_self_count(s).is_some())
+            .filter(|s| sink_self_count(s, false).is_some())
             .filter_map(|s| s.from.as_deref())
             .collect();
         // The span a publish group's transaction covers: from the first grouped
@@ -3602,23 +3633,44 @@ impl DuckdbEngine {
             // else counts its relation, but only the first time this batch
             // names it: a sink's target is normally the view the preceding
             // stage has just counted.
-            let count_from: Option<String> = if let Some(f) = sink_self_count(stage) {
-                Some(f)
-            } else if matches!(stage.kind, plan::StageKind::View)
-                && counted_by_sink.contains(stage.node_id.as_str())
-            {
-                None
-            } else {
-                match count_target {
-                    Some(t) if counted.insert(t.to_string()) => Some(plan::quote_ident(t)),
-                    _ => None,
-                }
-            };
-            match count_from {
-                Some(t) => batched_sql.push_str(&format!(
-                    "COPY (SELECT COUNT(*) AS _duckle_r{} FROM {}) TO '{}' (FORMAT 'json', ARRAY false);\n",
+            let count_of = |from: &str| {
+                format!(
+                    "SELECT COUNT(*) AS _duckle_r{} FROM {}",
                     Self::count_projection(counts_need_every_column),
-                    t,
+                    from
+                )
+            };
+            let count_select: Option<String> = match sink_self_count(stage, false) {
+                // Counted while attached and the figure kept, so the file is
+                // detached again before the marker: the marker stays the stage's
+                // last statement, and a later stage writing the same file finds
+                // it free.
+                Some(SelfCount::Sql { attach: Some(db), from }) => {
+                    batched_sql.push_str(&format!(
+                        "{}CREATE OR REPLACE TEMP TABLE duckle_cnt_rows AS SELECT COUNT(*) AS n FROM {}; DETACH duckle_cnt;\n",
+                        attach_for_count(&db),
+                        from,
+                    ));
+                    Some("SELECT n AS _duckle_r FROM duckle_cnt_rows".to_string())
+                }
+                Some(SelfCount::Sql { attach: None, from }) => Some(count_of(&from)),
+                // Counted once the batch has published the file (below the run),
+                // so the marker carries no figure.
+                Some(SelfCount::CsvRecords { .. }) => None,
+                None if matches!(stage.kind, plan::StageKind::View)
+                    && counted_by_sink.contains(stage.node_id.as_str()) =>
+                {
+                    None
+                }
+                None => match count_target {
+                    Some(t) if counted.insert(t.to_string()) => Some(count_of(&plan::quote_ident(t))),
+                    _ => None,
+                },
+            };
+            match count_select {
+                Some(select) => batched_sql.push_str(&format!(
+                    "COPY ({}) TO '{}' (FORMAT 'json', ARRAY false);\n",
+                    select,
                     path_to_sql(&marker),
                 )),
                 None => batched_sql.push_str(&format!(
@@ -3798,6 +3850,38 @@ impl DuckdbEngine {
             }
         }
 
+        // A CSV sink's records are counted once its file is published, outside
+        // the script, and its marker carried no figure: fill in the sink, and
+        // the view it wrote, which skipped its own count for it.
+        for stage in stages.iter().take(completed) {
+            let Some(SelfCount::CsvRecords { path, header }) = sink_self_count(stage, true) else {
+                continue;
+            };
+            if nodes.get(&stage.node_id).map_or(true, |n| n.rows.is_some()) {
+                continue;
+            }
+            let from = stage.from.as_deref();
+            let Some(rows) = count_csv_records(&path, header)
+                .or_else(|| from.and_then(|f| self.count_rows(db_path, f).ok()))
+            else {
+                continue;
+            };
+            for id in std::iter::once(stage.node_id.as_str()).chain(from) {
+                if let Some(n) = nodes.get_mut(id).filter(|n| n.rows.is_none()) {
+                    n.rows = Some(rows);
+                    on_event(PipelineEvent::StageFinished {
+                        node_id: id.to_string(),
+                        kind: n.kind.clone().unwrap_or_else(|| "transform".into()),
+                        status: n.status.clone(),
+                        rows: Some(rows),
+                        duration_ms: n.duration_ms.unwrap_or(0),
+                        error: None,
+                        sql: None,
+                    });
+                }
+            }
+        }
+
         if let Some(idx) = failed_stage_idx {
             if idx < stages.len() {
                 let stage = &stages[idx];
@@ -3947,7 +4031,7 @@ impl DuckdbEngine {
         &self,
         db: &Path,
         from: Option<&str>,
-        self_count: Option<String>,
+        self_count: Option<SelfCount>,
         nodes: &std::collections::BTreeMap<String, NodeRunStatus>,
     ) -> Option<u64> {
         // Order is by cost. A figure the upstream already recorded is free; the
@@ -3957,8 +4041,15 @@ impl DuckdbEngine {
         if let Some(rows) = from.and_then(|f| nodes.get(f)).and_then(|n| n.rows) {
             return Some(rows);
         }
-        if let Some(expr) = self_count {
-            if let Ok(n) = self.count_from_expr(db, &expr) {
+        if let Some(sc) = self_count {
+            let counted = match sc {
+                SelfCount::Sql { attach, from } => {
+                    let prelude = attach.as_deref().map(attach_for_count).unwrap_or_default();
+                    self.count_from_expr(db, &prelude, &from).ok()
+                }
+                SelfCount::CsvRecords { path, header } => count_csv_records(&path, header),
+            };
+            if let Some(n) = counted {
                 return Some(n);
             }
             // Reading the file back can fail where counting the relation would
@@ -3993,14 +4084,14 @@ fn count_projection(every_column: bool) -> &'static str {
 }
 
     fn count_rows(&self, db: &Path, name: &str) -> Result<u64, EngineError> {
-        self.count_from_expr(db, &plan::quote_ident(name))
+        self.count_from_expr(db, "", &plan::quote_ident(name))
     }
 
     /// COUNT(*) over an arbitrary FROM-expression, not just a quoted relation.
     /// `sink_self_count` hands back `read_parquet('...')`, which `count_rows`
-    /// would quote into an identifier.
-    fn count_from_expr(&self, db: &Path, from: &str) -> Result<u64, EngineError> {
-        let sql = format!("SELECT COUNT(*) AS n FROM {};", from);
+    /// would quote into an identifier, or a table that `prelude` attaches.
+    fn count_from_expr(&self, db: &Path, prelude: &str, from: &str) -> Result<u64, EngineError> {
+        let sql = format!("{}SELECT COUNT(*) AS n FROM {};", prelude, from);
         let rows = self.run_rows(Some(db), &sql)?;
         let n = rows
             .first()
@@ -4309,7 +4400,7 @@ fn count_projection(every_column: bool) -> &'static str {
         //
         // Guarded here rather than in the caller: this is the code that holds
         // the loaded gun, and a sink has no output columns to describe anyway.
-        if stage.kind != "view" {
+        if stage.kind == "sink" {
             analysis.note = Some(format!(
                 "node {node_id:?} is a {} stage, which produces no relation to describe - and running it to find out would perform its writes",
                 stage.kind
@@ -4345,6 +4436,25 @@ fn count_projection(every_column: bool) -> &'static str {
                     "node {node_id:?} does not compile to a plain view, so describing it would run something with effects. Only derived relations can be described this way."
                 ),
             });
+            return Ok(analysis);
+        }
+        // A wired input whose columns nobody gave gets no stub, and DuckDB then
+        // says a table of that name does not exist: true of the stub database,
+        // false of the pipeline. The editor sends only the inputs it knows, so
+        // an SCD node read as broken until something had looked at its history.
+        let mut unknown: Vec<&str> = Vec::new();
+        for e in doc.edges.iter().filter(|e| e.target == node_id && plan::is_data_edge(e)) {
+            let given = inputs.iter().any(|(name, _)| *name == e.source);
+            if !given && !unknown.contains(&e.source.as_str()) {
+                unknown.push(e.source.as_str());
+            }
+        }
+        if !unknown.is_empty() {
+            let names = unknown.iter().map(|u| format!("{u:?}")).collect::<Vec<_>>().join(", ");
+            analysis.note = Some(format!(
+                "node {node_id:?} reads {names}, whose columns are not known yet (declare or detect that \
+                 input's schema), so it cannot be checked until they are"
+            ));
             return Ok(analysis);
         }
 
@@ -6756,8 +6866,76 @@ fn append_staged(staged: &str, dest: &str, header: bool) -> Result<(), String> {
     std::fs::remove_file(staged).map_err(|e| format!("removing {}: {}", staged, e))
 }
 
-fn sink_self_count(stage: &plan::Stage) -> Option<String> {
-    if stage.component_id != "snk.parquet" {
+/// What a sink counts in place of its upstream: the rows it has just written,
+/// read back from where they landed.
+enum SelfCount {
+    /// Counted in SQL: `from`, once `attach` (a DuckDB file) is attached
+    /// read-only as `duckle_cnt`.
+    Sql { attach: Option<String>, from: String },
+    /// A CSV file, counted by [`count_csv_records`] once it is published.
+    CsvRecords { path: String, header: bool },
+}
+
+/// Attaches a sink's DuckDB file read-only, as `duckle_cnt`, for its count.
+fn attach_for_count(db: &str) -> String {
+    format!("ATTACH '{}' AS duckle_cnt (READ_ONLY); ", sql_escape(db))
+}
+
+/// Records in a CSV file DuckDB wrote: the line breaks outside quotes, less a
+/// header line. DuckDB quotes any field holding a line break and doubles a
+/// quote inside one, so flipping on every quote leaves only the ends of records
+/// outside. Read here rather than through DuckDB's CSV reader, which refuses a
+/// line over its maximum size: a count that failed would fail a run whose write
+/// had succeeded, and this one only has to find line breaks.
+///
+/// None for anything it cannot count exactly: a zstd file (no decoder here), or
+/// a quote left open at the end, which DuckDB never writes.
+fn count_csv_records(path: &str, header: bool) -> Option<u64> {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    let got = std::fs::File::open(path).ok()?.read(&mut magic).ok()?;
+    let file = std::fs::File::open(path).ok()?;
+    let mut reader: Box<dyn Read> = match &magic[..got] {
+        [0x1f, 0x8b, ..] => Box::new(flate2::read::MultiGzDecoder::new(file)),
+        [0x28, 0xb5, 0x2f, 0xfd] => return None,
+        _ => Box::new(file),
+    };
+    let mut buf = vec![0u8; 1 << 16];
+    let (mut quoted, mut breaks, mut last) = (false, 0u64, b'\n');
+    loop {
+        let n = reader.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        for &b in &buf[..n] {
+            if b == b'"' {
+                quoted = !quoted;
+            } else if b == b'\n' && !quoted {
+                breaks += 1;
+            }
+        }
+        last = buf[n - 1];
+    }
+    if quoted {
+        return None;
+    }
+    // A last record without a line break of its own still counts.
+    let lines = breaks + u64::from(last != b'\n');
+    Some(lines.saturating_sub(u64::from(header)))
+}
+
+/// `published`: the staged file has already been renamed onto its destination.
+/// The per-stage path publishes a stage before it counts it; the batched path
+/// counts inside its own script, before the publish.
+fn sink_self_count(stage: &plan::Stage, published: bool) -> Option<SelfCount> {
+    if stage.component_id == "snk.duckdb" {
+        return duckdb_sink_self_count(stage);
+    }
+    let csv_header = match stage.sink_count {
+        Some(plan::SinkCount::CsvRecords { header }) => Some(header),
+        _ => None,
+    };
+    if stage.component_id != "snk.parquet" && csv_header.is_none() {
         return None;
     }
     // Absent means overwrite for a file sink, as at the direct-write check above.
@@ -6767,9 +6945,13 @@ fn sink_self_count(stage: &plan::Stage) -> Option<String> {
     if stage.sql.contains("PARTITION_BY") {
         return None;
     }
-    // The staged file when this sink stages: in the batched path this COUNT is a
-    // statement in the same script, so it runs before the publish.
-    let path = stage.staged_write.as_deref().or(stage.sink_path.as_deref())?;
+    // The staged file until it is published, the destination after. Counting
+    // the staged name once it had been renamed found nothing, and the per-stage
+    // path then re-ran the whole upstream to count instead.
+    let path = match published {
+        false => stage.staged_write.as_deref().or(stage.sink_path.as_deref()),
+        true => stage.sink_path.as_deref(),
+    }?;
     // read_parquet globs, and the sink wrote ONE literal file. Measured against
     // DuckDB 1.5.4: `o[12].parquet` expands and counts files this sink never
     // wrote, and `o{1,2}.parquet` raises "No files found that match the
@@ -6780,10 +6962,50 @@ fn sink_self_count(stage: &plan::Stage) -> Option<String> {
     if !is_local_path(path) || path.contains(['*', '?', '[', '{']) {
         return None;
     }
-    Some(format!(
-        "read_parquet('{}')",
-        path.replace(std::path::MAIN_SEPARATOR, "/").replace('\'', "''")
-    ))
+    Some(match csv_header {
+        Some(header) => SelfCount::CsvRecords { path: path.to_string(), header },
+        None => SelfCount::Sql {
+            attach: None,
+            from: format!(
+                "read_parquet('{}')",
+                path.replace(std::path::MAIN_SEPARATOR, "/").replace('\'', "''")
+            ),
+        },
+    })
+}
+
+/// A DuckDB file sink that replaced its table holds exactly this run's rows,
+/// and DuckDB counts a table from its row-group metadata: 0.2 ms for 6M rows,
+/// where a CSV source counting itself reads the whole file again - 84 s of a
+/// 209 s load of 80M taxi rows. The sink's own SQL detaches the file when it
+/// finishes, so the count attaches it again, read-only.
+fn duckdb_sink_self_count(stage: &plan::Stage) -> Option<SelfCount> {
+    // Absent means overwrite, as in build_db_sink. Every other mode leaves rows
+    // in the table that this run did not write.
+    if !matches!(stage.sink_mode.as_deref(), None | Some("overwrite")) {
+        return None;
+    }
+    // A publish group keeps its attachment open across stages, and a runtime
+    // spec writes some other way than the SQL whose table is counted here.
+    if stage.publish_group.is_some() || stage.runtime.is_some() {
+        return None;
+    }
+    let Some(plan::SinkCount::Table { database: db, table }) = &stage.sink_count else {
+        return None;
+    };
+    // Re-opening is only safe for a file. `:memory:` is gone once the sink
+    // detaches it, and `md:` or `s3://` would be a remote connection made for a
+    // number - which, under the batched path's -bail, fails a run whose write
+    // had already succeeded. A one-letter prefix is a Windows drive.
+    let d = db.trim();
+    let scheme = d.split_once(':').map_or(false, |(s, _)| s.len() > 1);
+    if d.is_empty() || d.starts_with(':') || scheme {
+        return None;
+    }
+    Some(SelfCount::Sql {
+        attach: Some(db.clone()),
+        from: format!("duckle_cnt.{}", plan::quote_ident(table)),
+    })
 }
 
 /// Views whose row count a downstream sink will supply for free, so counting
@@ -6808,7 +7030,7 @@ fn views_counted_by_sink<'a>(
 ) -> std::collections::HashSet<&'a str> {
     stages
         .iter()
-        .filter(|s| sink_self_count(s).is_some())
+        .filter(|s| sink_self_count(s, true).is_some())
         .filter_map(|s| s.from.as_deref())
         .filter(|f| !direct_sink_sources.contains(f))
         .filter(|f| stages.iter().filter(|o| o.from.as_deref() == Some(*f)).count() == 1)
@@ -8004,6 +8226,15 @@ pub struct StageSql {
     pub sql: String,
 }
 
+/// Whether a stage creates its node's relation as a TABLE rather than a VIEW.
+/// The planner decides per stage (two readers, a reject split, a source that
+/// has to be read once) and the statement is the only place it says so. The
+/// closing quote of the name keeps `"a"` from matching `"a__reject"`.
+fn creates_table(sql: &str, node_id: &str) -> bool {
+    let table = format!("TABLE {}", plan::quote_ident(node_id));
+    sql.contains(&format!("CREATE OR REPLACE {table}")) || sql.contains(&format!("CREATE {table}"))
+}
+
 pub fn compile_pipeline_sql(doc: &PipelineDoc) -> Result<Vec<StageSql>, EngineError> {
     // By default the exported / displayed SQL has its secret values
     // replaced with named placeholders. Setting DUCKLE_EXPORT_INCLUDE_SECRETS
@@ -8100,13 +8331,15 @@ pub fn compile_pipeline_sql_opts(
                 }
                 _ => sql,
             };
+            let kind = match s.kind {
+                StageKind::Sink => "sink",
+                StageKind::View if creates_table(&s.sql, &s.node_id) => "table",
+                StageKind::View => "view",
+            };
             StageSql {
                 node_id: s.node_id,
                 label: s.label,
-                kind: match s.kind {
-                    StageKind::Sink => "sink".into(),
-                    StageKind::View => "view".into(),
-                },
+                kind: kind.into(),
                 sql,
             }
         })
@@ -8363,6 +8596,7 @@ mod tests {
             sink_mode: None,
             sink_compression: None,
             sink_direct: false,
+            sink_count: None,
             runtime: None,
             wait_ms: None,
             retry_attempts: 0,
@@ -8382,6 +8616,51 @@ mod tests {
         k.from = Some("v".into());
         k.sink_path = Some(path.into());
         vec![v, k]
+    }
+
+    /// What DuckDB 1.5.5 wrote for these values, byte for byte: a quoted line
+    /// break, doubled quotes, an empty string, a NULL and the delimiter inside
+    /// a value.
+    const DUCKDB_CSV: &[u8] =
+        b"id,s\n1,plain\n2,\"has \"\"quote\"\"\"\n3,\"two\nlines\"\n4,\"\"\n5,\n6,\"a,b\"\n";
+
+    fn file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> String {
+        let p = dir.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn csv_records_are_the_line_breaks_outside_quotes() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let plain = file(dir.path(), "a.csv", DUCKDB_CSV);
+        assert_eq!(super::count_csv_records(&plain, true), Some(6));
+        assert_eq!(super::count_csv_records(&plain, false), Some(7));
+
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(DUCKDB_CSV).unwrap();
+        let gz = file(dir.path(), "a.csv.gz", &gz.finish().unwrap());
+        assert_eq!(super::count_csv_records(&gz, true), Some(6), "read through gzip");
+
+        let unterminated = file(dir.path(), "b.csv", b"id\n1\n2");
+        assert_eq!(super::count_csv_records(&unterminated, true), Some(2));
+        let header_only = file(dir.path(), "c.csv", b"id\n");
+        assert_eq!(super::count_csv_records(&header_only, true), Some(0));
+        let empty = file(dir.path(), "d.csv", b"");
+        assert_eq!(super::count_csv_records(&empty, false), Some(0));
+    }
+
+    #[test]
+    fn csv_records_are_not_guessed() {
+        let dir = tempfile::tempdir().unwrap();
+        // A quote left open: not something DuckDB writes, so not counted.
+        let open = file(dir.path(), "a.csv", b"id\n\"1\n");
+        assert_eq!(super::count_csv_records(&open, true), None);
+        // zstd has no decoder here.
+        let zstd = file(dir.path(), "b.csv.zst", &[0x28, 0xb5, 0x2f, 0xfd, 0, 0]);
+        assert_eq!(super::count_csv_records(&zstd, true), None);
+        assert_eq!(super::count_csv_records(&dir.path().join("none.csv").to_string_lossy(), true), None);
     }
 
     fn no_direct() -> std::collections::HashSet<&'static str> {
