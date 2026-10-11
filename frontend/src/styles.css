@@ -1429,6 +1429,10 @@ textarea:focus-visible {
     flex-shrink: 0;
 }
 
+.left-sidebar.is-hidden {
+    display: none;
+}
+
 .left-sidebar-tabs {
     display: flex;
     height: 36px;

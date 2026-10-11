@@ -6,6 +6,8 @@
     "git": "Git （ワークスペース）",
     "gitAriaToggle": "Gitパネルを切り替える",
     "duckieAssistant": "ダッキーAIアシスタント",
+    "showSidebar": "サイドバーを表示",
+    "hideSidebar": "サイドバーを非表示",
     "duckieAssistantAriaToggle": "Duckie AIアシスタントの切り替え",
     "switchLight": "ライトモードに切り替える",
     "switchDark": "ダークモードに切り替える",

@@ -12,7 +12,7 @@ import {
     type OnSelectionChangeParams,
 } from '@xyflow/react';
 import type { ConnectionType } from './canvas/connection-types';
-import { BarChart3, Bot, Braces, FolderOpen, GitBranch, LayoutDashboard, Loader2, Moon, RotateCw, ShieldCheck, Sparkles, Sun, Waypoints } from 'lucide-react';
+import { BarChart3, Bot, Braces, FolderOpen, GitBranch, LayoutDashboard, Loader2, Moon, PanelLeftClose, PanelLeftOpen, RotateCw, ShieldCheck, Sparkles, Sun, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import LanguageSelector from './i18n/LanguageSelector';
 import { UpdateBanner } from './UpdateBanner';
@@ -395,6 +395,13 @@ export default function App() {
         () => (isInTauri() ? 'checking' : 'ready'),
     );
     const [showChatPanel, setShowChatPanel] = useState(false);
+    const [sidebarHidden, setSidebarHidden] = useState(() => loadPersisted('leftSidebarHidden', false));
+    const toggleSidebar = useCallback(() => {
+        setSidebarHidden(h => {
+            savePersisted('leftSidebarHidden', !h);
+            return !h;
+        });
+    }, []);
     // Once opened, Duckie stays mounted (hidden when closed) so a reply that is
     // still streaming keeps going and the open conversation is not lost.
     const [chatPanelMounted, setChatPanelMounted] = useState(false);
@@ -2542,6 +2549,16 @@ export default function App() {
                 </div>
                 <div className="topbar-sep" aria-hidden="true" />
                 <EngineSelector value={engine} onChange={setEngine} />
+                <button
+                    type="button"
+                    className="topbar-theme-toggle"
+                    onClick={toggleSidebar}
+                    title={sidebarHidden ? t('topbar.showSidebar') : t('topbar.hideSidebar')}
+                    aria-label={sidebarHidden ? t('topbar.showSidebar') : t('topbar.hideSidebar')}
+                    aria-pressed={!sidebarHidden}
+                >
+                    {sidebarHidden ? <PanelLeftOpen size={14} /> : <PanelLeftClose size={14} />}
+                </button>
                 <div className="topbar-spacer" data-tauri-drag-region />
                 {workspaceFolderName ? (
                     <button
@@ -2836,6 +2853,7 @@ export default function App() {
                     onBuildPipeline={handleBuildPipeline}
                     onDeployPipeline={isInTauri() ? setDeployModalPipelineId : undefined}
                     onOpenRunMetrics={() => setShowRunMetrics(true)}
+                    hidden={sidebarHidden}
                 />
                 <section className="canvas-shell" data-tour="canvas">
                     <EditorHeader

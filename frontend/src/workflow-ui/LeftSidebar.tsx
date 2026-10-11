@@ -33,6 +33,8 @@ type Props = {
     onDeployPipeline?: (id: string) => void;
     /** Plan 003: open the workspace's run metrics page. */
     onOpenRunMetrics?: () => void;
+    /** Hidden from the top bar's sidebar toggle; stays mounted so its state survives. */
+    hidden?: boolean;
 };
 
 export default function LeftSidebar({
@@ -59,12 +61,13 @@ export default function LeftSidebar({
     onBuildPipeline,
     onDeployPipeline,
     onOpenRunMetrics,
+    hidden = false,
 }: Props) {
     const { t } = useTranslation();
     const [tab, setTab] = useState<SideTab>('palette');
 
     return (
-        <aside className="left-sidebar" data-tour="palette">
+        <aside className={'left-sidebar' + (hidden ? ' is-hidden' : '')} data-tour="palette" aria-hidden={hidden || undefined}>
             <div className="left-sidebar-tabs" role="tablist" aria-label={t('sidebar.ariaLabel')}>
                 <button
                     type="button"

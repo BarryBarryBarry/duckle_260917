@@ -6,6 +6,8 @@
     "git": "Git (workspace)",
     "gitAriaToggle": "Toggle Git panel",
     "duckieAssistant": "Duckie AI Assistant",
+    "showSidebar": "Show sidebar",
+    "hideSidebar": "Hide sidebar",
     "duckieAssistantAriaToggle": "Toggle Duckie AI Assistant",
     "switchLight": "Switch to light mode",
     "switchDark": "Switch to dark mode",

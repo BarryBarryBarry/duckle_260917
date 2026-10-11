@@ -6,6 +6,8 @@
     "git": "Git （工作區）",
     "gitAriaToggle": "切換Git面板",
     "duckieAssistant": "Duckie AI助手",
+    "showSidebar": "顯示側邊欄",
+    "hideSidebar": "隱藏側邊欄",
     "duckieAssistantAriaToggle": "切換Duckie AI助手",
     "switchLight": "切換至淺色模式",
     "switchDark": "切換到黑暗模式",
