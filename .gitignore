@@ -76,6 +76,9 @@ CLAUDE.md
 
 # web-editor spike build artifact (#75 phase 2)
 frontend/dist-web/
+# scripts/run-web-server.sh: downloaded DuckDB CLI, token, default workspace
+/.web-server/
+/workspace/
 
 # Local-only tooling and indexes. Never committed: they are derived from the
 # code, they are mine rather than the project's, and a generated index that is
