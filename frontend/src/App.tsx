@@ -120,6 +120,7 @@ import type {
 import { getDefaults, getManifest } from './workflow-ui/fields/component-manifests';
 import type { DuckleNodeData } from './pipeline-types';
 import { flowTypeForComponent, normalizePipelineForCanvas } from './canvas/normalize-pipeline';
+import { DUCKIE_ENABLED } from './features';
 import type { DropPosition, NodeAction, PaneAction } from './canvas/Canvas';
 import { useUndoRedo, type CanvasSnapshot } from './useUndoRedo';
 import type { RepoItem } from './repo-types';
@@ -2674,24 +2675,26 @@ export default function App() {
                     type="button"
                     className="topbar-theme-toggle"
                     onClick={() => setShowAgentPanel(s => !s)}
-                    title="Pi Agent"
-                    aria-label="Toggle Pi Agent"
+                    title="Agent"
+                    aria-label="Toggle Agent"
                     aria-pressed={showAgentPanel}
                     disabled={!workspacePathState}
                 >
                     <Bot size={14} />
                 </button>
-                <button
-                    type="button"
-                    className="topbar-theme-toggle"
-                    data-tour="duckie"
-                    onClick={() => setShowChatPanel(s => !s)}
-                    title={t('topbar.duckieAssistant')}
-                    aria-label={t('topbar.duckieAssistantAriaToggle')}
-                    aria-pressed={showChatPanel}
-                >
-                    <Sparkles size={14} />
-                </button>
+                {DUCKIE_ENABLED ? (
+                    <button
+                        type="button"
+                        className="topbar-theme-toggle"
+                        data-tour="duckie"
+                        onClick={() => setShowChatPanel(s => !s)}
+                        title={t('topbar.duckieAssistant')}
+                        aria-label={t('topbar.duckieAssistantAriaToggle')}
+                        aria-pressed={showChatPanel}
+                    >
+                        <Sparkles size={14} />
+                    </button>
+                ) : null}
                 <LanguageSelector />
                 {accounts.length > 0 && activeAccount ? (
                     <AccountChip
@@ -2790,7 +2793,7 @@ export default function App() {
                     openDesigner: () => {},
                     openDataQuality: () => {},
                     importJob: isInTauri() ? handleImportJob : undefined,
-                    openDuckie: () => setShowChatPanel(true),
+                    openDuckie: DUCKIE_ENABLED ? () => setShowChatPanel(true) : undefined,
                     openMcp: () => setShowMcpModal(true),
                     openRuns: () =>
                         window.dispatchEvent(
@@ -2962,7 +2965,7 @@ export default function App() {
                 <ProfileSetupModal onCreate={handleCreateFirstAccount} />
             ) : null}
 
-            {showChatPanel || chatPanelMounted ? (
+            {DUCKIE_ENABLED && (showChatPanel || chatPanelMounted) ? (
                 <ChatPanel
                     key={workspacePathState ?? 'no-workspace'}
                     workspace={workspacePathState}

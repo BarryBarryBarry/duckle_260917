@@ -999,7 +999,7 @@ pub fn install_pi(
     let prefix = pi_prefix(app_data);
     std::fs::create_dir_all(&prefix).map_err(|e| e.to_string())?;
     on_progress(InstallProgress::RunningCommand {
-        label: "Installing Pi agent…".to_string(),
+        label: "Installing Agent…".to_string(),
     });
     let mut cmd = std::process::Command::new(nodejs_path(app_data));
     let node_bin_dir = nodejs_path(app_data)
@@ -1023,7 +1023,7 @@ pub fn install_pi(
         ])
         .env("PATH", joined)
         .output()
-        .map_err(|e| format!("install Pi agent: {e}"))?;
+        .map_err(|e| format!("install Agent: {e}"))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         let tail: String = stderr
@@ -1036,9 +1036,9 @@ pub fn install_pi(
             .rev()
             .collect();
         return Err(if tail.is_empty() {
-            "Pi agent install failed".to_string()
+            "Agent install failed".to_string()
         } else {
-            format!("Pi agent install failed: {tail}")
+            format!("Agent install failed: {tail}")
         });
     }
     Ok(pi_cli_js(app_data).to_string_lossy().into_owned())

@@ -25,6 +25,11 @@ import {
     getFontSize,
     setFontSize as applyAndSaveFontSize,
 } from '../font-size';
+import { DUCKIE_ENABLED } from '../features';
+
+// With DSH hidden it cannot be picked, so a workspace still on it (the backend
+// default) shows, and saves as, the external endpoint the Agent uses.
+const DEFAULT_AI_MODE = DUCKIE_ENABLED ? 'deepseek_harness' : 'openai_compatible';
 
 /**
  * App settings, grouped into collapsible categories so the panel stays simple
@@ -41,7 +46,7 @@ export function SettingsModal({
     onClose: () => void;
 }) {
     const [proxy, setProxy] = useState('');
-    const [aiMode, setAiMode] = useState<'deepseek_harness' | 'openai_compatible' | 'local_qwen'>('deepseek_harness');
+    const [aiMode, setAiMode] = useState<'deepseek_harness' | 'openai_compatible' | 'local_qwen'>(DEFAULT_AI_MODE);
     // Duckie AI provider configuration.
     const [aiBaseUrl, setAiBaseUrl] = useState('');
     const [aiModel, setAiModel] = useState('');
@@ -99,7 +104,8 @@ export function SettingsModal({
             .then(([p, ai, mem, ic, unsigned, power]) => {
                 if (!alive) return;
                 setProxy(p ?? '');
-                setAiMode(ai.mode ?? 'deepseek_harness');
+                const mode = ai.mode ?? 'deepseek_harness';
+                setAiMode(mode === 'deepseek_harness' ? DEFAULT_AI_MODE : mode);
                 setAiBaseUrl(ai.baseUrl ?? '');
                 setAiModel(ai.model ?? '');
                 setAiKey(ai.apiKey ?? '');
@@ -430,72 +436,77 @@ export function SettingsModal({
 
                     <SettingsSection {...sectionState('ai')} title="AI assistant">
                         <p style={help}>
-                            Choose how Duckie runs: DeepSeek Harness via ACP + duckle-mcp (default),
-                            an external OpenAI-compatible endpoint, or the bundled local Qwen model.
+                            {DUCKIE_ENABLED
+                                ? 'Choose how Duckie runs: DeepSeek Harness via ACP + duckle-mcp (default), an external OpenAI-compatible endpoint, or the bundled local Qwen model.'
+                                : 'Choose the model AI features use: an external OpenAI-compatible endpoint (the Agent needs this one) or the bundled local Qwen model.'}
                         </p>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
-                            <input
-                                type="radio"
-                                name="duckie-ai-mode"
-                                checked={aiMode === 'deepseek_harness'}
-                                onChange={() => setAiMode('deepseek_harness')}
-                                disabled={!loaded || !workspace}
-                            />
-                            DeepSeek Harness (DSH) + duckle-mcp
-                        </label>
-                        {aiMode === 'deepseek_harness' ? (
+                        {DUCKIE_ENABLED ? (
                             <>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
                                 <input
-                                    type="text"
-                                    value={aiHarnessCommand}
-                                    onChange={e => setAiHarnessCommand(e.target.value)}
-                                    placeholder="Optional DSH command override, e.g. /opt/homebrew/bin/dsh or /Users/me/.dsh/.../bin.js"
+                                    type="radio"
+                                    name="duckie-ai-mode"
+                                    checked={aiMode === 'deepseek_harness'}
+                                    onChange={() => setAiMode('deepseek_harness')}
                                     disabled={!loaded || !workspace}
-                                    spellCheck={false}
-                                    autoComplete="off"
-                                    style={aiInput}
                                 />
-                                <p style={help}>
-                                    Leave blank to auto-detect DSH. Duckle launches it as <code>--profile acp</code>.
-                                </p>
-                                <input
-                                    type="text"
-                                    value={aiHarnessProvider}
-                                    onChange={e => setAiHarnessProvider(e.target.value)}
-                                    placeholder="Optional DSH provider override, e.g. deepseek-official or dashscope"
-                                    disabled={!loaded || !workspace}
-                                    spellCheck={false}
-                                    autoComplete="off"
-                                    style={aiInput}
-                                />
-                                <input
-                                    type="text"
-                                    value={aiHarnessModel}
-                                    onChange={e => setAiHarnessModel(e.target.value)}
-                                    placeholder="Optional DSH model override, e.g. deepseek-v4-pro"
-                                    disabled={!loaded || !workspace}
-                                    spellCheck={false}
-                                    autoComplete="off"
-                                    style={{ ...aiInput, marginTop: 8 }}
-                                />
-                                <p style={help}>
-                                    Set both provider and model to make Duckle call ACP <code>session/set_config_option</code>
-                                    after <code>session/new</code>. Leave both blank to use the ACP profile default.
-                                </p>
-                                <input
-                                    type="number"
-                                    min={0}
-                                    value={aiHarnessIdleMinutes}
-                                    onChange={e => setAiHarnessIdleMinutes(e.target.value)}
-                                    placeholder="DSH idle timeout in minutes (default 30, 0 = no limit)"
-                                    disabled={!loaded || !workspace}
-                                    style={aiInput}
-                                />
-                                <p style={help}>
-                                    A Duckie turn keeps waiting while DSH is still streaming progress; it is cancelled only
-                                    after this many minutes without any output from DSH. Leave blank for the default
-                                    (or <code>DUCKLE_DSH_IDLE_TIMEOUT_SECS</code> if set), 0 to never time out.
-                                </p>
+                                DeepSeek Harness (DSH) + duckle-mcp
+                            </label>
+                            {aiMode === 'deepseek_harness' ? (
+                                <>
+                                    <input
+                                        type="text"
+                                        value={aiHarnessCommand}
+                                        onChange={e => setAiHarnessCommand(e.target.value)}
+                                        placeholder="Optional DSH command override, e.g. /opt/homebrew/bin/dsh or /Users/me/.dsh/.../bin.js"
+                                        disabled={!loaded || !workspace}
+                                        spellCheck={false}
+                                        autoComplete="off"
+                                        style={aiInput}
+                                    />
+                                    <p style={help}>
+                                        Leave blank to auto-detect DSH. Duckle launches it as <code>--profile acp</code>.
+                                    </p>
+                                    <input
+                                        type="text"
+                                        value={aiHarnessProvider}
+                                        onChange={e => setAiHarnessProvider(e.target.value)}
+                                        placeholder="Optional DSH provider override, e.g. deepseek-official or dashscope"
+                                        disabled={!loaded || !workspace}
+                                        spellCheck={false}
+                                        autoComplete="off"
+                                        style={aiInput}
+                                    />
+                                    <input
+                                        type="text"
+                                        value={aiHarnessModel}
+                                        onChange={e => setAiHarnessModel(e.target.value)}
+                                        placeholder="Optional DSH model override, e.g. deepseek-v4-pro"
+                                        disabled={!loaded || !workspace}
+                                        spellCheck={false}
+                                        autoComplete="off"
+                                        style={{ ...aiInput, marginTop: 8 }}
+                                    />
+                                    <p style={help}>
+                                        Set both provider and model to make Duckle call ACP <code>session/set_config_option</code>
+                                        after <code>session/new</code>. Leave both blank to use the ACP profile default.
+                                    </p>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        value={aiHarnessIdleMinutes}
+                                        onChange={e => setAiHarnessIdleMinutes(e.target.value)}
+                                        placeholder="DSH idle timeout in minutes (default 30, 0 = no limit)"
+                                        disabled={!loaded || !workspace}
+                                        style={aiInput}
+                                    />
+                                    <p style={help}>
+                                        A Duckie turn keeps waiting while DSH is still streaming progress; it is cancelled only
+                                        after this many minutes without any output from DSH. Leave blank for the default
+                                        (or <code>DUCKLE_DSH_IDLE_TIMEOUT_SECS</code> if set), 0 to never time out.
+                                    </p>
+                                </>
+                            ) : null}
                             </>
                         ) : null}
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>

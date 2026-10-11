@@ -657,7 +657,7 @@ fn bootstrap_session(
         return Err(state
             .get("error")
             .and_then(|v| v.as_str())
-            .unwrap_or("failed to get Pi session state")
+            .unwrap_or("failed to get Agent session state")
             .to_string());
     }
     let data = state.get("data").cloned().unwrap_or(JsonValue::Null);

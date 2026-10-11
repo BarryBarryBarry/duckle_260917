@@ -95,7 +95,8 @@ const GROUP_CARD: Record<ModuleGroup, { blurb: string; icon: typeof Workflow }> 
 export type LauncherActions = {
     openDesigner: () => void;
     importJob?: () => void;
-    openDuckie: () => void;
+    /** Absent when the Duckie assistant is hidden (see features.ts). */
+    openDuckie?: () => void;
     openMcp: () => void;
     openRuns: () => void;
     openSchedules: () => void;
@@ -126,16 +127,6 @@ export function buildModules(a: LauncherActions): LauncherModule[] {
             icon: Workflow,
             status: 'ready',
             open: a.openDesigner,
-        },
-        {
-            id: 'duckie',
-            name: 'Duckie AI',
-            blurb: 'Describe a pipeline in plain English and check what it builds',
-            group: 'build',
-            icon: Sparkles,
-            status: 'ready',
-            open: a.openDuckie,
-            note: 'First use downloads a model, or point it at your own AI endpoint',
         },
         {
             id: 'mcp',
@@ -318,6 +309,18 @@ export function buildModules(a: LauncherActions): LauncherModule[] {
         },
     ];
 
+    if (a.openDuckie) {
+        mods.splice(1, 0, {
+            id: 'duckie',
+            name: 'Duckie AI',
+            blurb: 'Describe a pipeline in plain English and check what it builds',
+            group: 'build',
+            icon: Sparkles,
+            status: 'ready',
+            open: a.openDuckie,
+            note: 'First use downloads a model, or point it at your own AI endpoint',
+        });
+    }
     if (a.importJob) {
         mods.splice(1, 0, {
             id: 'import',

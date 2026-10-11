@@ -787,7 +787,7 @@ export async function agentCheckInstalled(): Promise<boolean> {
 
 export async function agentInstall(onProgress?: (p: InstallProgress) => void): Promise<string> {
     if (!isTauri()) {
-        throw new Error('Pi Agent is only available in the desktop app.');
+        throw new Error('Agent is only available in the desktop app.');
     }
     const channel = new Channel<InstallProgress>();
     if (onProgress) channel.onmessage = onProgress;

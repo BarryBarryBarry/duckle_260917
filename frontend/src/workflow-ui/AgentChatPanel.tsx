@@ -141,14 +141,14 @@ function startError(raw: string): ChatError {
     if (raw.includes('agent_llm_not_configured')) {
         return {
             message:
-                'Pi Agent 使用「设置 → AI assistant」中的 External OpenAI 模型，目前未启用。请选择 External OpenAI，并填写 Base URL 和模型后重试。',
+                'Agent 使用「设置 → AI assistant」中的 External OpenAI 模型，目前未启用。请选择 External OpenAI，并填写 Base URL 和模型后重试。',
             needsSettings: true,
         };
     }
     if (raw.includes('nodejs_not_installed') || raw.includes('pi_not_installed')) {
-        return { message: 'Pi Agent 运行环境不完整，请关闭面板后重新安装。', needsSettings: false };
+        return { message: 'Agent 运行环境不完整，请关闭面板后重新安装。', needsSettings: false };
     }
-    return { message: `Pi Agent 无法启动：${raw}`, needsSettings: false };
+    return { message: `Agent 无法启动：${raw}`, needsSettings: false };
 }
 
 type Message =
@@ -429,7 +429,7 @@ export default function AgentChatPanel({
         toggleCollapsed,
         toggleMaximized,
         toggleSidebar,
-    } = useFloatingPanel('pi-agent-panel-position', 'Pi Agent');
+    } = useFloatingPanel('pi-agent-panel-position', 'Agent');
     /** The conversation whose Pi session is running, if any. */
     const startedConversationRef = useRef<string | null>(null);
     /** Serializes history writes so a slow save cannot land after a newer one. */
@@ -888,7 +888,7 @@ export default function AgentChatPanel({
                 connectedRef.current = false;
                 startedConversationRef.current = null;
                 if (busyRef.current) {
-                    setError({ message: 'Pi Agent 进程意外退出，请重新发送。', needsSettings: false });
+                    setError({ message: 'Agent 进程意外退出，请重新发送。', needsSettings: false });
                 }
                 setBusy(false);
                 break;
@@ -1071,14 +1071,14 @@ export default function AgentChatPanel({
                 resizing ? 'chat-panel-resizing' : ''
             } ${layout.collapsed ? 'chat-panel-collapsed' : ''} ${layout.maximized ? 'chat-panel-maximized' : ''}`}
             role="complementary"
-            aria-label="Pi Agent"
+            aria-label="Agent"
             style={panelStyle}
         >
             <header className="chat-panel-head" {...headerProps}>
                 <div className="chat-panel-title-wrap">
                     <div className="chat-panel-title">
                         <Bot size={14} aria-hidden="true" />
-                        <span>Pi Agent</span>
+                        <span>Agent</span>
                         {ready && connected ? <span className="chat-panel-tag">已连接</span> : null}
                         {ready && !layout.collapsed ? (
                             <button
@@ -1096,7 +1096,7 @@ export default function AgentChatPanel({
                     {busy ? (
                         <div className="chat-panel-meta">
                             <span className="chat-panel-meta-pill chat-panel-meta-pill-live">
-                                Pi Agent 正在处理
+                                Agent 正在处理
                                 <ProcessingDots />
                             </span>
                         </div>
@@ -1108,8 +1108,8 @@ export default function AgentChatPanel({
                         type="button"
                         className="chat-panel-head-btn"
                         onClick={toggleCollapsed}
-                        title={layout.collapsed ? '还原 Pi Agent' : '最小化 Pi Agent'}
-                        aria-label={layout.collapsed ? '还原 Pi Agent' : '最小化 Pi Agent'}
+                        title={layout.collapsed ? '还原 Agent' : '最小化 Agent'}
+                        aria-label={layout.collapsed ? '还原 Agent' : '最小化 Agent'}
                     >
                         {layout.collapsed ? <ChevronDown size={14} /> : <Minus size={14} />}
                     </button>
@@ -1117,8 +1117,8 @@ export default function AgentChatPanel({
                         type="button"
                         className="chat-panel-head-btn"
                         onClick={toggleMaximized}
-                        title={layout.maximized ? '还原 Pi Agent 窗口大小' : '最大化 Pi Agent'}
-                        aria-label={layout.maximized ? '还原 Pi Agent 窗口大小' : '最大化 Pi Agent'}
+                        title={layout.maximized ? '还原 Agent 窗口大小' : '最大化 Agent'}
+                        aria-label={layout.maximized ? '还原 Agent 窗口大小' : '最大化 Agent'}
                         aria-pressed={layout.maximized}
                     >
                         {layout.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
@@ -1137,7 +1137,7 @@ export default function AgentChatPanel({
 
             {layout.collapsed ? (
                 <div className="chat-panel-collapsed-bar">
-                    <span>Pi Agent 已最小化</span>
+                    <span>Agent 已最小化</span>
                     {busy ? (
                         <span className="chat-panel-collapsed-pill">
                             正在处理
@@ -1148,7 +1148,7 @@ export default function AgentChatPanel({
             ) : setup.phase === 'checking' ? (
                 <div className="chat-panel-state">
                     <Loader2 size={18} className="spin" />
-                    <span>正在检查 Pi Agent 运行环境…</span>
+                    <span>正在检查 Agent 运行环境…</span>
                 </div>
             ) : setup.phase === 'not-installed' || setup.phase === 'install-failed' ? (
                 <div className="chat-panel-setup">
@@ -1156,18 +1156,18 @@ export default function AgentChatPanel({
                         <Bot size={20} />
                     </div>
                     <div className="chat-panel-setup-title">
-                        {setup.phase === 'install-failed' ? '安装失败' : '安装 Pi Agent'}
+                        {setup.phase === 'install-failed' ? '安装失败' : '安装 Agent'}
                     </div>
                     <div className="chat-panel-setup-body">
                         {setup.phase === 'install-failed'
                             ? setup.message
-                            : '首次使用需要下载 Node.js 运行时和 Pi Agent（约 75 MB 下载，解压后约 350 MB），安装在 Duckle 自己的数据目录中。'}
+                            : '首次使用需要下载 Node.js 运行时和 Agent（约 75 MB 下载，解压后约 350 MB），安装在 Duckle 自己的数据目录中。'}
                     </div>
                     <button type="button" className="chat-panel-setup-cta" onClick={() => void handleInstall()}>
                         <Download size={14} /> {setup.phase === 'install-failed' ? '重新安装' : '安装'}
                     </button>
                     <div className="chat-panel-setup-foot">
-                        Pi Agent 使用「设置 → AI assistant」中的 External OpenAI 模型。
+                        Agent 使用「设置 → AI assistant」中的 External OpenAI 模型。
                     </div>
                 </div>
             ) : setup.phase === 'installing' ? (
@@ -1219,7 +1219,7 @@ export default function AgentChatPanel({
                             {messages.length === 0 ? (
                                 <div className="chat-panel-empty">
                                     <Workflow size={26} className="chat-panel-empty-icon" />
-                                    <div className="chat-panel-empty-title">让 Pi Agent 处理 pipeline</div>
+                                    <div className="chat-panel-empty-title">让 Agent 处理 pipeline</div>
                                     <div className="chat-panel-empty-hint">
                                         描述需求即可：创建、检查、运行或排查 pipeline。上方选择的数据连接会一并发给 Agent。
                                     </div>
@@ -1293,7 +1293,7 @@ export default function AgentChatPanel({
                                     <div className="chat-panel-live-banner" aria-live="polite">
                                         <span className="chat-panel-live-dot" />
                                         <span>
-                                            Pi Agent 正在处理
+                                            Agent 正在处理
                                             <ProcessingDots />
                                         </span>
                                     </div>
@@ -1312,7 +1312,7 @@ export default function AgentChatPanel({
                                     rows={2}
                                     disabled={busy}
                                     placeholder={
-                                        '描述你想让 Pi Agent 完成的 pipeline 工作…'
+                                        '描述你想让 Agent 完成的 pipeline 工作…'
                                     }
                                     onKeyDown={event => {
                                         if (event.key === 'Enter' && !event.shiftKey) {
@@ -1380,7 +1380,7 @@ function AssistantBubble({
             <div className="chat-bubble-head">
                 <div className="chat-bubble-head-main">
                     <Bot size={12} aria-hidden="true" />
-                    <span>Pi Agent</span>
+                    <span>Agent</span>
                 </div>
                 <span className={`chat-bubble-phase ${live ? 'chat-bubble-phase-live' : ''}`}>
                     {live ? '处理中' : '已完成'}
