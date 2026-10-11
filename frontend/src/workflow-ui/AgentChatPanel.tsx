@@ -169,12 +169,6 @@ type UiDialog = {
 
 const STATE_KEY = 'duckle-pi-agent-panel';
 
-const EXAMPLE_PROMPTS = [
-    '读取 orders.csv，过滤 status = "shipped"，写入 shipped.parquet',
-    '检查当前工作区所有 pipeline 是否能通过校验',
-    '把当前数据连接中的 orders 表迁移到 DuckDB',
-];
-
 function emptyTurn(): AssistantTurn {
     return { text: '', thinking: '', tools: [], skills: [], subagents: [] };
 }
@@ -1222,18 +1216,6 @@ export default function AgentChatPanel({
                                     <div className="chat-panel-empty-title">让 Agent 处理 pipeline</div>
                                     <div className="chat-panel-empty-hint">
                                         描述需求即可：创建、检查、运行或排查 pipeline。上方选择的数据连接会一并发给 Agent。
-                                    </div>
-                                    <div className="chat-panel-prompts">
-                                        {EXAMPLE_PROMPTS.map(prompt => (
-                                            <button
-                                                key={prompt}
-                                                type="button"
-                                                className="chat-panel-prompt"
-                                                onClick={() => setDraft(prompt)}
-                                            >
-                                                {prompt}
-                                            </button>
-                                        ))}
                                     </div>
                                 </div>
                             ) : (
