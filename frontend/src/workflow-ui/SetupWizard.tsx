@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Trans, useTranslation } from 'react-i18next';
 import {
     Check,
     Cloud,
@@ -57,47 +58,20 @@ const DEPLOY_GUIDE = 'https://duckle.org/deploy.html';
  * The cloud commands run a container, so nothing has to be uploaded. Only the custom path
  * hands over a binary, and that binary comes out of this app rather than off the network.
  */
-const PROVIDERS: Record<
-    Provider,
-    { name: string; blurb: string; runsOn: string; steps: string[]; command: string }
-> = {
-    custom: {
-        name: 'Custom',
-        blurb: 'A machine you run yourself, including this one',
-        runsOn: 'One file, no installer',
-        steps: [
-            'Save the runner (below). It comes out of this app, so there is nothing to download.',
-            'Paste the command it gives you into a terminal.',
-            'Wait for the line that says NOT SET UP, then come back here.',
-        ],
-        // Filled in once the runner is saved, because only then is there a real path to
-        // put in it. Naming `duckle-runner` while the file sits somewhere else is not an
-        // instruction, it is a riddle.
-        command: '',
-    },
+const PROVIDERS: Record<Provider, { brand?: string; command: string }> = {
+    // Filled in once the runner is saved, because only then is there a real path to
+    // put in it. Naming `duckle-runner` while the file sits somewhere else is not an
+    // instruction, it is a riddle.
+    custom: { command: '' },
     aws: {
-        name: 'AWS',
-        blurb: 'EC2, ECS on Fargate, or EKS',
-        runsOn: 'EC2 is the straightforward one',
-        steps: [
-            'Launch an EC2 instance with Docker, and open port 8080 to yourself only.',
-            'Run the container, giving it a folder for the workspace.',
-            'Wait for the line that says NOT SET UP.',
-        ],
+        brand: 'AWS',
         command:
             'docker run -d --restart=always --name duckle -p 8080:8080 \\\n' +
             '  -v /srv/duckle:/workspace ghcr.io/slothflowlabs/duckle-web:latest \\\n' +
             '  duckle-runner serve --host 0.0.0.0 --port 8080 --workspace /workspace',
     },
     gcp: {
-        name: 'Google Cloud',
-        blurb: 'Compute Engine, Cloud Run, or GKE',
-        runsOn: 'Compute Engine is the straightforward one',
-        steps: [
-            'Create an instance from the container image.',
-            'Allow yourself through the firewall on port 8080.',
-            'Wait for the line that says NOT SET UP.',
-        ],
+        brand: 'Google Cloud',
         command:
             'gcloud compute instances create-with-container duckle \\\n' +
             '  --machine-type=c3-standard-8 \\\n' +
@@ -107,14 +81,7 @@ const PROVIDERS: Record<
             '  --container-arg=--port --container-arg=8080',
     },
     azure: {
-        name: 'Azure',
-        blurb: 'Virtual Machine, Container Apps, or AKS',
-        runsOn: 'A VM is the straightforward one',
-        steps: [
-            'Create a Linux VM with Docker, and restrict inbound to yourself.',
-            'Run the container, giving it a folder for the workspace.',
-            'Wait for the line that says NOT SET UP.',
-        ],
+        brand: 'Azure',
         command:
             'docker run -d --restart=always --name duckle -p 8080:8080 \\\n' +
             '  -v /srv/duckle:/workspace ghcr.io/slothflowlabs/duckle-web:latest \\\n' +
@@ -123,6 +90,10 @@ const PROVIDERS: Record<
 };
 
 export default function SetupWizard({ workspacePath, onDone }: Props) {
+    const { t } = useTranslation();
+    const providerName = (id: Provider) => PROVIDERS[id].brand ?? t(`firstRun.wizard.providers.${id}.name`);
+    const providerText = (id: Provider, key: string) => t(`firstRun.wizard.providers.${id}.${key}`);
+    const code = { code: <code /> };
     const [step, setStep] = useState<Step>('choose');
     const [url, setUrl] = useState('');
     const [name, setName] = useState('production');
@@ -226,26 +197,18 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
             <div className="modal setup-card">
                 {step === 'choose' && (
                     <>
-                        <h2 className="setup-title">How are you using Duckle?</h2>
-                        <p className="setup-sub">
-                            You can change this later. Nothing here is permanent.
-                        </p>
+                        <h2 className="setup-title">{t('firstRun.wizard.chooseTitle')}</h2>
+                        <p className="setup-sub">{t('firstRun.wizard.chooseSub')}</p>
                         <div className="setup-choices">
                             <button className="setup-choice" onClick={() => onDone('local')}>
                                 <Laptop size={22} />
-                                <span className="setup-choice-title">Just me, on this machine</span>
-                                <span className="setup-choice-sub">
-                                    Draw pipelines and run them here. No accounts, no server,
-                                    nothing to set up.
-                                </span>
+                                <span className="setup-choice-title">{t('firstRun.wizard.localTitle')}</span>
+                                <span className="setup-choice-sub">{t('firstRun.wizard.localSub')}</span>
                             </button>
                             <button className="setup-choice" onClick={() => setStep('where')}>
                                 <Cloud size={22} />
-                                <span className="setup-choice-title">My team, on a server</span>
-                                <span className="setup-choice-sub">
-                                    Author here and deploy to a server you own, where pipelines
-                                    run on a schedule.
-                                </span>
+                                <span className="setup-choice-title">{t('firstRun.wizard.teamTitle')}</span>
+                                <span className="setup-choice-sub">{t('firstRun.wizard.teamSub')}</span>
                             </button>
                         </div>
                     </>
@@ -253,11 +216,8 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
 
                 {step === 'where' && (
                     <>
-                        <h2 className="setup-title">Where will your server run?</h2>
-                        <p className="setup-sub">
-                            Duckle is one binary, so this only changes the command you run. You
-                            own the machine either way.
-                        </p>
+                        <h2 className="setup-title">{t('firstRun.wizard.whereTitle')}</h2>
+                        <p className="setup-sub">{t('firstRun.wizard.whereSub')}</p>
                         <div className="setup-choices">
                             {(Object.keys(PROVIDERS) as Provider[]).map(id => (
                                 <button
@@ -271,14 +231,14 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                                     }}
                                 >
                                     {id === 'custom' ? <HardDrive size={22} /> : <Cloud size={22} />}
-                                    <span className="setup-choice-title">{PROVIDERS[id].name}</span>
-                                    <span className="setup-choice-sub">{PROVIDERS[id].blurb}</span>
+                                    <span className="setup-choice-title">{providerName(id)}</span>
+                                    <span className="setup-choice-sub">{providerText(id, 'blurb')}</span>
                                 </button>
                             ))}
                         </div>
                         <div className="setup-actions">
                             <button className="setup-back" onClick={() => setStep('choose')}>
-                                Back
+                                {t('firstRun.wizard.back')}
                             </button>
                         </div>
                     </>
@@ -288,14 +248,16 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                     <>
                         <h2 className="setup-title">
                             {provider === 'custom'
-                                ? 'Start a Duckle server'
-                                : `Start Duckle on ${PROVIDERS[provider].name}`}
+                                ? t('firstRun.wizard.standupCustom')
+                                : t('firstRun.wizard.standupOn', { provider: providerName(provider) })}
                         </h2>
-                        <p className="setup-sub">{PROVIDERS[provider].runsOn}. Three steps.</p>
+                        <p className="setup-sub">
+                            {t('firstRun.wizard.standupSub', { runsOn: providerText(provider, 'runsOn') })}
+                        </p>
 
                         <ol className="setup-steps">
-                            {PROVIDERS[provider].steps.map(s => (
-                                <li key={s}>{s}</li>
+                            {['step1', 'step2', 'step3'].map(k => (
+                                <li key={k}>{providerText(provider, k)}</li>
                             ))}
                         </ol>
 
@@ -308,14 +270,17 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                                     type="button"
                                 >
                                     {busy ? <Loader2 size={15} className="spin" /> : null}
-                                    {runner ? 'Save it again' : 'Save the runner'}
+                                    {runner ? t('firstRun.wizard.saveAgain') : t('firstRun.wizard.saveRunner')}
                                 </button>
                                 {runner ? (
                                     <p className="setup-note">
                                         <Check size={14} />
                                         <span>
-                                            {runner.platform} runner saved in{' '}
-                                            <code>{runner.folder}</code>
+                                            <Trans
+                                                i18nKey="firstRun.wizard.runnerSaved"
+                                                values={{ platform: runner.platform, folder: runner.folder }}
+                                                components={code}
+                                            />
                                         </span>
                                     </p>
                                 ) : null}
@@ -328,7 +293,7 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                             <div className="setup-command">
                                 <pre>{command}</pre>
                                 <button className="setup-alt" type="button" onClick={() => copy(command)}>
-                                    <Copy size={13} /> {copied ? 'Copied' : 'Copy'}
+                                    <Copy size={13} /> {copied ? t('firstRun.wizard.copied') : t('firstRun.wizard.copy')}
                                 </button>
                             </div>
                         ) : null}
@@ -339,26 +304,24 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                         <p className="setup-note">
                             <ShieldCheck size={14} />
                             <span>
-                                It binds to <code>0.0.0.0</code> rather than <code>127.0.0.1</code>{' '}
-                                on purpose. A server that only answers on loopback counts as
-                                already yours and cannot be claimed from here.
+                                <Trans i18nKey="firstRun.wizard.bindNote" components={code} />
                             </span>
                         </p>
 
                         {error && <div className="setup-error">{error}</div>}
                         <div className="setup-actions">
                             <button className="setup-back" onClick={() => setStep('where')}>
-                                Back
+                                {t('firstRun.wizard.back')}
                             </button>
                             <button
                                 className="setup-alt"
                                 type="button"
                                 onClick={() => void openExternal(DEPLOY_GUIDE)}
                             >
-                                <ExternalLink size={13} /> Full guide
+                                <ExternalLink size={13} /> {t('firstRun.wizard.fullGuide')}
                             </button>
                             <button className="setup-next" onClick={() => setStep('address')}>
-                                It is running
+                                {t('firstRun.wizard.running')}
                             </button>
                         </div>
                     </>
@@ -366,12 +329,12 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
 
                 {step === 'address' && (
                     <>
-                        <h2 className="setup-title">Where is your server?</h2>
+                        <h2 className="setup-title">{t('firstRun.wizard.addressTitle')}</h2>
                         <p className="setup-sub">
-                            The address of a machine running <code>duckle-runner serve</code>.
+                            <Trans i18nKey="firstRun.wizard.addressSub" components={code} />
                         </p>
                         <label className="setup-label" htmlFor="setup-url">
-                            Address
+                            {t('firstRun.wizard.address')}
                         </label>
                         <input
                             id="setup-url"
@@ -382,7 +345,7 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                             autoFocus
                         />
                         <label className="setup-label" htmlFor="setup-name">
-                            Call it
+                            {t('firstRun.wizard.callIt')}
                         </label>
                         <input
                             id="setup-name"
@@ -394,11 +357,11 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                         {error && <div className="setup-error">{error}</div>}
                         <div className="setup-actions">
                             <button className="setup-back" onClick={() => setStep('standup')}>
-                                Back
+                                {t('firstRun.wizard.back')}
                             </button>
                             <button className="setup-next" onClick={probe} disabled={busy || !url.trim()}>
                                 {busy ? <Loader2 size={15} className="spin" /> : null}
-                                Continue
+                                {t('firstRun.wizard.continue')}
                             </button>
                         </div>
                     </>
@@ -406,49 +369,45 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
 
                 {step === 'claim' && (
                     <>
-                        <h2 className="setup-title">Nobody administers this server yet</h2>
-                        <p className="setup-sub">
-                            Put your name in and it becomes yours. You decide who else gets in,
-                            and what they can do.
-                        </p>
+                        <h2 className="setup-title">{t('firstRun.wizard.claimTitle')}</h2>
+                        <p className="setup-sub">{t('firstRun.wizard.claimSub')}</p>
                         <label className="setup-label" htmlFor="setup-admin">
-                            Your name
+                            {t('firstRun.wizard.yourName')}
                         </label>
                         <input
                             id="setup-admin"
                             className="setup-input"
                             value={admin}
                             onChange={(e) => setAdmin(e.target.value)}
-                            placeholder="e.g. sourav"
+                            placeholder={t('firstRun.wizard.namePlaceholder')}
                             autoFocus
                         />
                         <label className="setup-label" htmlFor="setup-code">
-                            Setup code
+                            {t('firstRun.wizard.setupCode')}
                         </label>
                         <input
                             id="setup-code"
                             className="setup-input"
                             value={setupCode}
                             onChange={(e) => setSetupCode(e.target.value)}
-                            placeholder="from the server's own output"
+                            placeholder={t('firstRun.wizard.codePlaceholder')}
                             spellCheck={false}
                             autoComplete="off"
                         />
                         <p className="setup-note">
-                            <ShieldCheck size={14} /> The server printed a setup code when it
-                            started. Read it from the terminal it runs in, or from{' '}
-                            <code>docker logs</code>. Seeing that output is what proves you own
-                            the server rather than merely being able to reach it. The code is new
-                            every restart and is never stored.
+                            <ShieldCheck size={14} />
+                            <span>
+                                <Trans i18nKey="firstRun.wizard.codeNote" components={code} />
+                            </span>
                         </p>
                         <p className="setup-note">
-                            <ShieldCheck size={14} /> Its key is saved here, encrypted, and never
-                            shown again. That is the whole of what this machine keeps.
+                            <ShieldCheck size={14} />
+                            <span>{t('firstRun.wizard.keyNote')}</span>
                         </p>
                         {error && <div className="setup-error">{error}</div>}
                         <div className="setup-actions">
                             <button className="setup-back" onClick={() => setStep('address')}>
-                                Back
+                                {t('firstRun.wizard.back')}
                             </button>
                             <button
                                 className="setup-next"
@@ -456,7 +415,7 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                                 disabled={busy || !admin.trim() || !setupCode.trim()}
                             >
                                 {busy ? <Loader2 size={15} className="spin" /> : null}
-                                Claim it
+                                {t('firstRun.wizard.claim')}
                             </button>
                         </div>
                     </>
@@ -464,13 +423,10 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
 
                 {step === 'key' && (
                     <>
-                        <h2 className="setup-title">This server is already set up</h2>
-                        <p className="setup-sub">
-                            Ask an administrator for a key. In the console that is People, then
-                            Create key.
-                        </p>
+                        <h2 className="setup-title">{t('firstRun.wizard.keyTitle')}</h2>
+                        <p className="setup-sub">{t('firstRun.wizard.keySub')}</p>
                         <label className="setup-label" htmlFor="setup-key">
-                            Key
+                            {t('firstRun.wizard.key')}
                         </label>
                         <input
                             id="setup-key"
@@ -483,7 +439,7 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                         {error && <div className="setup-error">{error}</div>}
                         <div className="setup-actions">
                             <button className="setup-back" onClick={() => setStep('address')}>
-                                Back
+                                {t('firstRun.wizard.back')}
                             </button>
                             <button
                                 className="setup-next"
@@ -491,7 +447,7 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                                 disabled={busy || !apiKey.trim()}
                             >
                                 {busy ? <Loader2 size={15} className="spin" /> : null}
-                                Connect
+                                {t('firstRun.wizard.connect')}
                             </button>
                         </div>
                     </>
@@ -502,16 +458,12 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                         <div className="setup-done-mark">
                             <Check size={26} />
                         </div>
-                        <h2 className="setup-title">Connected to {name}</h2>
-                        <p className="setup-sub">
-                            Build a pipeline here, then deploy it to {name}. Its schedule arrives
-                            switched off, so nothing starts running until you say so.
-                        </p>
+                        <h2 className="setup-title">{t('firstRun.wizard.doneTitle', { name })}</h2>
+                        <p className="setup-sub">{t('firstRun.wizard.doneSub', { name })}</p>
                         {adminToken ? (
                             <>
                                 <p className="setup-sub">
-                                    This is your administrator sign-in for {url}. It is shown{' '}
-                                    <b>once</b> and cannot be recovered, so keep it somewhere safe.
+                                    <Trans i18nKey="firstRun.wizard.adminToken" values={{ url }} components={{ b: <b /> }} />
                                 </p>
                                 <div className="setup-command">
                                     <pre>{adminToken}</pre>
@@ -520,21 +472,18 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                                         type="button"
                                         onClick={() => copy(adminToken)}
                                     >
-                                        <Copy size={13} /> {copied ? 'Copied' : 'Copy'}
+                                        <Copy size={13} /> {copied ? t('firstRun.wizard.copied') : t('firstRun.wizard.copy')}
                                     </button>
                                 </div>
                                 <p className="setup-note">
                                     <ShieldCheck size={14} />
-                                    <span>
-                                        Duckle already saved its own encrypted copy for deploying,
-                                        so you only need this one to open the console in a browser.
-                                    </span>
+                                    <span>{t('firstRun.wizard.tokenNote')}</span>
                                 </p>
                             </>
                         ) : null}
                         <div className="setup-actions">
                             <button className="setup-next" onClick={() => onDone('server')}>
-                                <Server size={15} /> Start building
+                                <Server size={15} /> {t('firstRun.wizard.start')}
                             </button>
                         </div>
                     </>

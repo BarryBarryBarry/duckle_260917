@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { Boxes, CheckCircle2, Cpu, Download, Loader2, Workflow } from 'lucide-react';
 import {
     dbtInstall,
@@ -15,6 +16,7 @@ type Props = {
 };
 
 export default function EngineSetupModal({ onReady }: Props) {
+    const { t } = useTranslation();
     const [engines, setEngines] = useState<EngineStatus[]>([]);
     const [loading, setLoading] = useState(true);
     const [progress, setProgress] = useState<Record<string, InstallProgress>>({});
@@ -86,19 +88,15 @@ export default function EngineSetupModal({ onReady }: Props) {
                         <Workflow size={28} />
                     </div>
                     <div className="modal-workspace-titles">
-                        <div className="modal-title">Workspace initialisation</div>
-                        <div className="modal-subtitle">
-                            First-run setup - Duckle stays a tiny download and fetches the DuckDB
-                            engine and dbt Fusion now. Sample pipelines and data are added to a
-                            new workspace so you have something to run right away.
-                        </div>
+                        <div className="modal-title">{t('firstRun.engine.title')}</div>
+                        <div className="modal-subtitle">{t('firstRun.engine.subtitle')}</div>
                     </div>
                 </div>
 
                 <div className="modal-body modal-engine-body">
                     {loading ? (
                         <div className="engine-loading">
-                            <Loader2 size={16} className="spin" /> Checking installed engines…
+                            <Loader2 size={16} className="spin" /> {t('firstRun.engine.checking')}
                         </div>
                     ) : (
                         <div className="engine-list">
@@ -126,9 +124,7 @@ export default function EngineSetupModal({ onReady }: Props) {
 
                 <div className="modal-footer modal-engine-footer">
                     <span className="modal-engine-hint">
-                        {canContinue
-                            ? 'DuckDB ready.'
-                            : 'DuckDB is required to run pipelines.'}
+                        {canContinue ? t('firstRun.engine.ready') : t('firstRun.engine.required')}
                     </span>
                     <button
                         type="button"
@@ -136,7 +132,7 @@ export default function EngineSetupModal({ onReady }: Props) {
                         onClick={onReady}
                         disabled={!canContinue}
                     >
-                        Continue
+                        {t('firstRun.engine.continue')}
                     </button>
                 </div>
             </div>
@@ -158,6 +154,7 @@ function EngineRow({
     disabled: boolean;
     onInstall: () => void;
 }) {
+    const { t } = useTranslation();
     return (
         <div className="engine-row">
             <div className="engine-row-icon">
@@ -167,15 +164,15 @@ function EngineRow({
                 <div className="engine-row-head">
                     <span className="engine-row-name">{engine.name}</span>
                     {engine.required ? (
-                        <span className="engine-row-tag required">required</span>
+                        <span className="engine-row-tag required">{t('firstRun.engine.tagRequired')}</span>
                     ) : (
-                        <span className="engine-row-tag">optional</span>
+                        <span className="engine-row-tag">{t('firstRun.engine.tagOptional')}</span>
                     )}
                     {engine.version ? (
                         <span className="engine-row-ver">v{engine.version}</span>
                     ) : null}
                     {engine.outdated ? (
-                        <span className="engine-row-tag">v{engine.target_version} available</span>
+                        <span className="engine-row-tag">{t('firstRun.engine.available', { version: engine.target_version })}</span>
                     ) : null}
                 </div>
                 <div className="engine-row-desc">{engine.description}</div>
@@ -186,11 +183,11 @@ function EngineRow({
             <div className="engine-row-action">
                 {engine.installed ? (
                     <span className="engine-row-installed">
-                        <CheckCircle2 size={14} /> Installed
+                        <CheckCircle2 size={14} /> {t('firstRun.engine.installed')}
                     </span>
                 ) : installing ? (
                     <span className="engine-row-installing">
-                        <Loader2 size={13} className="spin" /> Installing…
+                        <Loader2 size={13} className="spin" /> {t('firstRun.engine.installing')}
                     </span>
                 ) : engine.available ? (
                     <button
@@ -199,10 +196,10 @@ function EngineRow({
                         onClick={onInstall}
                         disabled={disabled}
                     >
-                        <Download size={13} /> {engine.outdated ? 'Upgrade' : 'Install'}
+                        <Download size={13} /> {engine.outdated ? t('firstRun.engine.upgrade') : t('firstRun.engine.install')}
                     </button>
                 ) : (
-                    <span className="engine-row-unavailable">Not available</span>
+                    <span className="engine-row-unavailable">{t('firstRun.engine.unavailable')}</span>
                 )}
             </div>
         </div>
@@ -222,6 +219,7 @@ function DbtRow({
     disabled: boolean;
     onInstall: () => void;
 }) {
+    const { t } = useTranslation();
     return (
         <div className="engine-row">
             <div className="engine-row-icon">
@@ -230,16 +228,13 @@ function DbtRow({
             <div className="engine-row-info">
                 <div className="engine-row-head">
                     <span className="engine-row-name">dbt Fusion</span>
-                    <span className="engine-row-tag">optional</span>
+                    <span className="engine-row-tag">{t('firstRun.engine.tagOptional')}</span>
                 </div>
-                <div className="engine-row-desc">
-                    Fast dbt engine for the dbt transform node. Installs alongside DuckDB; the
-                    dbt-core fallback is fetched automatically if Fusion is unavailable.
-                </div>
+                <div className="engine-row-desc">{t('firstRun.engine.dbtDesc')}</div>
                 {error ? (
                     <div className="engine-progress">
                         <div className="engine-progress-label">
-                            {error} - you can retry, or install it later when you use a dbt node.
+                            {t('firstRun.engine.dbtRetry', { error })}
                         </div>
                     </div>
                 ) : null}
@@ -247,11 +242,11 @@ function DbtRow({
             <div className="engine-row-action">
                 {installed ? (
                     <span className="engine-row-installed">
-                        <CheckCircle2 size={14} /> Installed
+                        <CheckCircle2 size={14} /> {t('firstRun.engine.installed')}
                     </span>
                 ) : busy ? (
                     <span className="engine-row-installing">
-                        <Loader2 size={13} className="spin" /> Installing…
+                        <Loader2 size={13} className="spin" /> {t('firstRun.engine.installing')}
                     </span>
                 ) : (
                     <button
@@ -260,7 +255,7 @@ function DbtRow({
                         onClick={onInstall}
                         disabled={disabled}
                     >
-                        <Download size={13} /> Install
+                        <Download size={13} /> {t('firstRun.engine.install')}
                     </button>
                 )}
             </div>
@@ -269,6 +264,7 @@ function DbtRow({
 }
 
 function ProgressLine({ progress }: { progress: InstallProgress }) {
+    const { t } = useTranslation();
     let label = '';
     let pct: number | null = null;
     switch (progress.phase) {
@@ -277,22 +273,22 @@ function ProgressLine({ progress }: { progress: InstallProgress }) {
             if (progress.total) {
                 pct = Math.round((progress.received / progress.total) * 100);
                 const totalMb = (progress.total / 1_000_000).toFixed(1);
-                label = `Downloading ${mb} / ${totalMb} MB`;
+                label = t('firstRun.engine.progress.downloadingOf', { mb, total: totalMb });
             } else {
-                label = `Downloading ${mb} MB`;
+                label = t('firstRun.engine.progress.downloading', { mb });
             }
             break;
         }
         case 'extracting':
-            label = 'Extracting…';
+            label = t('firstRun.engine.progress.extracting');
             break;
         case 'verifying':
-            label = 'Verifying…';
+            label = t('firstRun.engine.progress.verifying');
             break;
         case 'installing_extension':
             // Pre-fetching the extensions Duckle uses so the first
             // Postgres / S3 / Excel touch is instant.
-            label = `Installing extensions (${progress.index}/${progress.total}): ${progress.name}`;
+            label = t('firstRun.engine.progress.extensions', { index: progress.index, total: progress.total, name: progress.name });
             pct = Math.round((progress.index / progress.total) * 100);
             break;
         case 'downloading_model': {
@@ -300,14 +296,14 @@ function ProgressLine({ progress }: { progress: InstallProgress }) {
             if (progress.total) {
                 pct = Math.round((progress.received / progress.total) * 100);
                 const totalMb = (progress.total / 1_000_000).toFixed(0);
-                label = `Downloading model ${mb} / ${totalMb} MB`;
+                label = t('firstRun.engine.progress.modelOf', { mb, total: totalMb });
             } else {
-                label = `Downloading model ${mb} MB`;
+                label = t('firstRun.engine.progress.model', { mb });
             }
             break;
         }
         case 'done':
-            label = 'Ready';
+            label = t('firstRun.engine.progress.done');
             pct = 100;
             break;
         case 'failed':

@@ -441,5 +441,123 @@
       "rng_failed": "A secure random value could not be generated."
     },
     "user": "User"
+  },
+  "firstRun": {
+    "workspace": {
+      "title": "Welcome to Duckle",
+      "subtitle": "Pick a folder to store your workspace",
+      "lead": "Duckle keeps your pipelines, saved connections, contexts, routines, and documentation in a regular folder on disk. Everything is plain JSON so it plays nicely with version control.",
+      "existingTitle": "Pick an existing folder",
+      "existingDesc": "If you already have a Duckle workspace, point at the same folder and your saved state loads automatically.",
+      "newTitle": "Or choose a new empty folder",
+      "newDesc": "Duckle creates its workspace files (duckle.json, repository.json) on first save. Use any folder - a fresh one, your Documents folder, anywhere.",
+      "noFolder": "No folder selected. Pick a directory where Duckle can store pipelines, connections, and routines.",
+      "opening": "Opening picker…",
+      "choose": "Choose workspace folder…"
+    },
+    "engine": {
+      "title": "Workspace initialisation",
+      "subtitle": "First-run setup - Duckle stays a tiny download and fetches the DuckDB engine and dbt Fusion now. Sample pipelines and data are added to a new workspace so you have something to run right away.",
+      "checking": "Checking installed engines…",
+      "ready": "DuckDB ready.",
+      "required": "DuckDB is required to run pipelines.",
+      "continue": "Continue",
+      "tagRequired": "required",
+      "tagOptional": "optional",
+      "available": "v{{version}} available",
+      "installed": "Installed",
+      "installing": "Installing…",
+      "upgrade": "Upgrade",
+      "install": "Install",
+      "unavailable": "Not available",
+      "dbtDesc": "Fast dbt engine for the dbt transform node. Installs alongside DuckDB; the dbt-core fallback is fetched automatically if Fusion is unavailable.",
+      "dbtRetry": "{{error}} - you can retry, or install it later when you use a dbt node.",
+      "progress": {
+        "downloadingOf": "Downloading {{mb}} / {{total}} MB",
+        "downloading": "Downloading {{mb}} MB",
+        "extracting": "Extracting…",
+        "verifying": "Verifying…",
+        "extensions": "Installing extensions ({{index}}/{{total}}): {{name}}",
+        "modelOf": "Downloading model {{mb}} / {{total}} MB",
+        "model": "Downloading model {{mb}} MB",
+        "done": "Ready"
+      }
+    },
+    "wizard": {
+      "chooseTitle": "How are you using Duckle?",
+      "chooseSub": "You can change this later. Nothing here is permanent.",
+      "localTitle": "Just me, on this machine",
+      "localSub": "Draw pipelines and run them here. No server, nothing to set up.",
+      "teamTitle": "My team, on a server",
+      "teamSub": "Author here and deploy to a server you own, where pipelines run on a schedule.",
+      "whereTitle": "Where will your server run?",
+      "whereSub": "Duckle is one binary, so this only changes the command you run. You own the machine either way.",
+      "back": "Back",
+      "continue": "Continue",
+      "standupCustom": "Start a Duckle server",
+      "standupOn": "Start Duckle on {{provider}}",
+      "standupSub": "{{runsOn}}. Three steps.",
+      "saveRunner": "Save the runner",
+      "saveAgain": "Save it again",
+      "runnerSaved": "{{platform}} runner saved in <code>{{folder}}</code>",
+      "copy": "Copy",
+      "copied": "Copied",
+      "bindNote": "It binds to <code>0.0.0.0</code> rather than <code>127.0.0.1</code> on purpose. A server that only answers on loopback counts as already yours and cannot be claimed from here.",
+      "fullGuide": "Full guide",
+      "running": "It is running",
+      "addressTitle": "Where is your server?",
+      "addressSub": "The address of a machine running <code>duckle-runner serve</code>.",
+      "address": "Address",
+      "callIt": "Call it",
+      "claimTitle": "Nobody administers this server yet",
+      "claimSub": "Put your name in and it becomes yours. You decide who else gets in, and what they can do.",
+      "yourName": "Your name",
+      "namePlaceholder": "e.g. sourav",
+      "setupCode": "Setup code",
+      "codePlaceholder": "from the server's own output",
+      "codeNote": "The server printed a setup code when it started. Read it from the terminal it runs in, or from <code>docker logs</code>. Seeing that output is what proves you own the server rather than merely being able to reach it. The code is new every restart and is never stored.",
+      "keyNote": "Its key is saved here, encrypted, and never shown again. That is the whole of what this machine keeps.",
+      "claim": "Claim it",
+      "keyTitle": "This server is already set up",
+      "keySub": "Ask an administrator for a key. In the console that is People, then Create key.",
+      "key": "Key",
+      "connect": "Connect",
+      "doneTitle": "Connected to {{name}}",
+      "doneSub": "Build a pipeline here, then deploy it to {{name}}. Its schedule arrives switched off, so nothing starts running until you say so.",
+      "adminToken": "This is your administrator sign-in for {{url}}. It is shown <b>once</b> and cannot be recovered, so keep it somewhere safe.",
+      "tokenNote": "Duckle already saved its own encrypted copy for deploying, so you only need this one to open the console in a browser.",
+      "start": "Start building",
+      "providers": {
+        "custom": {
+          "name": "Custom",
+          "blurb": "A machine you run yourself, including this one",
+          "runsOn": "One file, no installer",
+          "step1": "Save the runner (below). It comes out of this app, so there is nothing to download.",
+          "step2": "Paste the command it gives you into a terminal.",
+          "step3": "Wait for the line that says NOT SET UP, then come back here."
+        },
+        "aws": {
+          "blurb": "EC2, ECS on Fargate, or EKS",
+          "runsOn": "EC2 is the straightforward one",
+          "step1": "Launch an EC2 instance with Docker, and open port 8080 to yourself only.",
+          "step2": "Run the container, giving it a folder for the workspace.",
+          "step3": "Wait for the line that says NOT SET UP."
+        },
+        "gcp": {
+          "blurb": "Compute Engine, Cloud Run, or GKE",
+          "runsOn": "Compute Engine is the straightforward one",
+          "step1": "Create an instance from the container image.",
+          "step2": "Allow yourself through the firewall on port 8080.",
+          "step3": "Wait for the line that says NOT SET UP."
+        },
+        "azure": {
+          "blurb": "Virtual Machine, Container Apps, or AKS",
+          "runsOn": "A VM is the straightforward one",
+          "step1": "Create a Linux VM with Docker, and restrict inbound to yourself.",
+          "step2": "Run the container, giving it a folder for the workspace.",
+          "step3": "Wait for the line that says NOT SET UP."
+        }
+      }
+    }
   }
 }

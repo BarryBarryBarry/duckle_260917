@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { Folder, FolderOpen, Workflow } from 'lucide-react';
 import { pickWorkspaceDirectory } from '../workspace';
 
@@ -8,6 +9,7 @@ type Props = {
 };
 
 export default function WorkspacePickerModal({ onPicked }: Props) {
+    const { t } = useTranslation();
     const [picking, setPicking] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -19,7 +21,7 @@ export default function WorkspacePickerModal({ onPicked }: Props) {
             if (path) {
                 onPicked(path);
             } else {
-                setError('No folder selected. Pick a directory where Duckle can store pipelines, connections, and routines.');
+                setError(t('firstRun.workspace.noFolder'));
             }
         } catch (err) {
             setError(String(err));
@@ -36,28 +38,24 @@ export default function WorkspacePickerModal({ onPicked }: Props) {
                         <Workflow size={28} />
                     </div>
                     <div className="modal-workspace-titles">
-                        <div className="modal-title">Welcome to Duckle</div>
-                        <div className="modal-subtitle">Pick a folder to store your workspace</div>
+                        <div className="modal-title">{t('firstRun.workspace.title')}</div>
+                        <div className="modal-subtitle">{t('firstRun.workspace.subtitle')}</div>
                     </div>
                 </div>
 
                 <div className="modal-body modal-workspace-body">
-                    <p className="modal-workspace-lead">
-                        Duckle keeps your pipelines, saved connections, contexts, routines, and
-                        documentation in a regular folder on disk. Everything is plain JSON so it
-                        plays nicely with version control.
-                    </p>
+                    <p className="modal-workspace-lead">{t('firstRun.workspace.lead')}</p>
 
                     <div className="modal-workspace-features">
                         <Feature
                             icon={<Folder size={14} />}
-                            title="Pick an existing folder"
-                            description="If you already have a Duckle workspace, point at the same folder and your saved state loads automatically."
+                            title={t('firstRun.workspace.existingTitle')}
+                            description={t('firstRun.workspace.existingDesc')}
                         />
                         <Feature
                             icon={<FolderOpen size={14} />}
-                            title="Or choose a new empty folder"
-                            description="Duckle will create workspace.json on first save. Use any folder - a fresh one, your Documents folder, anywhere."
+                            title={t('firstRun.workspace.newTitle')}
+                            description={t('firstRun.workspace.newDesc')}
                         />
                     </div>
 
@@ -71,7 +69,7 @@ export default function WorkspacePickerModal({ onPicked }: Props) {
                         onClick={handlePick}
                         disabled={picking}
                     >
-                        {picking ? 'Opening picker…' : 'Choose workspace folder…'}
+                        {picking ? t('firstRun.workspace.opening') : t('firstRun.workspace.choose')}
                     </button>
                 </div>
             </div>

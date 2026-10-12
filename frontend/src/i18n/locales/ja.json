@@ -304,5 +304,123 @@
       "rng_failed": "安全な乱数を生成できませんでした。"
     },
     "user": "一般ユーザー"
+  },
+  "firstRun": {
+    "workspace": {
+      "title": "Duckle へようこそ",
+      "subtitle": "ワークスペースを保存するフォルダーを選択してください",
+      "lead": "Duckle はパイプライン、保存済みの接続、コンテキスト、ルーチン、ドキュメントをディスク上の通常のフォルダーに保存します。すべてプレーンな JSON なので、バージョン管理と相性が良好です。",
+      "existingTitle": "既存のフォルダーを選択",
+      "existingDesc": "既に Duckle のワークスペースがある場合は、同じフォルダーを選ぶと保存済みの内容が自動で読み込まれます。",
+      "newTitle": "または新しい空のフォルダーを選択",
+      "newDesc": "Duckle は最初の保存時にワークスペースのファイル（duckle.json、repository.json）を作成します。新しいフォルダー、書類フォルダーなど、どこでも使えます。",
+      "noFolder": "フォルダーが選択されていません。パイプライン、接続、ルーチンを保存するディレクトリを選んでください。",
+      "opening": "フォルダー選択を開いています…",
+      "choose": "ワークスペースのフォルダーを選択…"
+    },
+    "engine": {
+      "title": "ワークスペースの初期化",
+      "subtitle": "初回セットアップ：Duckle 本体は小さく、ここで DuckDB エンジンと dbt Fusion を取得します。新しいワークスペースにはサンプルのパイプラインとデータが追加され、すぐに実行を試せます。",
+      "checking": "インストール済みのエンジンを確認しています…",
+      "ready": "DuckDB の準備ができました。",
+      "required": "パイプラインの実行には DuckDB が必要です。",
+      "continue": "続行",
+      "tagRequired": "必須",
+      "tagOptional": "任意",
+      "available": "v{{version}} が利用可能",
+      "installed": "インストール済み",
+      "installing": "インストール中…",
+      "upgrade": "アップグレード",
+      "install": "インストール",
+      "unavailable": "利用できません",
+      "dbtDesc": "dbt 変換ノード用の高速な dbt エンジンです。DuckDB と一緒にインストールされ、Fusion が使えない場合は dbt-core が自動で取得されます。",
+      "dbtRetry": "{{error}}。再試行するか、dbt ノードを使うときにあとでインストールできます。",
+      "progress": {
+        "downloadingOf": "ダウンロード中 {{mb}} / {{total}} MB",
+        "downloading": "ダウンロード中 {{mb}} MB",
+        "extracting": "展開中…",
+        "verifying": "検証中…",
+        "extensions": "拡張機能をインストール中（{{index}}/{{total}}）：{{name}}",
+        "modelOf": "モデルをダウンロード中 {{mb}} / {{total}} MB",
+        "model": "モデルをダウンロード中 {{mb}} MB",
+        "done": "準備完了"
+      }
+    },
+    "wizard": {
+      "chooseTitle": "Duckle をどのように使いますか？",
+      "chooseSub": "あとで変更できます。ここでの選択は固定されません。",
+      "localTitle": "自分だけ、このコンピューターで",
+      "localSub": "ここでパイプラインを作成して実行します。サーバーも設定も不要です。",
+      "teamTitle": "チームで、サーバー上で",
+      "teamSub": "ここで作成し、自分のサーバーにデプロイしてスケジュール実行します。",
+      "whereTitle": "サーバーはどこで動かしますか？",
+      "whereSub": "Duckle は 1 つのバイナリなので、変わるのは実行するコマンドだけです。どの場合もマシンはあなたのものです。",
+      "back": "戻る",
+      "continue": "続行",
+      "standupCustom": "Duckle サーバーを起動",
+      "standupOn": "{{provider}} で Duckle を起動",
+      "standupSub": "{{runsOn}}。3 ステップです。",
+      "saveRunner": "ランナーを保存",
+      "saveAgain": "もう一度保存",
+      "runnerSaved": "{{platform}} ランナーを <code>{{folder}}</code> に保存しました",
+      "copy": "コピー",
+      "copied": "コピーしました",
+      "bindNote": "意図的に <code>127.0.0.1</code> ではなく <code>0.0.0.0</code> にバインドします。ループバックでしか応答しないサーバーは既にあなたのものと見なされ、ここから取得できません。",
+      "fullGuide": "詳しいガイド",
+      "running": "起動しました",
+      "addressTitle": "サーバーはどこにありますか？",
+      "addressSub": "<code>duckle-runner serve</code> を実行しているマシンのアドレス。",
+      "address": "アドレス",
+      "callIt": "名前",
+      "claimTitle": "このサーバーにはまだ管理者がいません",
+      "claimSub": "名前を入力すると、このサーバーはあなたのものになります。誰が入れて何ができるかはあなたが決めます。",
+      "yourName": "あなたの名前",
+      "namePlaceholder": "例：sourav",
+      "setupCode": "セットアップコード",
+      "codePlaceholder": "サーバー自身の出力から",
+      "codeNote": "サーバーは起動時にセットアップコードを出力します。実行中のターミナルか <code>docker logs</code> で確認してください。その出力を見られることが、単にアクセスできるだけでなくサーバーの所有者である証明になります。コードは再起動のたびに変わり、保存されることはありません。",
+      "keyNote": "キーは暗号化してここに保存され、二度と表示されません。このコンピューターが保持するのはそれだけです。",
+      "claim": "取得する",
+      "keyTitle": "このサーバーは既にセットアップ済みです",
+      "keySub": "管理者にキーを依頼してください。コンソールの People から Create key で作成できます。",
+      "key": "キー",
+      "connect": "接続",
+      "doneTitle": "{{name}} に接続しました",
+      "doneSub": "ここでパイプラインを作成し、{{name}} にデプロイします。スケジュールはオフの状態で届くので、あなたがオンにするまで何も実行されません。",
+      "adminToken": "これは {{url}} の管理者サインイン情報です。表示されるのは<b>今回だけ</b>で、復元できないので安全な場所に保管してください。",
+      "tokenNote": "デプロイ用に Duckle が暗号化したコピーを既に保存しているので、これはブラウザーでコンソールを開くときだけ必要です。",
+      "start": "作成を始める",
+      "providers": {
+        "custom": {
+          "name": "カスタム",
+          "blurb": "このコンピューターを含む、自分で運用するマシン",
+          "runsOn": "ファイル 1 つ、インストーラー不要",
+          "step1": "ランナーを保存します（下）。このアプリから取り出すので、ダウンロードは不要です。",
+          "step2": "表示されたコマンドをターミナルに貼り付けて実行します。",
+          "step3": "NOT SET UP という行が出たら、ここに戻ります。"
+        },
+        "aws": {
+          "blurb": "EC2、Fargate 上の ECS、または EKS",
+          "runsOn": "EC2 がいちばん簡単です",
+          "step1": "Docker 入りの EC2 インスタンスを起動し、ポート 8080 を自分にだけ開放します。",
+          "step2": "ワークスペース用のフォルダーを指定してコンテナーを実行します。",
+          "step3": "NOT SET UP という行が出るまで待ちます。"
+        },
+        "gcp": {
+          "blurb": "Compute Engine、Cloud Run、または GKE",
+          "runsOn": "Compute Engine がいちばん簡単です",
+          "step1": "コンテナーイメージからインスタンスを作成します。",
+          "step2": "ファイアウォールでポート 8080 を自分にだけ許可します。",
+          "step3": "NOT SET UP という行が出るまで待ちます。"
+        },
+        "azure": {
+          "blurb": "仮想マシン、Container Apps、または AKS",
+          "runsOn": "VM がいちばん簡単です",
+          "step1": "Docker 入りの Linux VM を作成し、受信を自分だけに制限します。",
+          "step2": "ワークスペース用のフォルダーを指定してコンテナーを実行します。",
+          "step3": "NOT SET UP という行が出るまで待ちます。"
+        }
+      }
+    }
   }
 }

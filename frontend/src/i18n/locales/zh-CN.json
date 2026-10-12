@@ -409,5 +409,123 @@
       "rng_failed": "无法生成安全随机数。"
     },
     "user": "普通用户"
+  },
+  "firstRun": {
+    "workspace": {
+      "title": "欢迎使用 Duckle",
+      "subtitle": "选择一个文件夹来存放你的工作区",
+      "lead": "Duckle 把 pipeline、保存的数据连接、上下文、例程和文档都存放在磁盘上的普通文件夹里。全部是纯 JSON，便于用版本控制管理。",
+      "existingTitle": "选择已有文件夹",
+      "existingDesc": "如果你已经有 Duckle 工作区，选择同一个文件夹，之前保存的内容会自动加载。",
+      "newTitle": "或者选择一个新的空文件夹",
+      "newDesc": "Duckle 会在第一次保存时创建工作区文件（duckle.json、repository.json）。任何文件夹都可以：新建的、文稿文件夹，放在哪里都行。",
+      "noFolder": "没有选择文件夹。请选择一个用来存放 pipeline、数据连接和例程的目录。",
+      "opening": "正在打开文件夹选择器…",
+      "choose": "选择工作区文件夹…"
+    },
+    "engine": {
+      "title": "初始化工作区",
+      "subtitle": "首次运行设置：Duckle 安装包很小，现在会下载 DuckDB 引擎和 dbt Fusion。新工作区里会放入示例 pipeline 和数据，你马上就能运行一个试试。",
+      "checking": "正在检查已安装的引擎…",
+      "ready": "DuckDB 已就绪。",
+      "required": "运行 pipeline 需要 DuckDB。",
+      "continue": "继续",
+      "tagRequired": "必需",
+      "tagOptional": "可选",
+      "available": "有新版本 v{{version}}",
+      "installed": "已安装",
+      "installing": "正在安装…",
+      "upgrade": "升级",
+      "install": "安装",
+      "unavailable": "不可用",
+      "dbtDesc": "dbt 转换节点使用的高速 dbt 引擎，与 DuckDB 一起安装；如果拿不到 Fusion，会自动改用 dbt-core。",
+      "dbtRetry": "{{error}}。可以重试，也可以等用到 dbt 节点时再安装。",
+      "progress": {
+        "downloadingOf": "正在下载 {{mb}} / {{total}} MB",
+        "downloading": "正在下载 {{mb}} MB",
+        "extracting": "正在解压…",
+        "verifying": "正在校验…",
+        "extensions": "正在安装扩展（{{index}}/{{total}}）：{{name}}",
+        "modelOf": "正在下载模型 {{mb}} / {{total}} MB",
+        "model": "正在下载模型 {{mb}} MB",
+        "done": "已就绪"
+      }
+    },
+    "wizard": {
+      "chooseTitle": "你打算怎么使用 Duckle？",
+      "chooseSub": "之后可以随时修改，这里的选择不是永久的。",
+      "localTitle": "只有我，在这台电脑上",
+      "localSub": "在这里设计并运行 pipeline。不需要服务器，无需任何配置。",
+      "teamTitle": "我的团队，在服务器上",
+      "teamSub": "在这里设计，然后部署到你自己的服务器，按计划定时运行。",
+      "whereTitle": "你的服务器在哪里运行？",
+      "whereSub": "Duckle 只有一个可执行文件，这里的选择只影响要运行的命令。无论哪种，机器都归你所有。",
+      "back": "返回",
+      "continue": "继续",
+      "standupCustom": "启动 Duckle 服务器",
+      "standupOn": "在 {{provider}} 上启动 Duckle",
+      "standupSub": "{{runsOn}}。只需三步。",
+      "saveRunner": "保存运行程序",
+      "saveAgain": "重新保存",
+      "runnerSaved": "{{platform}} 运行程序已保存到 <code>{{folder}}</code>",
+      "copy": "复制",
+      "copied": "已复制",
+      "bindNote": "这里有意绑定 <code>0.0.0.0</code> 而不是 <code>127.0.0.1</code>。只在本机回环地址上响应的服务器会被视为已经归你所有，无法在这里认领。",
+      "fullGuide": "完整指南",
+      "running": "已经运行起来了",
+      "addressTitle": "你的服务器在哪里？",
+      "addressSub": "运行 <code>duckle-runner serve</code> 的机器地址。",
+      "address": "地址",
+      "callIt": "名称",
+      "claimTitle": "这台服务器还没有管理员",
+      "claimSub": "填上你的名字，它就归你了。由你决定还有谁能进来、能做什么。",
+      "yourName": "你的名字",
+      "namePlaceholder": "例如 sourav",
+      "setupCode": "设置码",
+      "codePlaceholder": "来自服务器自己的输出",
+      "codeNote": "服务器启动时会打印一个设置码，请在它运行的终端里或 <code>docker logs</code> 中查看。能看到这段输出，才能证明你是服务器的主人，而不只是能访问到它。设置码每次重启都会变化，而且从不保存。",
+      "keyNote": "它的密钥会加密保存在这里，之后不再显示。这台电脑只保存这一样东西。",
+      "claim": "认领",
+      "keyTitle": "这台服务器已经设置过了",
+      "keySub": "请向管理员要一个密钥。在控制台里依次点 People、Create key。",
+      "key": "密钥",
+      "connect": "连接",
+      "doneTitle": "已连接到 {{name}}",
+      "doneSub": "在这里构建 pipeline，然后部署到 {{name}}。部署后的计划默认是关闭的，在你开启之前什么都不会运行。",
+      "adminToken": "这是你在 {{url}} 的管理员登录凭据。它只显示<b>这一次</b>，丢失后无法找回，请妥善保存。",
+      "tokenNote": "Duckle 已经为部署加密保存了一份，你只在用浏览器打开控制台时才需要这一份。",
+      "start": "开始构建",
+      "providers": {
+        "custom": {
+          "name": "自定义",
+          "blurb": "你自己管理的机器，包括这台电脑",
+          "runsOn": "一个文件，无需安装",
+          "step1": "保存运行程序（见下方）。它直接取自本应用，无需下载。",
+          "step2": "把它给出的命令粘贴到终端里运行。",
+          "step3": "等到输出 NOT SET UP 这一行，再回到这里。"
+        },
+        "aws": {
+          "blurb": "EC2、Fargate 上的 ECS 或 EKS",
+          "runsOn": "EC2 最简单直接",
+          "step1": "启动一台装有 Docker 的 EC2 实例，并只向你自己开放 8080 端口。",
+          "step2": "运行容器，并给它指定一个工作区文件夹。",
+          "step3": "等到输出 NOT SET UP 这一行。"
+        },
+        "gcp": {
+          "blurb": "Compute Engine、Cloud Run 或 GKE",
+          "runsOn": "Compute Engine 最简单直接",
+          "step1": "用容器镜像创建一个实例。",
+          "step2": "在防火墙里只允许你自己访问 8080 端口。",
+          "step3": "等到输出 NOT SET UP 这一行。"
+        },
+        "azure": {
+          "blurb": "虚拟机、Container Apps 或 AKS",
+          "runsOn": "虚拟机最简单直接",
+          "step1": "创建一台装有 Docker 的 Linux 虚拟机，并只允许你自己访问。",
+          "step2": "运行容器，并给它指定一个工作区文件夹。",
+          "step3": "等到输出 NOT SET UP 这一行。"
+        }
+      }
+    }
   }
 }

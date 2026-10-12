@@ -339,5 +339,123 @@
       "rng_failed": "無法生成安全隨機數。"
     },
     "user": "一般使用者"
+  },
+  "firstRun": {
+    "workspace": {
+      "title": "歡迎使用 Duckle",
+      "subtitle": "選擇一個資料夾來存放你的工作區",
+      "lead": "Duckle 把 pipeline、儲存的資料連線、上下文、例程和文件都存放在磁碟上的普通資料夾裡。全部是純 JSON，便於用版本控制管理。",
+      "existingTitle": "選擇已有資料夾",
+      "existingDesc": "如果你已經有 Duckle 工作區，選擇同一個資料夾，之前儲存的內容會自動載入。",
+      "newTitle": "或者選擇一個新的空資料夾",
+      "newDesc": "Duckle 會在第一次儲存時建立工作區檔案（duckle.json、repository.json）。任何資料夾都可以：新建的、文稿資料夾，放在哪裡都行。",
+      "noFolder": "沒有選擇資料夾。請選擇一個用來存放 pipeline、資料連線和例程的目錄。",
+      "opening": "正在開啟資料夾選擇器…",
+      "choose": "選擇工作區資料夾…"
+    },
+    "engine": {
+      "title": "初始化工作區",
+      "subtitle": "首次執行設定：Duckle 安裝包很小，現在會下載 DuckDB 引擎和 dbt Fusion。新工作區裡會放入示例 pipeline 和資料，你馬上就能執行一個試試。",
+      "checking": "正在檢查已安裝的引擎…",
+      "ready": "DuckDB 已就緒。",
+      "required": "執行 pipeline 需要 DuckDB。",
+      "continue": "繼續",
+      "tagRequired": "必需",
+      "tagOptional": "可選",
+      "available": "有新版本 v{{version}}",
+      "installed": "已安裝",
+      "installing": "正在安裝…",
+      "upgrade": "升級",
+      "install": "安裝",
+      "unavailable": "不可用",
+      "dbtDesc": "dbt 轉換節點使用的高速 dbt 引擎，與 DuckDB 一起安裝；如果拿不到 Fusion，會自動改用 dbt-core。",
+      "dbtRetry": "{{error}}。可以重試，也可以等用到 dbt 節點時再安裝。",
+      "progress": {
+        "downloadingOf": "正在下載 {{mb}} / {{total}} MB",
+        "downloading": "正在下載 {{mb}} MB",
+        "extracting": "正在解壓…",
+        "verifying": "正在校驗…",
+        "extensions": "正在安裝擴充套件（{{index}}/{{total}}）：{{name}}",
+        "modelOf": "正在下載模型 {{mb}} / {{total}} MB",
+        "model": "正在下載模型 {{mb}} MB",
+        "done": "已就緒"
+      }
+    },
+    "wizard": {
+      "chooseTitle": "你打算怎麼使用 Duckle？",
+      "chooseSub": "之後可以隨時修改，這裡的選擇不是永久的。",
+      "localTitle": "只有我，在這臺電腦上",
+      "localSub": "在這裡設計並執行 pipeline。不需要伺服器，無需任何配置。",
+      "teamTitle": "我的團隊，在伺服器上",
+      "teamSub": "在這裡設計，然後部署到你自己的伺服器，按計劃定時執行。",
+      "whereTitle": "你的伺服器在哪裡執行？",
+      "whereSub": "Duckle 只有一個可執行檔案，這裡的選擇隻影響要執行的命令。無論哪種，機器都歸你所有。",
+      "back": "返回",
+      "continue": "繼續",
+      "standupCustom": "啟動 Duckle 伺服器",
+      "standupOn": "在 {{provider}} 上啟動 Duckle",
+      "standupSub": "{{runsOn}}。只需三步。",
+      "saveRunner": "儲存執行程式",
+      "saveAgain": "重新儲存",
+      "runnerSaved": "{{platform}} 執行程式已儲存到 <code>{{folder}}</code>",
+      "copy": "複製",
+      "copied": "已複製",
+      "bindNote": "這裡有意繫結 <code>0.0.0.0</code> 而不是 <code>127.0.0.1</code>。只在本機迴環地址上響應的伺服器會被視為已經歸你所有，無法在這裡認領。",
+      "fullGuide": "完整指南",
+      "running": "已經執行起來了",
+      "addressTitle": "你的伺服器在哪裡？",
+      "addressSub": "執行 <code>duckle-runner serve</code> 的機器地址。",
+      "address": "地址",
+      "callIt": "名稱",
+      "claimTitle": "這臺伺服器還沒有管理員",
+      "claimSub": "填上你的名字，它就歸你了。由你決定還有誰能進來、能做什麼。",
+      "yourName": "你的名字",
+      "namePlaceholder": "例如 sourav",
+      "setupCode": "設定碼",
+      "codePlaceholder": "來自伺服器自己的輸出",
+      "codeNote": "伺服器啟動時會列印一個設定碼，請在它執行的終端裡或 <code>docker logs</code> 中檢視。能看到這段輸出，才能證明你是伺服器的主人，而不只是能訪問到它。設定碼每次重啟都會變化，而且從不儲存。",
+      "keyNote": "它的金鑰會加密儲存在這裡，之後不再顯示。這臺電腦只儲存這一樣東西。",
+      "claim": "認領",
+      "keyTitle": "這臺伺服器已經設定過了",
+      "keySub": "請向管理員要一個金鑰。在控制檯裡依次點 People、Create key。",
+      "key": "金鑰",
+      "connect": "連線",
+      "doneTitle": "已連線到 {{name}}",
+      "doneSub": "在這裡構建 pipeline，然後部署到 {{name}}。部署後的計劃預設是關閉的，在你開啟之前什麼都不會執行。",
+      "adminToken": "這是你在 {{url}} 的管理員登入憑據。它只顯示<b>這一次</b>，丟失後無法找回，請妥善儲存。",
+      "tokenNote": "Duckle 已經為部署加密儲存了一份，你只在用瀏覽器開啟控制檯時才需要這一份。",
+      "start": "開始構建",
+      "providers": {
+        "custom": {
+          "name": "自定義",
+          "blurb": "你自己管理的機器，包括這臺電腦",
+          "runsOn": "一個檔案，無需安裝",
+          "step1": "儲存執行程式（見下方）。它直接取自本應用，無需下載。",
+          "step2": "把它給出的命令貼上到終端裡執行。",
+          "step3": "等到輸出 NOT SET UP 這一行，再回到這裡。"
+        },
+        "aws": {
+          "blurb": "EC2、Fargate 上的 ECS 或 EKS",
+          "runsOn": "EC2 最簡單直接",
+          "step1": "啟動一臺裝有 Docker 的 EC2 例項，並只向你自己開放 8080 埠。",
+          "step2": "執行容器，並給它指定一個工作區資料夾。",
+          "step3": "等到輸出 NOT SET UP 這一行。"
+        },
+        "gcp": {
+          "blurb": "Compute Engine、Cloud Run 或 GKE",
+          "runsOn": "Compute Engine 最簡單直接",
+          "step1": "用容器映象建立一個例項。",
+          "step2": "在防火牆裡只允許你自己訪問 8080 埠。",
+          "step3": "等到輸出 NOT SET UP 這一行。"
+        },
+        "azure": {
+          "blurb": "虛擬機器、Container Apps 或 AKS",
+          "runsOn": "虛擬機器最簡單直接",
+          "step1": "建立一臺裝有 Docker 的 Linux 虛擬機器，並只允許你自己訪問。",
+          "step2": "執行容器，並給它指定一個工作區資料夾。",
+          "step3": "等到輸出 NOT SET UP 這一行。"
+        }
+      }
+    }
   }
 }
