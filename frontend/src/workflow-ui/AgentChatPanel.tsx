@@ -169,6 +169,11 @@ type UiDialog = {
 
 const STATE_KEY = 'duckle-pi-agent-panel';
 
+/** The panel shrinks down to its header, one line of conversation and the
+ *  input; the styles drop the connection picker and spacing as it gets short
+ *  (see .agent-chat-panel in styles.css). */
+const AGENT_PANEL_LIMITS = { minWidth: 300, minHeight: 170, autoHideSidebar: true };
+
 function emptyTurn(): AssistantTurn {
     return { text: '', thinking: '', tools: [], skills: [], subagents: [] };
 }
@@ -423,7 +428,8 @@ export default function AgentChatPanel({
         toggleCollapsed,
         toggleMaximized,
         toggleSidebar,
-    } = useFloatingPanel('pi-agent-panel-position', 'Agent');
+        sidebarShown,
+    } = useFloatingPanel('pi-agent-panel-position', 'Agent', AGENT_PANEL_LIMITS);
     /** The conversation whose Pi session is running, if any. */
     const startedConversationRef = useRef<string | null>(null);
     /** Serializes history writes so a slow save cannot land after a newer one. */
@@ -456,9 +462,10 @@ export default function AgentChatPanel({
         inputRef,
     );
 
+    // Also on resize: the composer's own size limits change with the panel's.
     useEffect(() => {
         syncComposerHeight(inputRef.current);
-    }, [draft, open, layout.collapsed]);
+    }, [draft, open, layout.collapsed, layout.width, layout.height]);
 
     const runHistoryTask = useCallback((task: () => Promise<void>) => {
         historyQueueRef.current = historyQueueRef.current
@@ -1079,11 +1086,11 @@ export default function AgentChatPanel({
                                 type="button"
                                 className="chat-panel-head-btn"
                                 onClick={toggleSidebar}
-                                title={layout.sidebar ? '隐藏历史对话' : '显示历史对话'}
-                                aria-label={layout.sidebar ? '隐藏历史对话' : '显示历史对话'}
-                                aria-pressed={layout.sidebar}
+                                title={sidebarShown ? '隐藏历史对话' : '显示历史对话'}
+                                aria-label={sidebarShown ? '隐藏历史对话' : '显示历史对话'}
+                                aria-pressed={sidebarShown}
                             >
-                                {layout.sidebar ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+                                {sidebarShown ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
                             </button>
                         ) : null}
                     </div>
@@ -1171,7 +1178,7 @@ export default function AgentChatPanel({
                 </div>
             ) : (
                 <div className="chat-panel-body">
-                    {layout.sidebar ? (
+                    {sidebarShown ? (
                         <ConversationSidebar
                             conversations={conversations}
                             activeId={activeId}

@@ -6,12 +6,22 @@ import { useCallback, useRef } from 'react';
 const COMPOSER_MIN_HEIGHT = 72;
 const COMPOSER_MAX_HEIGHT = 240;
 
+/** The textarea's own min-height / max-height when the stylesheet sets them,
+ *  so a panel can make its composer smaller (or capped lower) when it is small. */
+function cssLimit(value: string, fallback: number): number {
+    const px = Number.parseFloat(value);
+    return Number.isFinite(px) && px > 0 ? px : fallback;
+}
+
 export function syncComposerHeight(textarea: HTMLTextAreaElement | null) {
     if (!textarea) return;
+    const style = getComputedStyle(textarea);
+    const min = cssLimit(style.minHeight, COMPOSER_MIN_HEIGHT);
+    const max = Math.max(min, cssLimit(style.maxHeight, COMPOSER_MAX_HEIGHT));
     textarea.style.height = '0px';
-    const next = Math.min(textarea.scrollHeight, COMPOSER_MAX_HEIGHT);
-    textarea.style.height = `${Math.max(next, COMPOSER_MIN_HEIGHT)}px`;
-    textarea.style.overflowY = textarea.scrollHeight > COMPOSER_MAX_HEIGHT ? 'auto' : 'hidden';
+    const next = Math.min(textarea.scrollHeight, max);
+    textarea.style.height = `${Math.max(next, min)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > max ? 'auto' : 'hidden';
 }
 
 /**

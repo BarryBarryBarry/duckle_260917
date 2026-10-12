@@ -38,6 +38,22 @@ export type PanelLayout = PanelRect & {
     restore: PanelRect | null;
 };
 
+/** How small a panel may be made, which differs per panel. */
+export type PanelLimits = {
+    /** Narrowest the conversation column may be. */
+    minWidth: number;
+    minHeight: number;
+    /** Hide the history sidebar while the panel is too narrow to hold it next
+     *  to the conversation, instead of refusing to shrink past it. */
+    autoHideSidebar: boolean;
+};
+
+const DEFAULT_LIMITS: PanelLimits = {
+    minWidth: CHAT_PANEL_MIN_WIDTH,
+    minHeight: CHAT_PANEL_MIN_HEIGHT,
+    autoHideSidebar: false,
+};
+
 /** Every edge and corner, so the panel resizes in all four directions. */
 export type ResizeMode =
     | 'top'
@@ -82,7 +98,11 @@ function resizeLabel(mode: ResizeMode, name: string): string {
 }
 
 
-export function useFloatingPanel(storageKey: string, name: string) {
+export function useFloatingPanel(storageKey: string, name: string, limits: Partial<PanelLimits> = {}) {
+    // Read once: the limits are a property of the panel, not of a render.
+    const limitsRef = useRef<PanelLimits>({ ...DEFAULT_LIMITS, ...limits });
+    const lim = limitsRef.current;
+    const clamp = (layout: PanelLayout) => clampPanelLayout(layout, lim);
     const [panelLayout, setPanelLayout] = useState<PanelLayout | null>(null);
     const [dragging, setDragging] = useState(false);
     const [resizing, setResizing] = useState(false);
@@ -99,7 +119,7 @@ export function useFloatingPanel(storageKey: string, name: string) {
     useEffect(() => {
         if (typeof window === 'undefined') return;
         const saved = readSavedPanelLayout(storageKey);
-        setPanelLayout(clampPanelLayout(saved ?? defaultPanelLayout()));
+        setPanelLayout(clamp(saved ?? defaultPanelLayout()));
     }, []);
 
     useEffect(() => {
@@ -109,7 +129,7 @@ export function useFloatingPanel(storageKey: string, name: string) {
 
     useEffect(() => {
         if (typeof window === 'undefined') return;
-        const onResize = () => setPanelLayout(prev => clampPanelLayout(prev ?? defaultPanelLayout()));
+        const onResize = () => setPanelLayout(prev => clamp(prev ?? defaultPanelLayout()));
         window.addEventListener('resize', onResize);
         return () => window.removeEventListener('resize', onResize);
     }, []);
@@ -170,7 +190,7 @@ export function useFloatingPanel(storageKey: string, name: string) {
                     restore: null,
                 };
             }
-            return clampPanelLayout({
+            return clamp({
                 ...base,
                 x: drag.originX + totalX,
                 y: drag.originY + totalY,
@@ -185,7 +205,7 @@ export function useFloatingPanel(storageKey: string, name: string) {
         dragRef.current = null;
         setDragging(false);
         // A click that never became a drag must not snap the panel around.
-        if (started) setPanelLayout(prev => (prev ? snapPanelLayout(prev) : prev));
+        if (started) setPanelLayout(prev => (prev ? snapPanelLayout(prev, lim) : prev));
         if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
         }
@@ -219,11 +239,12 @@ export function useFloatingPanel(storageKey: string, name: string) {
                 resize.mode,
                 event.clientX - resize.startX,
                 event.clientY - resize.startY,
-                minPanelWidth(base.sidebar),
+                minPanelWidth(base.sidebar, lim),
+                lim.minHeight,
             );
             // A resized panel is no longer "maximized", so the restore button
             // does not snap away the size the user just dragged.
-            return clampPanelLayout({ ...base, ...next, maximized: false });
+            return clamp({ ...base, ...next, maximized: false });
         });
     }, []);
 
@@ -241,7 +262,7 @@ export function useFloatingPanel(storageKey: string, name: string) {
     const toggleCollapsed = useCallback(() => {
         setPanelLayout(prev => {
             const base = prev ?? defaultPanelLayout();
-            return clampPanelLayout({ ...base, collapsed: !base.collapsed });
+            return clamp({ ...base, collapsed: !base.collapsed });
         });
     }, []);
 
@@ -252,7 +273,7 @@ export function useFloatingPanel(storageKey: string, name: string) {
             const base = prev ?? defaultPanelLayout();
             if (base.maximized) {
                 const restore = base.restore ?? defaultPanelLayout(base.sidebar);
-                return clampPanelLayout({
+                return clamp({
                     ...base,
                     ...restore,
                     sidebar: base.sidebar,
@@ -261,7 +282,7 @@ export function useFloatingPanel(storageKey: string, name: string) {
                     restore: null,
                 });
             }
-            return clampPanelLayout({
+            return clamp({
                 ...base,
                 ...maximizedRect(),
                 collapsed: false,
@@ -272,7 +293,7 @@ export function useFloatingPanel(storageKey: string, name: string) {
     }, []);
 
     const resetPanelLayout = useCallback(() => {
-        setPanelLayout(prev => clampPanelLayout(defaultPanelLayout(prev?.sidebar ?? true)));
+        setPanelLayout(prev => clamp(defaultPanelLayout(prev?.sidebar ?? true)));
     }, []);
 
     /** Showing the sidebar grows the panel leftwards by its width (and hiding
@@ -281,10 +302,12 @@ export function useFloatingPanel(storageKey: string, name: string) {
     const toggleSidebar = useCallback(() => {
         setPanelLayout(prev => {
             const base = prev ?? defaultPanelLayout();
-            const sidebar = !base.sidebar;
-            if (base.maximized) return clampPanelLayout({ ...base, sidebar });
+            // Acts on what is on screen: a sidebar hidden for want of room
+            // is shown by making room for it.
+            const sidebar = !sidebarFits(base, lim);
+            if (base.maximized) return clamp({ ...base, sidebar });
             const delta = sidebar ? CHAT_SIDEBAR_WIDTH : -CHAT_SIDEBAR_WIDTH;
-            return clampPanelLayout({
+            return clamp({
                 ...base,
                 sidebar,
                 width: base.width + delta,
@@ -325,6 +348,9 @@ export function useFloatingPanel(storageKey: string, name: string) {
 
     return {
         layout: currentLayout,
+        /** Whether the history sidebar is on screen, which with
+         *  autoHideSidebar also depends on the width. */
+        sidebarShown: sidebarFits(currentLayout, lim),
         panelStyle,
         dragging,
         resizing,
@@ -395,8 +421,15 @@ function sidebarExtra(sidebar: boolean): number {
     return sidebar ? CHAT_SIDEBAR_WIDTH : 0;
 }
 
-function minPanelWidth(sidebar: boolean): number {
-    return CHAT_PANEL_MIN_WIDTH + sidebarExtra(sidebar);
+function minPanelWidth(sidebar: boolean, limits: PanelLimits): number {
+    return limits.minWidth + (limits.autoHideSidebar ? 0 : sidebarExtra(sidebar));
+}
+
+/** Whether the history sidebar is drawn at this size. */
+export function sidebarFits(layout: Pick<PanelLayout, 'sidebar' | 'width' | 'maximized'>, limits: PanelLimits): boolean {
+    if (!layout.sidebar) return false;
+    if (!limits.autoHideSidebar || layout.maximized) return true;
+    return layout.width >= limits.minWidth + CHAT_SIDEBAR_WIDTH;
 }
 
 function defaultPanelLayout(sidebar = true): PanelLayout {
@@ -459,7 +492,7 @@ function maximizedRect(): PanelRect {
     };
 }
 
-function clampPanelLayout(layout: PanelLayout): PanelLayout {
+export function clampPanelLayout(layout: PanelLayout, limits: PanelLimits = DEFAULT_LIMITS): PanelLayout {
     if (typeof window === 'undefined') return layout;
     if (layout.maximized) {
         return { ...layout, ...maximizedRect() };
@@ -469,8 +502,8 @@ function clampPanelLayout(layout: PanelLayout): PanelLayout {
     const availableHeight = area.bottom - area.top;
     // A dragged edge may legitimately grow the panel past the default caps,
     // so the only hard limit is the work area itself.
-    const width = clampSize(layout.width, minPanelWidth(layout.sidebar), availableWidth);
-    const height = clampSize(layout.height, CHAT_PANEL_MIN_HEIGHT, availableHeight);
+    const width = clampSize(layout.width, minPanelWidth(layout.sidebar, limits), availableWidth);
+    const height = clampSize(layout.height, limits.minHeight, availableHeight);
     // While minimized only the header is on screen, so that is what has to
     // stay inside the work area - not the height it will restore to.
     const occupiedHeight = layout.collapsed ? CHAT_PANEL_COLLAPSED_HEIGHT : height;
@@ -501,6 +534,7 @@ function resizeRect(
     deltaX: number,
     deltaY: number,
     minWidth: number,
+    minHeight: number,
 ): PanelRect {
     const area = panelWorkArea();
     let left = origin.x;
@@ -515,16 +549,16 @@ function resizeRect(
         right = Math.max(Math.min(right + deltaX, area.right), left + minWidth);
     }
     if (mode.includes('top')) {
-        top = Math.min(Math.max(origin.y + deltaY, area.top), bottom - CHAT_PANEL_MIN_HEIGHT);
+        top = Math.min(Math.max(origin.y + deltaY, area.top), bottom - minHeight);
     }
     if (mode.includes('bottom')) {
-        bottom = Math.max(Math.min(bottom + deltaY, area.bottom), top + CHAT_PANEL_MIN_HEIGHT);
+        bottom = Math.max(Math.min(bottom + deltaY, area.bottom), top + minHeight);
     }
 
     return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
-function snapPanelLayout(layout: PanelLayout): PanelLayout {
+function snapPanelLayout(layout: PanelLayout, limits: PanelLimits): PanelLayout {
     if (typeof window === 'undefined') return layout;
     const next = { ...layout };
     const maxX = Math.max(CHAT_PANEL_MARGIN, window.innerWidth - next.width - CHAT_PANEL_MARGIN);
@@ -538,7 +572,7 @@ function snapPanelLayout(layout: PanelLayout): PanelLayout {
     if (Math.abs(next.y - minY) <= CHAT_PANEL_SNAP_DISTANCE) {
         next.y = minY;
     }
-    return clampPanelLayout(next);
+    return clampPanelLayout(next, limits);
 }
 
 function readTopbarHeight() {

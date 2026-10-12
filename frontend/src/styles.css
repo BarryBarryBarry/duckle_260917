@@ -8273,6 +8273,58 @@ select.modal-select:focus {
     max-width: none;
     margin: 0;
 }
+
+/* The Agent panel resizes down to its header, one line of conversation and
+   the input. Container queries on its own size (not the window's) drop the
+   connection picker, the empty-state art and spacing as it gets small. */
+.agent-chat-panel {
+    container: agent-panel / inline-size;
+}
+.agent-chat-panel .chat-panel-main {
+    container: agent-main / size;
+}
+.agent-chat-panel .chat-panel-scroll {
+    min-height: 32px;
+}
+.agent-chat-panel .chat-panel-form {
+    flex-shrink: 0;
+}
+@container agent-panel (max-width: 440px) {
+    .agent-chat-panel .chat-panel-drag-hint {
+        display: none;
+    }
+}
+@container agent-main (max-height: 380px) {
+    .agent-chat-panel .chat-panel-empty-icon,
+    .agent-chat-panel .chat-panel-empty-hint {
+        display: none;
+    }
+    .agent-chat-panel .chat-panel-empty {
+        padding: 0;
+        gap: 0;
+    }
+}
+@container agent-main (max-height: 300px) {
+    .agent-chat-panel .agent-context {
+        display: none;
+    }
+    .agent-chat-panel .chat-panel-scroll {
+        padding: 6px 12px;
+        gap: 6px;
+    }
+    .agent-chat-panel .chat-panel-empty-title {
+        font-size: 0.9231rem;
+    }
+    .agent-chat-panel .chat-panel-form {
+        padding: 6px 8px;
+        gap: 6px;
+    }
+    .agent-chat-panel .chat-panel-input {
+        min-height: 52px;
+        /* Leave the conversation at least one line above the composer. */
+        max-height: max(52px, calc(100cqh - 64px));
+    }
+}
 .agent-pre {
     white-space: pre-wrap;
     word-break: break-word;
