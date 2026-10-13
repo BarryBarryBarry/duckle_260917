@@ -1079,6 +1079,35 @@ mod tests {
     }
 
     #[test]
+    fn picked_connections_reach_the_agent_with_their_roles() {
+        // As the editor sends them: no password field exists to send.
+        let ctx: ContextPayload = serde_json::from_value(json!({
+            "workspace": "/ws",
+            "connection": null,
+            "connections": [
+                { "id": "c1", "name": "Orders", "kind": "mysql", "host": "db", "port": "3306", "database": "shop", "role": "source" },
+                { "id": "c2", "name": "Warehouse", "kind": "postgres", "role": "target" }
+            ],
+            "selectedAssets": []
+        }))
+        .unwrap();
+        let message = build_prompt_message(&ctx, "copy orders");
+        let block = message
+            .strip_prefix(CONTEXT_OPEN)
+            .and_then(|rest| rest.split_once(CONTEXT_CLOSE))
+            .map(|(json, _)| json)
+            .unwrap();
+        let sent: JsonValue = serde_json::from_str(block).unwrap();
+        assert_eq!(sent["connections"][0]["role"], "source");
+        assert_eq!(sent["connections"][1]["id"], "c2");
+        assert_eq!(sent["connections"][1]["role"], "target");
+        assert!(!block.contains("password"));
+        // A context from before roles existed still reads.
+        let old: ContextPayload = serde_json::from_value(json!({ "workspace": "/ws", "connection": null, "selectedAssets": [] })).unwrap();
+        assert!(old.connections.is_empty());
+    }
+
+    #[test]
     fn each_conversation_gets_its_own_pi_session() {
         assert_eq!(
             conversation_session_id("c-lx2k-ab12").unwrap(),

@@ -107,7 +107,6 @@ export type LauncherActions = {
     openTrust: () => void;
     openCatalog: () => void;
     openDataQuality: () => void;
-    openConnections: () => void;
     openGit: () => void;
     openSettings: () => void;
     /** Empty string when nothing is open; gates the per-pipeline modules. */
@@ -264,15 +263,6 @@ export function buildModules(a: LauncherActions): LauncherModule[] {
         },
 
         // ---- Operate (continued) ----
-        {
-            id: 'connections',
-            name: 'Connections',
-            blurb: 'Save credentials once and reuse them across pipelines',
-            group: 'operate',
-            icon: Database,
-            status: 'ready',
-            open: a.openConnections,
-        },
         {
             id: 'git',
             name: 'Version Control',

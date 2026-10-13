@@ -4215,6 +4215,8 @@ Saved connections become DuckDB secrets at runtime so credentials never leak int
 
 Connections live in the workspace's connection store, a DuckDB table in `.duckle/connections.duckdb`. The token/password field is encrypted with the workspace key; the rest is plain text. A workspace from an older Duckle still holding `connections/*.json` has those files imported (ids kept, so every `connectionRef` still resolves) and moved to `.duckle/connections-imported/` the first time it is opened.
 
+To create or edit a database connection, use the **数据源** (data source) menu in the Agent input box: it lists the databases under Sources → Databases, opens that database node's own connection form, and asks whether the connection is the source, the target or both before sending it with your message (never its password). The project tree and the Home page no longer manage connections.
+
 To use a connection in a pipeline, the Properties panel of any compatible source/sink shows a **Connection** dropdown - pick one and the fields auto-fill. The list is filtered to connections of a matching kind, so a REST connection is not offered on a JDBC node.
 
 A **REST** connection is the exception to auto-fill, because it exists to be shared by many nodes that each send a different request: put the vendor's headers and token on the connection once, and rotating a key is a single edit. Headers are merged per key at run time, and the node wins on a key it sets itself; the node's own `url` and request body are never overwritten. A node with no URL of its own inherits the connection's.

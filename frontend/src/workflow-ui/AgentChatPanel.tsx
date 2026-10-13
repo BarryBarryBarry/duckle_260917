@@ -6,6 +6,7 @@ import {
     Bot,
     ChevronDown,
     ChevronUp,
+    Database,
     Download,
     Loader2,
     Maximize2,
@@ -28,7 +29,6 @@ import {
     agentConversationsList,
     agentConversationUpdateMeta,
     agentInstall,
-    agentListConnections,
     agentSendPrompt,
     agentStart,
     agentStop,
@@ -40,11 +40,24 @@ import {
     type DuckieConversationSummary,
     type InstallProgress,
 } from '../tauri-bridge';
+import type { RepoItem } from '../repo-types';
 import { getWorkspacePath } from '../workspace';
 import ConversationSidebar from './ConversationSidebar';
 import ReplyFooter, { type ReplyUsage } from './ReplyFooter';
 import { syncComposerHeight, useInputRecall } from './composer';
 import { useFloatingPanel } from './floating-panel';
+import type { ComponentDef } from './palette-data';
+import {
+    ConnectionDialog,
+    DataSourceMenu,
+    NoSourceDialog,
+    PickedChips,
+    RoleDialog,
+    connectionKindOf,
+    connectionsOfKind,
+    type PickedSource,
+    type SourceRole,
+} from './AgentDataSources';
 
 type Props = {
     workspace: string | null;
@@ -54,6 +67,10 @@ type Props = {
     onWorkspaceChanged?: () => void;
     /** Opens Settings, where the External OpenAI model the agent uses is configured. */
     onOpenSettings?: () => void;
+    /** The workspace's saved connections. */
+    connections?: RepoItem[];
+    /** Save a connection (id null = new) to the connection store; resolves to its id. */
+    onSaveConnection?: (id: string | null, name: string, payload: Record<string, unknown>) => Promise<string>;
 };
 
 type ToolCall = {
@@ -169,11 +186,12 @@ type UiDialog = {
 };
 
 const STATE_KEY = 'duckle-pi-agent-panel';
+const NO_CONNECTIONS: RepoItem[] = [];
 
 /** The panel shrinks down to its header, one line of conversation and the
- *  input; the styles drop the connection picker and spacing as it gets short
+ *  input; the styles drop the empty-state art and spacing as it gets short
  *  (see .agent-chat-panel in styles.css). Minimized, it docks at that size
- *  along the bottom of the canvas. */
+ *  along the bottom of the window. */
 const AGENT_PANEL_LIMITS = { minWidth: 300, minHeight: 170, autoHideSidebar: true, dockHeight: 150 };
 
 function emptyTurn(): AssistantTurn {
@@ -190,33 +208,39 @@ function selectionKey(workspace: string): string {
 
 function readSavedSelection(workspace: string): {
     draft: string;
-    selectedConnectionId: string;
+    picked: PickedSource[];
 } {
     try {
         const raw = localStorage.getItem(selectionKey(workspace));
-        if (!raw) return { draft: '', selectedConnectionId: '' };
-        const parsed = JSON.parse(raw) as {
-            draft?: unknown;
-            selectedConnectionId?: unknown;
-        };
-        return {
-            draft: typeof parsed.draft === 'string' ? parsed.draft : '',
-            selectedConnectionId:
-                typeof parsed.selectedConnectionId === 'string' ? parsed.selectedConnectionId : '',
-        };
+        if (!raw) return { draft: '', picked: [] };
+        const parsed = JSON.parse(raw) as { draft?: unknown; picked?: unknown };
+        const roles = new Set<string>(['source', 'target', 'both']);
+        const picked = Array.isArray(parsed.picked)
+            ? parsed.picked.filter(
+                  (p): p is PickedSource =>
+                      !!p && typeof p.id === 'string' && typeof p.role === 'string' && roles.has(p.role),
+              )
+            : [];
+        return { draft: typeof parsed.draft === 'string' ? parsed.draft : '', picked };
     } catch {
-        return { draft: '', selectedConnectionId: '' };
+        return { draft: '', picked: [] };
     }
 }
 
-/** "name (mysql · localhost/sales)", leaving out whatever the connection lacks
- *  and a database that just repeats the name. */
-function connectionLabel(connection: AgentConnectionContext): string {
-    const target = [connection.host, connection.database !== connection.name ? connection.database : null]
-        .filter(Boolean)
-        .join('/');
-    const detail = [connection.kind, target].filter(Boolean).join(' · ');
-    return detail ? `${connection.name} (${detail})` : connection.name;
+/** What the agent is told about a picked connection: never its secrets. */
+function connectionContext(item: RepoItem, role: SourceRole): AgentConnectionContext {
+    const p = (item.payload ?? {}) as Record<string, unknown>;
+    const text = (k: string) => (typeof p[k] === 'string' && p[k] ? String(p[k]) : null);
+    return {
+        id: item.id,
+        name: item.name,
+        kind: text('kind'),
+        host: text('host'),
+        port: p.port === undefined || p.port === null || p.port === '' ? null : String(p.port),
+        database: text('database'),
+        schema: text('schema'),
+        role,
+    };
 }
 
 function installLabel(progress: InstallProgress | null): string {
@@ -404,6 +428,8 @@ export default function AgentChatPanel({
     onOpenPipeline,
     onWorkspaceChanged,
     onOpenSettings,
+    connections = NO_CONNECTIONS,
+    onSaveConnection,
 }: Props) {
     const workspace = useMemo(() => workspaceProp ?? getWorkspacePath(), [workspaceProp]);
     const [setup, setSetup] = useState<SetupState>({ phase: 'checking' });
@@ -411,8 +437,19 @@ export default function AgentChatPanel({
     const [busy, setBusy] = useState(false);
     const [draft, setDraft] = useState('');
     const [messages, setMessages] = useState<Message[]>([]);
-    const [connections, setConnections] = useState<AgentConnectionContext[]>([]);
-    const [selectedConnectionId, setSelectedConnectionId] = useState('');
+    /** The databases picked for the next message, and what each is for. */
+    const [picked, setPicked] = useState<PickedSource[]>([]);
+    const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
+    const [sourceDialog, setSourceDialog] = useState<ComponentDef | null>(null);
+    /** A connection waiting for the user to say what it is for. */
+    const [roleFor, setRoleFor] = useState<string | null>(null);
+    const [noSourcePrompt, setNoSourcePrompt] = useState(false);
+    /** Conversations whose user said they need no database: asked once each. */
+    const noSourceOkRef = useRef(new Set<string>());
+    /** The user was sent to pick a database by the "no data source" prompt:
+     *  the message goes out once they have. */
+    const pendingSendRef = useRef(false);
+    const sourceButtonRef = useRef<HTMLButtonElement | null>(null);
     const [error, setError] = useState<ChatError | null>(null);
     const [uiDialog, setUiDialog] = useState<UiDialog | null>(null);
     const [startNonce, setStartNonce] = useState(0);
@@ -490,7 +527,7 @@ export default function AgentChatPanel({
         if (!workspace) return;
         const saved = readSavedSelection(workspace);
         setDraft(saved.draft);
-        setSelectedConnectionId(saved.selectedConnectionId);
+        setPicked(saved.picked);
         setMessages([]);
         setActiveId(null);
         setError(null);
@@ -645,28 +682,32 @@ export default function AgentChatPanel({
 
     useEffect(() => {
         if (!workspace) return;
-        localStorage.setItem(
-            selectionKey(workspace),
-            JSON.stringify({ draft, selectedConnectionId }),
-        );
-    }, [draft, selectedConnectionId, workspace]);
+        localStorage.setItem(selectionKey(workspace), JSON.stringify({ draft, picked }));
+    }, [draft, picked, workspace]);
 
-    // Opening the panel checks the runtime and loads the saved connections.
-    // The agent itself starts on the first message, on that conversation's
-    // own Pi session, and any start failure is reported in the chat then.
+    // A picked connection that has since been deleted is dropped.
+    const livePicked = useMemo(
+        () => picked.filter(p => connections.some(c => c.id === p.id)),
+        [picked, connections],
+    );
+
+    useEffect(() => {
+        if (!pendingSendRef.current || livePicked.length === 0) return;
+        pendingSendRef.current = false;
+        void handleSend();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [livePicked]);
+
+    // Opening the panel checks the runtime. The agent itself starts on the
+    // first message, on that conversation's own Pi session, and any start
+    // failure is reported in the chat then.
     useEffect(() => {
         if (!open || !workspace) return;
         let cancelled = false;
         (async () => {
             const installed = await agentCheckInstalled();
             if (cancelled) return;
-            if (!installed) {
-                setSetup({ phase: 'not-installed' });
-                return;
-            }
-            setSetup({ phase: 'ready' });
-            const list = await agentListConnections(workspace);
-            if (!cancelled) setConnections(list);
+            setSetup(installed ? { phase: 'ready' } : { phase: 'not-installed' });
         })();
         return () => {
             cancelled = true;
@@ -952,16 +993,28 @@ export default function AgentChatPanel({
         return () => window.clearTimeout(timer);
     }, [uiDialogId, uiDialogTimeout]);
 
-    async function handleSend() {
+    /** `noSourceOk`: the user has just said this message needs no database. */
+    async function handleSend(noSourceOk = false) {
         const trimmed = draft.trim();
         if (!trimmed || !workspace || busy) return;
-        const connection = connections.find(item => item.id === selectedConnectionId) ?? null;
+        const conversationId = activeId ?? newConversationId();
+        if (noSourceOk) noSourceOkRef.current.add(conversationId);
+        // Ask once per conversation; picking a database or saying "none" both
+        // answer it.
+        if (livePicked.length === 0 && !noSourceOkRef.current.has(conversationId)) {
+            setNoSourcePrompt(true);
+            return;
+        }
+        const picks = livePicked.flatMap(p => {
+            const item = connections.find(c => c.id === p.id);
+            return item ? [connectionContext(item, p.role)] : [];
+        });
         const context: AgentContext = {
             workspace,
-            connection,
+            connection: null,
+            connections: picks,
             selectedAssets: [],
         };
-        const conversationId = activeId ?? newConversationId();
         if (!activeId) setActiveId(conversationId);
         setMessages(prev => [...prev, { kind: 'user', text: trimmed }]);
         resetRecall();
@@ -1210,31 +1263,13 @@ export default function AgentChatPanel({
                                 {Math.round(layout.width)} × {Math.round(layout.height)}
                             </div>
                         ) : null}
-                        <div className="agent-context">
-                            <label className="chat-panel-model">
-                                <span className="chat-panel-model-label">数据连接</span>
-                                <select
-                                    className="chat-panel-model-select"
-                                    value={selectedConnectionId}
-                                    onChange={event => setSelectedConnectionId(event.target.value)}
-                                >
-                                    <option value="">不指定</option>
-                                    {connections.map(connection => (
-                                        <option key={connection.id} value={connection.id}>
-                                            {connectionLabel(connection)}
-                                        </option>
-                                    ))}
-                                </select>
-                            </label>
-                        </div>
-
                         <div ref={scrollRef} className="chat-panel-scroll">
                             {messages.length === 0 ? (
                                 <div className="chat-panel-empty">
                                     <Workflow size={26} className="chat-panel-empty-icon" />
                                     <div className="chat-panel-empty-title">让 Agent 处理 pipeline</div>
                                     <div className="chat-panel-empty-hint">
-                                        描述需求即可：创建、检查、运行或排查 pipeline。上方选择的数据连接会一并发给 Agent。
+                                        描述需求即可：创建、检查、运行或排查 pipeline。在输入框的「数据源」里选好源数据库和目标数据库，连接信息会随消息一起发给 Agent。
                                     </div>
                                 </div>
                             ) : (
@@ -1299,7 +1334,7 @@ export default function AgentChatPanel({
                                         </span>
                                     </div>
                                 ) : null)}
-                            <div className="chat-panel-input-row">
+                            <div className="chat-panel-input-row agent-composer">
                                 <textarea
                                     ref={inputRef}
                                     className="chat-panel-input"
@@ -1310,7 +1345,7 @@ export default function AgentChatPanel({
                                         setDraft(event.target.value);
                                         syncComposerHeight(event.currentTarget);
                                     }}
-                                    rows={2}
+                                    rows={1}
                                     disabled={busy}
                                     placeholder={
                                         '描述你想让 Agent 完成的 pipeline 工作…'
@@ -1324,33 +1359,119 @@ export default function AgentChatPanel({
                                         handleRecallKey(event);
                                     }}
                                 />
-                                {busy ? (
+                                <div className="agent-composer-toolbar">
                                     <button
+                                        ref={sourceButtonRef}
                                         type="button"
-                                        className="chat-panel-send"
-                                        onClick={() => void agentAbort()}
-                                        title="停止"
-                                        aria-label="停止"
+                                        className={`agent-ds-button${sourceMenuOpen ? ' agent-ds-button-open' : ''}`}
+                                        onClick={() => setSourceMenuOpen(o => !o)}
+                                        aria-haspopup="menu"
+                                        aria-expanded={sourceMenuOpen}
+                                        title="选择或新建数据库连接"
                                     >
-                                        <Square size={12} fill="currentColor" />
+                                        <Database size={12} />
+                                        数据源
+                                        {sourceMenuOpen ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
                                     </button>
-                                ) : (
-                                    <button
-                                        type="submit"
-                                        className="chat-panel-send"
-                                        disabled={!draft.trim()}
-                                        title="发送 (Enter)"
-                                        aria-label="发送"
-                                    >
-                                        <ArrowUp size={16} strokeWidth={2.4} />
-                                    </button>
-                                )}
+                                    <div className="agent-ds-chips">
+                                        <PickedChips
+                                            picked={livePicked}
+                                            connections={connections}
+                                            onEdit={id => setRoleFor(id)}
+                                            onRemove={id => setPicked(prev => prev.filter(p => p.id !== id))}
+                                        />
+                                    </div>
+                                    {busy ? (
+                                        <button
+                                            type="button"
+                                            className="chat-panel-send"
+                                            onClick={() => void agentAbort()}
+                                            title="停止"
+                                            aria-label="停止"
+                                        >
+                                            <Square size={11} fill="currentColor" />
+                                        </button>
+                                    ) : (
+                                        <button
+                                            type="submit"
+                                            className="chat-panel-send"
+                                            disabled={!draft.trim()}
+                                            title="发送 (Enter)"
+                                            aria-label="发送"
+                                        >
+                                            <ArrowUp size={15} strokeWidth={2.4} />
+                                        </button>
+                                    )}
+                                </div>
                             </div>
                         </form>
                     </div>
                 </div>
             )}
             {resizeHandles}
+            {sourceMenuOpen ? (
+                <DataSourceMenu
+                    anchor={sourceButtonRef.current}
+                    connections={connections}
+                    picked={livePicked}
+                    onPick={def => {
+                        setSourceMenuOpen(false);
+                        setSourceDialog(def);
+                    }}
+                    onClose={() => {
+                        setSourceMenuOpen(false);
+                        pendingSendRef.current = false;
+                    }}
+                />
+            ) : null}
+            {sourceDialog ? (
+                <ConnectionDialog
+                    def={sourceDialog}
+                    connections={connectionsOfKind(connections, connectionKindOf(sourceDialog) ?? '')}
+                    workspacePath={workspace}
+                    onSave={async (id, name, payload) => {
+                        if (!onSaveConnection) throw new Error('这里无法保存连接');
+                        return onSaveConnection(id, name, payload);
+                    }}
+                    onUse={id => {
+                        setSourceDialog(null);
+                        setRoleFor(id);
+                    }}
+                    onClose={() => {
+                        setSourceDialog(null);
+                        pendingSendRef.current = false;
+                    }}
+                />
+            ) : null}
+            {roleFor ? (
+                <RoleDialog
+                    connectionName={connections.find(c => c.id === roleFor)?.name ?? roleFor}
+                    current={picked.find(p => p.id === roleFor)?.role}
+                    onConfirm={role => {
+                        const id = roleFor;
+                        setRoleFor(null);
+                        setPicked(prev => [...prev.filter(p => p.id !== id), { id, role }]);
+                    }}
+                    onClose={() => {
+                        setRoleFor(null);
+                        pendingSendRef.current = false;
+                    }}
+                />
+            ) : null}
+            {noSourcePrompt ? (
+                <NoSourceDialog
+                    onChoose={() => {
+                        setNoSourcePrompt(false);
+                        pendingSendRef.current = true;
+                        setSourceMenuOpen(true);
+                    }}
+                    onSkip={() => {
+                        setNoSourcePrompt(false);
+                        void handleSend(true);
+                    }}
+                    onClose={() => setNoSourcePrompt(false)}
+                />
+            ) : null}
         </aside>
     );
 }

@@ -38,7 +38,6 @@ type Props = {
     /** Undefined in the web editor, where the engine-side translator is unreachable. */
     onImportJob?: () => void;
     onNewFolder: (parentId: string) => void;
-    onNewConnection: (parentId: string) => void;
     onNewContext: (parentId: string) => void;
     onNewDocument: (parentId: string) => void;
     onNewRoutine: (parentId: string) => void;
@@ -106,7 +105,6 @@ export default function ProjectTree(props: Props) {
         onNewPipeline,
         onImportJob,
         onNewFolder,
-        onNewConnection,
         onNewContext,
         onNewDocument,
         onNewRoutine,
@@ -171,12 +169,19 @@ export default function ProjectTree(props: Props) {
     };
 
     const childrenOf = useMemo(() => {
+        // Connections are managed from the Agent input's 数据源 menu, so the
+        // tree leaves them out, and with them the built-in Connections folder
+        // once nothing else is in it.
         const map = new Map<string, RepoItem[]>();
         for (const item of items) {
+            if (item.type === 'connection') continue;
             const key = item.parentId ?? '__root__';
             const list = map.get(key) ?? [];
             list.push(item);
             map.set(key, list);
+        }
+        if (!map.has('connections')) {
+            for (const [key, list] of map) map.set(key, list.filter(i => i.id !== 'connections'));
         }
         for (const [, list] of map) {
             list.sort((a, b) => {
@@ -218,7 +223,6 @@ export default function ProjectTree(props: Props) {
     const buildFolderMenu = (item: RepoItem): MenuItem[] => {
         const root = item.type === 'project' ? null : rootFolderOf(item.id) ?? item.id;
         const isPipelinesScope = item.id === 'pipelines' || root === 'pipelines';
-        const isConnectionsScope = item.id === 'connections' || root === 'connections';
         const isContextsScope = item.id === 'contexts' || root === 'contexts';
         const isRoutinesScope = item.id === 'routines' || root === 'routines';
         const isDocsScope = item.id === 'docs' || root === 'docs';
@@ -233,15 +237,6 @@ export default function ProjectTree(props: Props) {
                 label: 'New pipeline…',
                 icon: <FileCog size={ICON_SIZE} />,
                 onClick: () => onNewPipeline(item.id),
-            });
-        }
-        if (item.type === 'project' || isConnectionsScope) {
-            newItems.push({
-                kind: 'item',
-                key: 'new-connection',
-                label: 'New connection…',
-                icon: <FileCog size={ICON_SIZE} />,
-                onClick: () => onNewConnection(item.id),
             });
         }
         if (item.type === 'project' || isContextsScope) {
@@ -565,7 +560,9 @@ export default function ProjectTree(props: Props) {
         );
     };
 
-    const roots = items.filter(i => !i.parentId);
+    const roots = items.filter(
+        i => !i.parentId && i.type !== 'connection' && (i.id !== 'connections' || childrenOf.has('connections')),
+    );
 
     return (
         <div className="repo-tree">

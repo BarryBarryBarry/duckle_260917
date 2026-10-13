@@ -15,7 +15,6 @@ type Props = {
     onOpenItem: (item: RepoItem) => void;
     onNewPipeline: (parentId: string) => void;
     onNewFolder: (parentId: string) => void;
-    onNewConnection: (parentId: string) => void;
     /** Undefined in the web editor, where the engine-side translator is unreachable. */
     onImportJob?: () => void;
     onNewContext: (parentId: string) => void;
@@ -45,7 +44,6 @@ export default function LeftSidebar({
     onOpenItem,
     onNewPipeline,
     onNewFolder,
-    onNewConnection,
     onImportJob,
     onNewContext,
     onNewDocument,
@@ -113,7 +111,6 @@ export default function LeftSidebar({
                         onOpenItem={onOpenItem}
                         onNewPipeline={onNewPipeline}
                         onNewFolder={onNewFolder}
-                        onNewConnection={onNewConnection}
                         onImportJob={onImportJob}
                         onNewContext={onNewContext}
                         onNewDocument={onNewDocument}

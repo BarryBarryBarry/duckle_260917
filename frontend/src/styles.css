@@ -8261,22 +8261,11 @@ select.modal-select:focus {
 
 /* Pi Agent panel: reuses the Duckie chat-panel styles (and its window
    behaviour via useFloatingPanel); only the bits Duckie does not have - the
-   context picker and raw tool output - live here. */
-.agent-context {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--border);
-}
-.agent-context .chat-panel-model {
-    max-width: none;
-    margin: 0;
-}
+   composer's data sources and raw tool output - live here. */
 
 /* The Agent panel resizes down to its header, one line of conversation and
    the input. Container queries on its own size (not the window's) drop the
-   connection picker, the empty-state art and spacing as it gets small. */
+   empty-state art and spacing as it gets small. */
 .agent-chat-panel {
     container: agent-panel / inline-size;
 }
@@ -8289,25 +8278,264 @@ select.modal-select:focus {
 .agent-chat-panel .chat-panel-form {
     flex-shrink: 0;
 }
-/* The send button sits inside the input's bottom-right corner. */
-.agent-chat-panel .chat-panel-input-row {
-    position: relative;
-    display: block;
+/* The composer is one box: the text, then a toolbar row with the data
+   sources on the left and the send button on the right. The box is as tall
+   as the input alone used to be (72px, 52px when small); the toolbar takes
+   its row out of the text area, not out of the conversation. */
+.agent-chat-panel .agent-composer {
+    /* The toolbar row, plus the box's own top and bottom border. */
+    --agent-toolbar-h: 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    background: var(--field-bg);
+    border: 1px solid var(--field-border);
+    border-radius: var(--radius-input);
+    transition: border-color 160ms, background 160ms;
 }
-.agent-chat-panel .chat-panel-input {
+.agent-composer:focus-within {
+    border-color: var(--accent);
+    background: var(--bg-elevated);
+}
+.agent-composer .chat-panel-input {
     display: block;
     width: 100%;
     box-sizing: border-box;
-    padding-right: 46px;
+    border: 0;
+    background: transparent;
+    padding: 8px 10px 2px;
+    min-height: calc(72px - var(--agent-toolbar-h));
+    max-height: calc(240px - var(--agent-toolbar-h));
 }
-.agent-chat-panel .chat-panel-send {
-    position: absolute;
-    right: 8px;
-    bottom: 8px;
-    width: 28px;
+.agent-composer .chat-panel-input:focus,
+.agent-composer .chat-panel-input:focus-visible {
+    border: 0;
+    background: transparent;
+    /* The box shows focus (its border turns accent); the text area inside it
+       must not draw the app's focus ring, or it reads as a second box. */
+    box-shadow: none;
+    outline: none;
+}
+.agent-composer-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     height: 28px;
+    padding: 0 4px 4px 6px;
+    font-size: 0.8462rem;
+    min-width: 0;
+}
+.agent-composer-toolbar .chat-panel-send {
+    flex: 0 0 auto;
+    margin-left: auto;
+    width: 24px;
+    height: 24px;
     padding: 0;
     border-radius: 999px;
+}
+.agent-ds-button {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 22px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 0.8462rem;
+    cursor: pointer;
+}
+.agent-ds-button:hover,
+.agent-ds-button-open {
+    background: var(--bg-2);
+    color: var(--text-1);
+}
+.agent-ds-chips {
+    display: flex;
+    gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+}
+.agent-ds-chip {
+    display: inline-flex;
+    align-items: center;
+    min-width: 0;
+    max-width: 180px;
+    height: 22px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--text-1);
+    font-size: 0.8077rem;
+}
+.agent-ds-chip-target {
+    background: color-mix(in srgb, var(--success, #22a06b) 18%, transparent);
+}
+.agent-ds-chip-both {
+    background: color-mix(in srgb, var(--warning, #d97706) 18%, transparent);
+}
+.agent-ds-chip-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    padding: 0 2px 0 8px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+.agent-ds-chip-role {
+    font-weight: 600;
+    flex: 0 0 auto;
+}
+.agent-ds-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.agent-ds-chip-x {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 18px;
+    height: 18px;
+    margin-right: 2px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--text-3);
+    cursor: pointer;
+}
+.agent-ds-chip-x:hover {
+    color: var(--text-1);
+    background: var(--bg-3);
+}
+/* The data-source menu, portaled to <body> so a docked, short panel cannot
+   clip it. */
+.agent-ds-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+}
+.agent-ds-menu {
+    position: fixed;
+    z-index: 61;
+    width: 260px;
+    overflow-y: auto;
+    padding: 6px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+}
+.agent-ds-menu-head {
+    padding: 4px 8px 6px;
+    font-size: 0.7692rem;
+    color: var(--text-3);
+}
+.agent-ds-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-1);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.agent-ds-item:hover:not(:disabled) {
+    background: var(--bg-2);
+}
+.agent-ds-item:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+.agent-ds-item-icon {
+    flex: 0 0 auto;
+}
+.agent-ds-item-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+.agent-ds-item-name {
+    font-size: 0.9231rem;
+}
+.agent-ds-item-sub {
+    font-size: 0.7692rem;
+    color: var(--text-3);
+}
+.agent-ds-item-check {
+    margin-left: auto;
+    color: var(--accent);
+}
+/* Above the panel (z-index 40) and its menu. */
+.agent-ds-modal-backdrop {
+    z-index: 70;
+}
+.agent-ds-dialog .agent-ds-fields {
+    margin-top: 4px;
+}
+.agent-ds-small {
+    width: min(440px, calc(100vw - 32px));
+}
+.agent-ds-small-text {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 12px;
+    color: var(--text-2);
+    line-height: 1.5;
+}
+.agent-ds-roles {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+}
+.agent-ds-role {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-0);
+    color: var(--text-1);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.agent-ds-role:hover,
+.agent-ds-role-current {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+}
+.agent-ds-role-icon {
+    color: var(--accent);
+}
+.agent-ds-role-title {
+    font-weight: 600;
+}
+.agent-ds-role-hint {
+    font-size: 0.7692rem;
+    color: var(--text-3);
+}
+/* Docked, the panel keeps one header row: the "working" pill sits beside the
+   title instead of under it. */
+.agent-chat-panel.chat-panel-docked .chat-panel-title-wrap {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
 }
 @container agent-panel (max-width: 440px) {
     .agent-chat-panel .chat-panel-drag-hint {
@@ -8325,7 +8553,8 @@ select.modal-select:focus {
     }
 }
 @container agent-main (max-height: 300px) {
-    .agent-chat-panel .agent-context {
+    /* The header already says the agent is working; the composer needs the room. */
+    .agent-chat-panel .chat-panel-live-banner {
         display: none;
     }
     .agent-chat-panel .chat-panel-scroll {
@@ -8339,10 +8568,11 @@ select.modal-select:focus {
         padding: 6px 8px;
         gap: 6px;
     }
-    .agent-chat-panel .chat-panel-input {
-        min-height: 52px;
+    .agent-composer .chat-panel-input {
+        padding-top: 4px;
+        min-height: calc(52px - var(--agent-toolbar-h));
         /* Leave the conversation at least one line above the composer. */
-        max-height: max(52px, calc(100cqh - 64px));
+        max-height: max(calc(52px - var(--agent-toolbar-h)), calc(100cqh - 64px - var(--agent-toolbar-h)));
     }
 }
 .agent-pre {

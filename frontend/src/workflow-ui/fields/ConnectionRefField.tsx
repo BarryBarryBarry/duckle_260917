@@ -42,8 +42,8 @@ export function ConnectionRefField({ field, value, onChange }: Props) {
             <div className="field-ref-empty">
                 <Plug size={12} />
                 <span>
-                    No saved connections{field.accepts ? ' of compatible type' : ''}. Create one in
-                    the <b>Connections</b> folder.
+                    No saved connections{field.accepts ? ' of compatible type' : ''}. Create one from
+                    the <b>数据源</b> menu in the Agent input.
                 </span>
             </div>
         );

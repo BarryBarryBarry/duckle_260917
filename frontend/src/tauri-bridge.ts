@@ -733,11 +733,15 @@ export type AgentConnectionContext = {
     port?: string | null;
     database?: string | null;
     schema?: string | null;
+    /** What the user picked it for: read from, write to, or both. */
+    role?: 'source' | 'target' | 'both';
 };
 
 export type AgentContext = {
     workspace: string;
     connection?: AgentConnectionContext | null;
+    /** The databases picked for this message, each with its role. */
+    connections?: AgentConnectionContext[];
     selectedAssets: unknown[];
 };
 

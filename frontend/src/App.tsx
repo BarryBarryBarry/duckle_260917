@@ -80,6 +80,7 @@ import {
     saveNow,
     savePipelineFile,
     saveRepository,
+    saveStoredConnection,
     setWorkspacePath,
     WorkspaceLoadError,
 } from './workspace';
@@ -2252,10 +2253,6 @@ export default function App() {
         | null;
     const [repoEditor, setRepoEditor] = useState<EditorState>(null);
 
-    const handleNewConnection = useCallback(
-        (parentId: string) => setRepoEditor({ kind: 'connection', itemId: null, parentId }),
-        [],
-    );
     const handleNewContext = useCallback(
         (parentId: string) => setRepoEditor({ kind: 'context', itemId: null, parentId }),
         [],
@@ -2362,6 +2359,26 @@ export default function App() {
     const handleSaveConnection = useCallback(
         (name: string, payload: ConnectionPayload) => upsertRepoItem('connection', name, payload),
         [upsertRepoItem],
+    );
+    const savedConnections = useMemo(() => repo.filter(i => i.type === 'connection'), [repo]);
+    /** The Agent's data-source dialog: stored at once (the agent reads the
+     *  store as soon as the message goes), then shown in the editor's pickers. */
+    const handleAgentSaveConnection = useCallback(
+        async (id: string | null, name: string, payload: Record<string, unknown>): Promise<string> => {
+            if (!workspacePathState) throw new Error('请先打开一个工作区');
+            const cid = id ?? `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+            await saveStoredConnection(workspacePathState, cid, name, payload);
+            const item: RepoItem = {
+                id: cid,
+                name,
+                type: 'connection',
+                parentId: 'connections',
+                payload: payload as RepoItem['payload'],
+            };
+            setRepo(r => (r.some(i => i.id === cid) ? r.map(i => (i.id === cid ? item : i)) : [...r, item]));
+            return cid;
+        },
+        [workspacePathState],
     );
     const handleSaveContext = useCallback(
         (name: string, payload: ContextPayload) => upsertRepoItem('context', name, payload),
@@ -2696,7 +2713,6 @@ export default function App() {
                     openLineage: () => setShowLineage(true),
                     openTrust: () => setShowTrust(true),
                     openCatalog: () => setShowCatalog(true),
-                    openConnections: () => handleNewConnection('connections'),
                     openGit: () => setShowGitPanel(true),
                     openSettings: () => setShowSettings(true),
                 }}
@@ -2711,7 +2727,6 @@ export default function App() {
                     onOpenItem={handleOpenRepoItem}
                     onNewPipeline={openNewPipelineModal}
                     onNewFolder={handleNewFolderInRepo}
-                    onNewConnection={handleNewConnection}
                     onImportJob={isInTauri() ? handleImportJob : undefined}
                     onNewContext={handleNewContext}
                     onNewDocument={handleNewDocument}
@@ -2873,6 +2888,8 @@ export default function App() {
                     onOpenPipeline={handleOpenPersistedPipeline}
                     onWorkspaceChanged={handleReloadWorkspace}
                     onOpenSettings={() => setShowSettings(true)}
+                    connections={savedConnections}
+                    onSaveConnection={handleAgentSaveConnection}
                 />
             ) : null}
 

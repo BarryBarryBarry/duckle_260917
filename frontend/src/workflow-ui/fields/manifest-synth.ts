@@ -392,7 +392,7 @@ const salesforceConnectionRefField = (): Field => ({
     kind: 'connection-ref',
     accepts: ['salesforce'],
     description:
-        'Pick a saved Salesforce connection (Connections folder). Resolved and decrypted at run time; inline auth fields hide while one is set.',
+        'Pick a saved Salesforce connection. Resolved and decrypted at run time; inline auth fields hide while one is set.',
 });
 
 // visibleWhen building block: show an inline auth field only while NO saved
@@ -408,7 +408,7 @@ const connectionRefField = (acceptKind?: string): Field => ({
     label: 'Saved connection',
     kind: 'connection-ref',
     accepts: acceptKind ? [acceptKind] : undefined,
-    description: 'Pick a connection from the Connections folder to auto-fill the fields below.',
+    description: 'Pick a saved connection to supply the fields below. Database connections are created from the 数据源 (data source) menu in the Agent input.',
 });
 
 // #256: transport is a SEPARATE picker from the auth connection. It has to use
