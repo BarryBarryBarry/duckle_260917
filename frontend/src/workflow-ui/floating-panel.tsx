@@ -36,6 +36,11 @@ export type PanelLayout = PanelRect & {
     maximized: boolean;
     /** The rect to go back to when un-maximizing. */
     restore: PanelRect | null;
+    /** Where the panel sits while minimized, for panels that dock. */
+    dock: PanelRect | null;
+    /** The docked panel was dragged, so it stays put instead of following
+     *  the canvas. */
+    dockMoved: boolean;
 };
 
 /** How small a panel may be made, which differs per panel. */
@@ -46,12 +51,18 @@ export type PanelLimits = {
     /** Hide the history sidebar while the panel is too narrow to hold it next
      *  to the conversation, instead of refusing to shrink past it. */
     autoHideSidebar: boolean;
+    /** Minimizing docks the panel at the bottom of the window, clear of the
+     *  canvas's zoom controls and minimap, at this height; it can be dragged
+     *  from there. 0 keeps the panel where it is and collapses it to the
+     *  header. */
+    dockHeight: number;
 };
 
 const DEFAULT_LIMITS: PanelLimits = {
     minWidth: CHAT_PANEL_MIN_WIDTH,
     minHeight: CHAT_PANEL_MIN_HEIGHT,
     autoHideSidebar: false,
+    dockHeight: 0,
 };
 
 /** Every edge and corner, so the panel resizes in all four directions. */
@@ -145,6 +156,7 @@ export function useFloatingPanel(storageKey: string, name: string, limits: Parti
         const target = event.target as HTMLElement | null;
         if (target?.closest('button, input, textarea, select, a')) return;
         const start = panelLayout ?? defaultPanelLayout();
+        const origin = start.collapsed && lim.dockHeight > 0 ? (start.dock ?? autoDock(lim)) : start;
         // Nothing is committed here, not even for a maximized panel: a press
         // is not yet a drag, and restoring on press alone would shrink the
         // panel on a plain click of the header.
@@ -152,8 +164,8 @@ export function useFloatingPanel(storageKey: string, name: string, limits: Parti
             pointerId: event.pointerId,
             startX: event.clientX,
             startY: event.clientY,
-            originX: start.x,
-            originY: start.y,
+            originX: origin.x,
+            originY: origin.y,
             started: false,
         };
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -173,6 +185,14 @@ export function useFloatingPanel(storageKey: string, name: string, limits: Parti
         }
         setPanelLayout(prev => {
             let base = prev ?? defaultPanelLayout();
+            if (base.collapsed && lim.dockHeight > 0) {
+                const dock = base.dock ?? autoDock(lim);
+                return clamp({
+                    ...base,
+                    dock: { ...dock, x: drag.originX + totalX, y: drag.originY + totalY },
+                    dockMoved: true,
+                });
+            }
             if (base.maximized) {
                 // First real movement on a maximized panel restores it, the way
                 // a desktop window does. The anchor uses the point the user
@@ -204,8 +224,11 @@ export function useFloatingPanel(storageKey: string, name: string, limits: Parti
         const started = drag.started;
         dragRef.current = null;
         setDragging(false);
-        // A click that never became a drag must not snap the panel around.
-        if (started) setPanelLayout(prev => (prev ? snapPanelLayout(prev, lim) : prev));
+        // A click that never became a drag must not snap the panel around,
+        // and a docked panel stays where it was dropped.
+        if (started) {
+            setPanelLayout(prev => (prev && !(prev.collapsed && lim.dockHeight > 0) ? snapPanelLayout(prev, lim) : prev));
+        }
         if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             event.currentTarget.releasePointerCapture(event.pointerId);
         }
@@ -217,12 +240,13 @@ export function useFloatingPanel(storageKey: string, name: string, limits: Parti
     ) => {
         if (event.button !== 0) return;
         const base = panelLayout ?? defaultPanelLayout();
+        const origin = base.collapsed && lim.dockHeight > 0 ? (base.dock ?? autoDock(lim)) : base;
         resizeRef.current = {
             pointerId: event.pointerId,
             mode,
             startX: event.clientX,
             startY: event.clientY,
-            origin: { x: base.x, y: base.y, width: base.width, height: base.height },
+            origin: { x: origin.x, y: origin.y, width: origin.width, height: origin.height },
         };
         setResizing(true);
         event.currentTarget.setPointerCapture(event.pointerId);
@@ -234,11 +258,19 @@ export function useFloatingPanel(storageKey: string, name: string, limits: Parti
         if (!resize || resize.pointerId !== event.pointerId) return;
         setPanelLayout(prev => {
             const base = prev ?? defaultPanelLayout();
+            const dx = event.clientX - resize.startX;
+            const dy = event.clientY - resize.startY;
+            if (base.collapsed && lim.dockHeight > 0) {
+                // Docked, the dock is what resizes; it keeps at least its
+                // header, one line of conversation and the input.
+                const dock = resizeRect(resize.origin, resize.mode, dx, dy, lim.minWidth, lim.dockHeight);
+                return clamp({ ...base, dock, dockMoved: true });
+            }
             const next = resizeRect(
                 resize.origin,
                 resize.mode,
-                event.clientX - resize.startX,
-                event.clientY - resize.startY,
+                dx,
+                dy,
                 minPanelWidth(base.sidebar, lim),
                 lim.minHeight,
             );
@@ -258,11 +290,16 @@ export function useFloatingPanel(storageKey: string, name: string, limits: Parti
         }
     }, []);
 
-    /** Minimize: collapse to the header strip. Restores the previous height. */
+    /** Minimize: collapse to the header strip, or for a docking panel move
+     *  to the dock. Restoring goes back to the previous rect. */
     const toggleCollapsed = useCallback(() => {
         setPanelLayout(prev => {
             const base = prev ?? defaultPanelLayout();
-            return clamp({ ...base, collapsed: !base.collapsed });
+            const collapsed = !base.collapsed;
+            if (collapsed && lim.dockHeight > 0) {
+                return clamp({ ...base, collapsed, dock: autoDock(lim), dockMoved: false });
+            }
+            return clamp({ ...base, collapsed });
         });
     }, []);
 
@@ -302,6 +339,17 @@ export function useFloatingPanel(storageKey: string, name: string, limits: Parti
     const toggleSidebar = useCallback(() => {
         setPanelLayout(prev => {
             const base = prev ?? defaultPanelLayout();
+            if (base.collapsed && lim.dockHeight > 0) {
+                // Docked, the dock is what shows the sidebar; one too narrow
+                // for it widens leftwards, as the floating panel does.
+                const dock = base.dock ?? autoDock(lim);
+                const sidebar = !sidebarFits({ ...base, ...dock, maximized: false }, lim);
+                const room = lim.minWidth + CHAT_SIDEBAR_WIDTH - dock.width;
+                const grown = sidebar && room > 0 ? { ...dock, x: dock.x - room, width: dock.width + room } : dock;
+                // A dock widened for the sidebar no longer follows the canvas,
+                // which would narrow it again.
+                return clamp({ ...base, sidebar, dock: grown, dockMoved: base.dockMoved || grown !== dock });
+            }
             // Acts on what is on screen: a sidebar hidden for want of room
             // is shown by making room for it.
             const sidebar = !sidebarFits(base, lim);
@@ -317,14 +365,44 @@ export function useFloatingPanel(storageKey: string, name: string, limits: Parti
     }, []);
 
     const currentLayout = panelLayout ?? defaultPanelLayout();
-    const panelStyle = {
-        left: currentLayout.x,
-        top: currentLayout.y,
-        width: currentLayout.width,
-        height: currentLayout.collapsed ? undefined : currentLayout.height,
-    };
+    const docked = currentLayout.collapsed && lim.dockHeight > 0;
+    const following = docked && !currentLayout.dockMoved;
 
-    const resizeHandles = currentLayout.collapsed ? null : (
+    // Until it is dragged, the dock follows the canvas: the window, the side
+    // panels and the bottom panel all move it.
+    useEffect(() => {
+        if (!following || typeof window === 'undefined') return;
+        const update = () =>
+            setPanelLayout(prev => (prev && prev.collapsed && !prev.dockMoved ? { ...prev, dock: autoDock(lim) } : prev));
+        window.addEventListener('resize', update);
+        const canvas = document.querySelector('.canvas-dnd');
+        const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+        if (canvas) observer?.observe(canvas);
+        return () => {
+            window.removeEventListener('resize', update);
+            observer?.disconnect();
+        };
+    }, [following]);
+
+    const dockNow = docked ? (currentLayout.dock ?? autoDock(lim)) : null;
+    // Anchored by its bottom edge, so a panel that shrinks to its header
+    // (still installing, say) stays at the bottom too.
+    const panelStyle: React.CSSProperties = dockNow
+        ? {
+              left: dockNow.x,
+              top: 'auto',
+              bottom: Math.max(0, window.innerHeight - dockNow.y - dockNow.height),
+              width: dockNow.width,
+              height: dockNow.height,
+          }
+        : {
+              left: currentLayout.x,
+              top: currentLayout.y,
+              width: currentLayout.width,
+              height: currentLayout.collapsed ? undefined : currentLayout.height,
+          };
+
+    const resizeHandles = currentLayout.collapsed && !docked ? null : (
         <>
             {RESIZE_MODES.map(mode => (
                 <button
@@ -348,9 +426,13 @@ export function useFloatingPanel(storageKey: string, name: string, limits: Parti
 
     return {
         layout: currentLayout,
+        /** Minimized into the dock along the bottom of the canvas. */
+        docked,
         /** Whether the history sidebar is on screen, which with
          *  autoHideSidebar also depends on the width. */
-        sidebarShown: sidebarFits(currentLayout, lim),
+        sidebarShown: docked && dockNow
+            ? sidebarFits({ ...currentLayout, width: dockNow.width, maximized: false }, lim)
+            : sidebarFits(currentLayout, lim),
         panelStyle,
         dragging,
         resizing,
@@ -382,6 +464,8 @@ function readSavedPanelLayout(storageKey: string): PanelLayout | null {
             collapsed?: unknown;
             maximized?: unknown;
             restore?: unknown;
+            dock?: unknown;
+            dockMoved?: unknown;
         };
         if (typeof parsed.x === 'number' && typeof parsed.y === 'number') {
             return {
@@ -395,6 +479,8 @@ function readSavedPanelLayout(storageKey: string): PanelLayout | null {
                 collapsed: parsed.collapsed === true,
                 maximized: parsed.maximized === true,
                 restore: readRect(parsed.restore),
+                dock: readRect(parsed.dock),
+                dockMoved: parsed.dockMoved === true,
             };
         }
     } catch {
@@ -443,6 +529,8 @@ function defaultPanelLayout(sidebar = true): PanelLayout {
             collapsed: false,
             maximized: false,
             restore: null,
+            dock: null,
+            dockMoved: false,
         };
     }
     const topbarHeight = readTopbarHeight();
@@ -463,6 +551,8 @@ function defaultPanelLayout(sidebar = true): PanelLayout {
         collapsed: false,
         maximized: false,
         restore: null,
+        dock: null,
+        dockMoved: false,
     };
 }
 
@@ -515,6 +605,17 @@ export function clampPanelLayout(layout: PanelLayout, limits: PanelLimits = DEFA
         height,
         x: Math.min(Math.max(layout.x, area.left), maxX),
         y: Math.min(Math.max(layout.y, area.top), maxY),
+        dock: layout.dock ? clampRect(layout.dock, area) : null,
+    };
+}
+
+function clampRect(r: PanelRect, area: ReturnType<typeof panelWorkArea>): PanelRect {
+    const width = Math.min(r.width, area.right - area.left);
+    return {
+        ...r,
+        width,
+        x: Math.min(Math.max(r.x, area.left), Math.max(area.left, area.right - width)),
+        y: Math.min(Math.max(r.y, area.top), Math.max(area.top, area.bottom - r.height)),
     };
 }
 
@@ -580,5 +681,47 @@ function readTopbarHeight() {
     const raw = getComputedStyle(document.documentElement).getPropertyValue('--topbar-h').trim();
     const px = Number.parseFloat(raw);
     return Number.isFinite(px) ? px : 56;
+}
+
+const DOCK_MAX_WIDTH = 760;
+const DOCK_GAP = 12;
+
+function visibleRect(selector: string, within: ParentNode): DOMRect | null {
+    const el = within.querySelector(selector);
+    const r = el?.getBoundingClientRect();
+    return r && r.width > 0 && r.height > 0 ? r : null;
+}
+
+/** Where minimizing puts a docking panel: at the bottom of the window, below
+ *  the canvas's own bottom edge, and across the canvas centred between its
+ *  zoom controls and minimap where they leave room - so it hides as little
+ *  of the pipeline as it can. Without a canvas on screen, across the window. */
+function autoDock(limits: PanelLimits): PanelRect {
+    const work = panelWorkArea();
+    const canvasEl = document.querySelector('.canvas-dnd');
+    const canvas = canvasEl?.getBoundingClientRect();
+    const span = canvas && canvas.width > 0 && canvas.height > 0 ? canvas : work;
+    const outerLeft = Math.max(work.left, span.left + DOCK_GAP);
+    const outerRight = Math.min(work.right, span.right - DOCK_GAP);
+    let left = outerLeft;
+    let right = outerRight;
+    if (canvasEl) {
+        const controls = visibleRect('.react-flow__controls', canvasEl);
+        const minimap = visibleRect('.react-flow__minimap', canvasEl);
+        if (controls) left = Math.max(left, controls.right + DOCK_GAP);
+        if (minimap) right = Math.min(right, minimap.left - DOCK_GAP);
+    }
+    // Too narrow between them: cover the controls rather than squeeze the input.
+    if (right - left < limits.minWidth) {
+        left = outerLeft;
+        right = outerRight;
+    }
+    const width = Math.max(0, Math.min(DOCK_MAX_WIDTH, right - left));
+    return {
+        x: left + (right - left - width) / 2,
+        y: Math.max(work.top, work.bottom - limits.dockHeight),
+        width,
+        height: limits.dockHeight,
+    };
 }
 

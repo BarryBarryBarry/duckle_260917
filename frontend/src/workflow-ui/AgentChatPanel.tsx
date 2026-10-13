@@ -2,8 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
     AlertCircle,
+    ArrowUp,
     Bot,
     ChevronDown,
+    ChevronUp,
     Download,
     Loader2,
     Maximize2,
@@ -11,7 +13,6 @@ import {
     Minus,
     PanelLeftClose,
     PanelLeftOpen,
-    Send,
     Sparkles,
     Square,
     Workflow,
@@ -171,8 +172,9 @@ const STATE_KEY = 'duckle-pi-agent-panel';
 
 /** The panel shrinks down to its header, one line of conversation and the
  *  input; the styles drop the connection picker and spacing as it gets short
- *  (see .agent-chat-panel in styles.css). */
-const AGENT_PANEL_LIMITS = { minWidth: 300, minHeight: 170, autoHideSidebar: true };
+ *  (see .agent-chat-panel in styles.css). Minimized, it docks at that size
+ *  along the bottom of the canvas. */
+const AGENT_PANEL_LIMITS = { minWidth: 300, minHeight: 170, autoHideSidebar: true, dockHeight: 150 };
 
 function emptyTurn(): AssistantTurn {
     return { text: '', thinking: '', tools: [], skills: [], subagents: [] };
@@ -420,6 +422,7 @@ export default function AgentChatPanel({
     const [historyError, setHistoryError] = useState<string | null>(null);
     const {
         layout,
+        docked,
         panelStyle,
         dragging,
         resizing,
@@ -465,7 +468,7 @@ export default function AgentChatPanel({
     // Also on resize: the composer's own size limits change with the panel's.
     useEffect(() => {
         syncComposerHeight(inputRef.current);
-    }, [draft, open, layout.collapsed, layout.width, layout.height]);
+    }, [draft, open, layout.collapsed, layout.width, layout.height, panelStyle.width, panelStyle.height]);
 
     const runHistoryTask = useCallback((task: () => Promise<void>) => {
         historyQueueRef.current = historyQueueRef.current
@@ -1065,12 +1068,17 @@ export default function AgentChatPanel({
     if (!open) return null;
 
     const ready = setup.phase === 'ready';
+    // Docked, a ready panel keeps its conversation and input; anything else
+    // (installing, checking) shrinks to the header as before.
+    const headerOnly = layout.collapsed && !(docked && ready);
 
     return (
         <aside
             className={`chat-panel agent-chat-panel ${dragging ? 'chat-panel-dragging' : ''} ${
                 resizing ? 'chat-panel-resizing' : ''
-            } ${layout.collapsed ? 'chat-panel-collapsed' : ''} ${layout.maximized ? 'chat-panel-maximized' : ''}`}
+            } ${headerOnly ? 'chat-panel-collapsed' : ''} ${docked ? 'chat-panel-docked' : ''} ${
+                layout.maximized ? 'chat-panel-maximized' : ''
+            }`}
             role="complementary"
             aria-label="Agent"
             style={panelStyle}
@@ -1081,7 +1089,7 @@ export default function AgentChatPanel({
                         <Bot size={14} aria-hidden="true" />
                         <span>Agent</span>
                         {ready && connected ? <span className="chat-panel-tag">已连接</span> : null}
-                        {ready && !layout.collapsed ? (
+                        {ready && !headerOnly ? (
                             <button
                                 type="button"
                                 className="chat-panel-head-btn"
@@ -1112,7 +1120,11 @@ export default function AgentChatPanel({
                         title={layout.collapsed ? '还原 Agent' : '最小化 Agent'}
                         aria-label={layout.collapsed ? '还原 Agent' : '最小化 Agent'}
                     >
-                        {layout.collapsed ? <ChevronDown size={14} /> : <Minus size={14} />}
+                        {layout.collapsed ? (
+                            docked ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+                        ) : (
+                            <Minus size={14} />
+                        )}
                     </button>
                     <button
                         type="button"
@@ -1136,7 +1148,7 @@ export default function AgentChatPanel({
                 </div>
             </header>
 
-            {layout.collapsed ? (
+            {headerOnly ? (
                 <div className="chat-panel-collapsed-bar">
                     <span>Agent 已最小化</span>
                     {busy ? (
@@ -1320,7 +1332,7 @@ export default function AgentChatPanel({
                                         title="停止"
                                         aria-label="停止"
                                     >
-                                        <Square size={14} />
+                                        <Square size={12} fill="currentColor" />
                                     </button>
                                 ) : (
                                     <button
@@ -1330,7 +1342,7 @@ export default function AgentChatPanel({
                                         title="发送 (Enter)"
                                         aria-label="发送"
                                     >
-                                        <Send size={14} />
+                                        <ArrowUp size={16} strokeWidth={2.4} />
                                     </button>
                                 )}
                             </div>

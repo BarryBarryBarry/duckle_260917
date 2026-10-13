@@ -8289,6 +8289,26 @@ select.modal-select:focus {
 .agent-chat-panel .chat-panel-form {
     flex-shrink: 0;
 }
+/* The send button sits inside the input's bottom-right corner. */
+.agent-chat-panel .chat-panel-input-row {
+    position: relative;
+    display: block;
+}
+.agent-chat-panel .chat-panel-input {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding-right: 46px;
+}
+.agent-chat-panel .chat-panel-send {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border-radius: 999px;
+}
 @container agent-panel (max-width: 440px) {
     .agent-chat-panel .chat-panel-drag-hint {
         display: none;
