@@ -129,21 +129,13 @@ fn pipeline_path(workspace: &Path, id: &str) -> Option<PathBuf> {
         .map(|(_, path, _)| path)
 }
 
-/// Connection names this workspace has saved.
+/// Ids of the connections this workspace has saved.
 fn saved_connections(workspace: &Path) -> std::collections::BTreeSet<String> {
-    let mut out = std::collections::BTreeSet::new();
-    let dir = workspace.join("connections");
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.extension().and_then(|x| x.to_str()) == Some("json") {
-                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                    out.insert(stem.to_string());
-                }
-            }
-        }
-    }
-    out
+    duckle_secrets::store::list_or_legacy(workspace)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| c.id)
+        .collect()
 }
 
 pub fn run() -> ExitCode {

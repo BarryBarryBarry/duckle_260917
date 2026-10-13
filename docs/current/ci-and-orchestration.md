@@ -243,7 +243,7 @@ It is written through the same DuckDB CLI the engine runs pipelines with, so it 
 
 **Status words.** A run is `queued`, `running`, `ok`, `error`, `cancelled` or `interrupted`. A node is `pending`, `running`, `ok`, `unchanged`, `skipped`, `error`, `cancelled` or `interrupted`. A cancelled run cancels the stage in flight and skips the rest; a run whose process died (found at the next start) is `interrupted`, its stage in flight `interrupted` and the rest `skipped`. Whether a run was a quiet poll is the `unchanged` flag, not a status.
 
-**`startedAt`** is when the run was begun, including any wait for a resource-pool permit; `queueMs` is that wait. A node's `kind` is its catalog kind (`source`, `transform`, `sink`, `quality`, `control`, `custom`). `rejectedRows` is what reject-splitting quality checks turned away - `0` when a check rejected nothing, absent when no check reported.
+**`startedAt`** is when the run was begun, including any wait for a resource-pool permit; `queueMs` is that wait. A node's `kind` is its catalog kind (`source`, `transform`, `sink`, `quality`, `control`, `custom`), and `nodeLabel` its name on the canvas as it was when the run recorded it - for a run recorded before names were kept, the node's current name, or `null` when the node is gone. `rejectedRows` is what reject-splitting quality checks turned away - `0` when a check rejected nothing, absent when no check reported.
 
 **`GET /api/metrics/runs`** - runs, newest first:
 
@@ -264,7 +264,7 @@ It is written through the same DuckDB CLI the engine runs pipelines with, so it 
   "startedAt": "2026-09-30T12:00:00.000000Z", "durationMs": 3120, "rows": 1000000, "rejectedRows": null,
   "unchanged": false, "incomplete": false, "incompleteReason": null, "nodeCount": 2, "queueMs": 0,
   "error": null, "category": null, "createdAt": "…", "updatedAt": "…",
-  "nodes": [{ "nodeId": "extract", "ordinal": 0, "component": "src.postgres", "kind": "source", "status": "ok",
+  "nodes": [{ "nodeId": "extract", "nodeLabel": "Read orders", "ordinal": 0, "component": "src.postgres", "kind": "source", "status": "ok",
               "startedAt": "…", "durationMs": 1800, "rows": 1000000, "rejectedRows": null,
               "error": null, "category": null, "createdAt": "…", "updatedAt": "…" }] }] }
 ```

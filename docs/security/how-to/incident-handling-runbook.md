@@ -52,7 +52,7 @@ sudo iptables -A INPUT -p tcp --dport 8095 -j DROP
 ```
 
 ### Step 2: Rotate Downstream Service Credentials
-Because saved connection profiles in `connections/` may have been decrypted:
+Because saved connection profiles in `.duckle/connections.duckdb` may have been decrypted:
 1. Immediately rotate passwords, API tokens, and IAM secret keys in upstream and downstream systems (PostgreSQL, Snowflake, AWS S3, etc.).
 2. Update local connection files or transition to runtime `${ENV:...}` injection.
 

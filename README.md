@@ -4080,9 +4080,8 @@ my-workspace/
   pipelines/
     orders_etl.pipeline.json     # the node graph
     nightly_load.pipeline.json
-  connections/
-    prod-postgres.connection.json # saved DB credentials (encrypted)
-    snowflake-analytics.connection.json
+  .duckle/
+    connections.duckdb            # saved DB credentials (secrets encrypted)
   contexts/
     dev.context.json              # variables for dev environment
     prod.context.json
@@ -4214,7 +4213,7 @@ Saved connections become DuckDB secrets at runtime so credentials never leak int
 | **MotherDuck / Databricks / BigQuery** | token, workspace URL | Respective sources/sinks |
 | **Generic REST / SaaS** | base URL, headers, auth scheme (Bearer / Basic) and token | All REST aliases |
 
-Connections live in `workspace/connections/` as JSON. The token/password field is encrypted with the workspace key; the rest is plain text.
+Connections live in the workspace's connection store, a DuckDB table in `.duckle/connections.duckdb`. The token/password field is encrypted with the workspace key; the rest is plain text. A workspace from an older Duckle still holding `connections/*.json` has those files imported (ids kept, so every `connectionRef` still resolves) and moved to `.duckle/connections-imported/` the first time it is opened.
 
 To use a connection in a pipeline, the Properties panel of any compatible source/sink shows a **Connection** dropdown - pick one and the fields auto-fill. The list is filtered to connections of a matching kind, so a REST connection is not offered on a JDBC node.
 

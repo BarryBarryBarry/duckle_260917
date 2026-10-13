@@ -2,7 +2,7 @@
 //! holding a password.
 //!
 //! Pipelines reference a saved connection (`connectionRef`), and the password
-//! lives encrypted in `<workspace>/connections/<id>.json`. When a run is
+//! lives encrypted in the workspace connection store. When a run is
 //! refused because a saved connection has no password or a wrong one, the
 //! tool result carries a `needsCredentials` block. Duckle's chat turns that
 //! into a secure form and writes the password into the connection itself, so
@@ -86,25 +86,18 @@ fn uses_password(conn: &Value) -> bool {
 }
 
 pub fn connection_name(workspace: &Path, id: &str) -> Option<String> {
-    let text = std::fs::read_to_string(workspace.join("repository.json")).ok()?;
-    let repo: Value = serde_json::from_str(&text).ok()?;
-    repo.as_array()?
-        .iter()
-        .find(|item| item.get("id").and_then(Value::as_str) == Some(id))
-        .and_then(|item| item.get("name").and_then(Value::as_str))
-        .map(str::to_string)
+    duckle_secrets::store::list_or_legacy(workspace)
+        .ok()?
+        .into_iter()
+        .find(|c| c.id == id)
+        .map(|c| c.name)
 }
 
 fn read_raw_connection(workspace: &Path, id: &str) -> Option<Value> {
-    let safe = !id.is_empty()
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if !safe {
+    if !duckle_secrets::store::valid_id(id) {
         return None;
     }
-    let text = std::fs::read_to_string(workspace.join("connections").join(format!("{id}.json"))).ok()?;
-    serde_json::from_str(&text).ok()
+    duckle_secrets::load_sealed_connection(workspace, id).ok()
 }
 
 fn is_auth_failure(status: &Value) -> bool {

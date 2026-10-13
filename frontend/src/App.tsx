@@ -710,7 +710,7 @@ export default function App() {
                     const before = prevById.get(item.id);
                     if (!before || before.payload !== item.payload) {
                         if (item.payload !== undefined) {
-                            const ok = await saveItemPayload(ws, item.type, item.id, item.payload);
+                            const ok = await saveItemPayload(ws, item.type, item.id, item.payload, item.name);
                             if (!ok) allSaved = false;
                         }
                     }

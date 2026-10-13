@@ -236,7 +236,7 @@ parameters and deployed pipeline contents never end up in it.
 
 | File | Holds | Form |
 | --- | --- | --- |
-| `connections/*.json` | connection secrets | **AES-256-GCM**, per-value, random 12-byte nonce |
+| `.duckle/connections.duckdb` | saved connections (secrets) | **AES-256-GCM**, per-value, random 12-byte nonce |
 | `.duckle/keys/secret.key` | the key that decrypts the above | **plaintext**, `0600` on Unix |
 | `.duckle/secrets/git.json` | cached Git token | **AES-256-GCM**, `0600` on Unix |
 | `.duckle/deploy-targets.json` | server API keys | **AES-256-GCM**, same key |
@@ -248,7 +248,7 @@ parameters and deployed pipeline contents never end up in it.
 ### The sharp edges, stated rather than buried
 
 **The key sits next to the ciphertext.** `.duckle/keys/secret.key` lives in the same folder
-as the `connections/` files it protects. Encryption at rest here defends against someone
+as the connection store it protects. Encryption at rest here defends against someone
 reading a stray file, a backup, or a git diff - **not** against someone who has the folder.
 If you copy the workspace, you copy the ability to decrypt it.
 

@@ -305,7 +305,7 @@ pub fn list_tools() -> Value {
                 "workspace": { "type": "string" }
             }, "required": ["workspace"] })),
         tool("create_connection",
-            "Create a workspace saved connection JSON so pipelines can reference it via a node's 'connectionRef' (the returned id). Writes connections/<id>.json and registers it in repository.json when present. Omit the password: Duckle asks the user for it securely the first time a run needs it, and stores it encrypted.",
+            "Create a saved connection in the workspace connection store (.duckle/connections.duckdb) so pipelines can reference it via a node's 'connectionRef' (the returned id). Omit the password: Duckle asks the user for it securely the first time a run needs it, and stores it encrypted.",
             json!({ "type": "object", "properties": {
                 "workspace": { "type": "string" },
                 "name": { "type": "string" },
@@ -1698,33 +1698,17 @@ fn t_build_pipeline(args: &Value) -> Result<Value, String> {
 
 fn t_list_connections(args: &Value) -> Result<Value, String> {
     let ws = arg_str(args, "workspace").ok_or("missing 'workspace'")?;
-    let dir = std::path::Path::new(ws).join("connections");
     let mut out = Vec::new();
-    if let Ok(rd) = std::fs::read_dir(&dir) {
-        for entry in rd.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let text = match std::fs::read_to_string(&path) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            let mut v: Value = match serde_json::from_str(&text) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let missing = crate::credentials::missing_secrets(&v);
-            mask_secrets(&mut v);
-            let id = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-            out.push(json!({
-                "id": id,
-                "name": crate::credentials::connection_name(std::path::Path::new(ws), &id),
-                "file": path.file_name().map(|s| s.to_string_lossy().into_owned()),
-                "missingSecrets": missing,
-                "connection": v
-            }));
-        }
+    for saved in duckle_secrets::store::list_or_legacy(std::path::Path::new(ws))? {
+        let mut v = saved.payload;
+        let missing = crate::credentials::missing_secrets(&v);
+        mask_secrets(&mut v);
+        out.push(json!({
+            "id": saved.id,
+            "name": saved.name,
+            "missingSecrets": missing,
+            "connection": v
+        }));
     }
     Ok(json!({ "count": out.len(), "connections": out }))
 }
@@ -1736,41 +1720,21 @@ fn t_create_connection(args: &Value) -> Result<Value, String> {
         .get("connection")
         .filter(|v| v.is_object())
         .ok_or("missing 'connection' object")?;
-    // Do not persist literal secrets: the MCP server cannot encrypt at rest
-    // (that key lives in the desktop app), so secret fields must use a
-    // ${ENV:KEY} placeholder resolved from the environment at run time.
+    // Do not take literal secrets from the agent: a password typed into a chat
+    // is a password in the model's context and its transcript. Secret fields
+    // must use a ${ENV:KEY} placeholder, or be left out and asked from the user
+    // securely when a run needs them.
     if let Some(k) = first_plaintext_secret(conn) {
         return Err(format!(
             "connection field '{k}' contains a literal secret; MCP-created connections must use a ${{ENV:KEY}} placeholder for secret fields (the value is supplied from the environment at run time)"
         ));
     }
-    let dir = std::path::Path::new(ws).join("connections");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir: {e}"))?;
     let id = gen_id("c");
-    let path = dir.join(format!("{id}.json"));
-    std::fs::write(&path, serde_json::to_string_pretty(conn).unwrap_or_default())
-        .map_err(|e| format!("write: {e}"))?;
-
-    // Best-effort: register in repository.json so the GUI lists it.
-    let repo_path = std::path::Path::new(ws).join("repository.json");
-    let mut registered = false;
-    if let Ok(text) = std::fs::read_to_string(&repo_path) {
-        if let Ok(mut repo) = serde_json::from_str::<Value>(strip_bom(&text)) {
-            if let Some(arr) = repo.as_array_mut() {
-                arr.push(json!({ "id": id, "name": name, "type": "connection" }));
-                if std::fs::write(&repo_path, serde_json::to_string_pretty(&repo).unwrap_or_default())
-                    .is_ok()
-                {
-                    registered = true;
-                }
-            }
-        }
-    }
+    duckle_secrets::store::save_sealed(std::path::Path::new(ws), &id, name, conn)?;
     Ok(json!({
         "ok": true,
         "id": id,
-        "path": path.to_string_lossy(),
-        "registeredInRepository": registered,
+        "store": duckle_secrets::store::store_path(std::path::Path::new(ws)).to_string_lossy(),
         "missingSecrets": crate::credentials::missing_secrets(conn),
         "usage": "Set this id as the node's 'connectionRef'. Missing secrets are asked from the user securely when a run needs them."
     }))

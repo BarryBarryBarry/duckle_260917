@@ -17,7 +17,6 @@ const V1_FILE = 'workspace.json';
 const METADATA_FILE = 'duckle.json';
 const REPOSITORY_FILE = 'repository.json';
 const PIPELINES_DIR = 'pipelines';
-const CONNECTIONS_DIR = 'connections';
 const CONTEXTS_DIR = 'contexts';
 const ROUTINES_DIR = 'routines';
 const DOCS_DIR = 'docs';
@@ -26,13 +25,63 @@ const DASHBOARDS_DIR = 'dashboards';
 
 const PAYLOAD_DIR_BY_TYPE: Record<string, string> = {
     pipeline: PIPELINES_DIR,
-    connection: CONNECTIONS_DIR,
     context: CONTEXTS_DIR,
     routine: ROUTINES_DIR,
     doc: DOCS_DIR,
     dive: DIVES_DIR,
     dashboard: DASHBOARDS_DIR,
 };
+
+/** A saved connection from the workspace's connection store, decrypted. */
+export type StoredConnection = {
+    id: string;
+    name: string;
+    kind: string;
+    payload: Record<string, unknown>;
+    createdAt?: string;
+    updatedAt?: string;
+};
+
+// Saved connections live in the workspace's connection store
+// (`.duckle/connections.duckdb`), behind these commands, not in
+// `connections/*.json` and `repository.json`. The backend encrypts a
+// connection's secrets before storing it; a save that fails throws, so the
+// editor keeps the item changed and retries rather than losing it.
+export async function listStoredConnections(workspace: string): Promise<StoredConnection[]> {
+    if (!hasBackend()) return [];
+    try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const list = await invoke<StoredConnection[] | null>('connection_store_list', { workspace });
+        return Array.isArray(list) ? list : [];
+    } catch (err) {
+        // A role that may not see credentials, or a store that cannot be read:
+        // the workspace still opens, without saved connections.
+        console.warn('connection_store_list failed', err);
+        return [];
+    }
+}
+
+export async function saveStoredConnection(
+    workspace: string,
+    id: string,
+    name: string,
+    payload: unknown,
+): Promise<void> {
+    const { invoke } = await import('@tauri-apps/api/core');
+    // `true` only: the web shim answers a command the server lacks with null.
+    const saved = await invoke<unknown>('connection_store_save', { workspace, id, name, payload });
+    if (saved !== true) throw new Error('connection_store_save is not available on this backend');
+}
+
+export async function deleteStoredConnection(workspace: string, id: string): Promise<void> {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('connection_store_delete', { workspace, id });
+}
+
+/** Connections as the repo items the editor's pickers read. */
+function connectionItems(list: StoredConnection[]): Array<Record<string, unknown>> {
+    return list.map(c => ({ id: c.id, name: c.name, type: 'connection', parentId: 'connections', payload: c.payload }));
+}
 
 export type WorkspaceState = {
     version: number;
@@ -123,53 +172,6 @@ async function fs(): Promise<FsLib> {
     return await import('@tauri-apps/plugin-fs');
 }
 
-// Encrypt / decrypt a connection payload's sensitive fields (password, tokens,
-// keys) via the crypto commands, which use a per-workspace key under
-// `.duckle/keys/`. `${...}` placeholders and non-secret fields are left
-// untouched by the command.
-//
-// Encrypting throws rather than falling back. It used to return the payload it
-// was given on any error, so a server that refused to encrypt (a role that may
-// not) had the password written to connections/*.json in clear text, and a
-// backend without the command - which the web shim answers with null - had the
-// connection overwritten with `null`. A failed save keeps the item changed, so
-// the editor retries it; decrypting stays lenient so a load never blocks.
-async function encryptConnectionPayload(
-    workspace: string,
-    connectionId: string,
-    payload: unknown,
-): Promise<unknown> {
-    const { invoke } = await import('@tauri-apps/api/core');
-    const enc = await invoke<string | null>('connection_encrypt_payload', {
-        workspace,
-        connectionId,
-        payloadJson: JSON.stringify(payload),
-    });
-    if (typeof enc !== 'string') {
-        throw new Error('connection_encrypt_payload is not available on this backend');
-    }
-    return JSON.parse(enc);
-}
-
-async function decryptConnectionPayload(
-    workspace: string,
-    connectionId: string,
-    payload: unknown,
-): Promise<unknown> {
-    try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const dec = await invoke<string>('connection_decrypt_payload', {
-            workspace,
-            connectionId,
-            payloadJson: JSON.stringify(payload),
-        });
-        return JSON.parse(dec);
-    } catch (err) {
-        console.error('decrypt connection failed', err);
-        return payload;
-    }
-}
-
 async function ensureDir(path: string): Promise<void> {
     const { exists, mkdir } = await fs();
     if (!(await exists(path))) {
@@ -257,6 +259,9 @@ async function loadV2(path: string): Promise<WorkspaceState | null> {
     let repo = (await readJsonIfExists<Array<Record<string, unknown>>>(
         joinPath(path, REPOSITORY_FILE),
     )) ?? (meta.repo as Array<Record<string, unknown>> | undefined) ?? [];
+    // Connections come from the connection store, whatever repository.json
+    // still lists from before.
+    repo = [...repo.filter(i => i.type !== 'connection'), ...connectionItems(await listStoredConnections(path))];
 
     // Per-item files (contexts, connections, pipelines) are loaded
     // independently: a single corrupt one is skipped and reported, never
@@ -274,10 +279,7 @@ async function loadV2(path: string): Promise<WorkspaceState | null> {
         try {
             const payload = await readJsonIfExists(file);
             if (payload !== null) {
-                (item as { payload: unknown }).payload =
-                    itype === 'connection'
-                        ? await decryptConnectionPayload(path, String((item as { id?: unknown }).id ?? ''), payload)
-                        : payload;
+                (item as { payload: unknown }).payload = payload;
             }
         } catch (err) {
             if (err instanceof WorkspaceLoadError) corruptFiles.push(err.file);
@@ -456,11 +458,14 @@ export async function saveRepository(
     if (!hasBackend()) return true;
     try {
         await ensureDir(path);
-        const stripped = items.map(i => {
-            const { payload, ...rest } = i as Record<string, unknown> & { payload?: unknown };
-            void payload;
-            return rest;
-        });
+        // Connections are kept in the connection store, not listed here.
+        const stripped = items
+            .filter(i => i.type !== 'connection')
+            .map(i => {
+                const { payload, ...rest } = i as Record<string, unknown> & { payload?: unknown };
+                void payload;
+                return rest;
+            });
         await writeJson(joinPath(path, REPOSITORY_FILE), stripped);
         return true;
     } catch (err) {
@@ -539,8 +544,19 @@ export async function saveItemPayload(
     itemType: string,
     itemId: string,
     payload: unknown,
+    name?: string,
 ): Promise<boolean> {
     if (!hasBackend()) return true;
+    if (itemType === 'connection') {
+        try {
+            await saveStoredConnection(path, itemId, name ?? itemId, payload);
+            return true;
+        } catch (err) {
+            // A failed save keeps the item changed, so the editor retries it.
+            console.error('saving the connection failed', err);
+            return false;
+        }
+    }
     const dir = PAYLOAD_DIR_BY_TYPE[itemType];
     if (!dir) return true;
     try {
@@ -549,12 +565,7 @@ export async function saveItemPayload(
         // 'pipeline' maps to the same directory savePipelineFile writes, so this
         // is a second door onto the same file and needs the same preview-row
         // stripping, or a pipeline saved through here keeps live source rows.
-        const toWrite =
-            itemType === 'connection'
-                ? await encryptConnectionPayload(path, itemId, payload)
-                : itemType === 'pipeline'
-                  ? stripPreviewRows(payload)
-                  : payload;
+        const toWrite = itemType === 'pipeline' ? stripPreviewRows(payload) : payload;
         await writeJson(joinPath(folder, `${itemId}.json`), toWrite);
         return true;
     } catch (err) {
@@ -583,6 +594,14 @@ export async function deleteItemPayload(
     itemId: string,
 ): Promise<void> {
     if (!hasBackend()) return;
+    if (itemType === 'connection') {
+        try {
+            await deleteStoredConnection(path, itemId);
+        } catch (err) {
+            console.warn('deleting the connection failed', err);
+        }
+        return;
+    }
     const dir = PAYLOAD_DIR_BY_TYPE[itemType];
     if (!dir) return;
     try {
@@ -613,7 +632,7 @@ export async function saveAll(path: string, state: WorkspaceState): Promise<void
             if (itype === 'pipeline' || itype === 'folder' || itype === 'project') continue;
             const payload = (item as { payload?: unknown }).payload;
             if (payload !== undefined) {
-                await saveItemPayload(path, itype, item.id as string, payload);
+                await saveItemPayload(path, itype, item.id as string, payload, item.name as string | undefined);
             }
         }
     }

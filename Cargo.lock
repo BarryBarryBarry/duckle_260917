@@ -4571,6 +4571,7 @@ dependencies = [
  "duckle-duckdb-engine",
  "duckle-metadata",
  "getrandom 0.4.3",
+ "libc",
  "serde_json",
  "tempfile",
 ]

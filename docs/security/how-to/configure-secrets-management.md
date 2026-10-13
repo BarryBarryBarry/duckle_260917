@@ -9,7 +9,7 @@ This guide provides step-by-step instructions for managing encrypted credentials
 When you save database or cloud storage connection credentials in Duckle Studio, Duckle encrypts them with AES-256-GCM and stores the master key under `<workspace>/.duckle/keys/`.
 
 > [!WARNING]
-> If an attacker copies the `.duckle/keys/` directory along with your `connections/` directory, they can decrypt your stored credentials. Restrict filesystem permissions immediately upon workspace creation.
+> If an attacker copies the `.duckle/keys/` directory along with your connection store (`.duckle/connections.duckdb`), they can decrypt your stored credentials. Restrict filesystem permissions immediately upon workspace creation.
 
 ### Setting Permissions on Linux / macOS
 ```bash

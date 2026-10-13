@@ -18,7 +18,7 @@ problem.
 | Path | Contents | If you lose it |
 | :--- | :--- | :--- |
 | `.duckle/keys/` | The AES-256-GCM workspace key | **Unrecoverable.** Every encrypted connection and `secrets.enc` becomes permanently unreadable. Nothing can decrypt them, including us. |
-| `connections/` | Saved connection profiles, encrypted | Re-enter every credential by hand |
+| `.duckle/connections.duckdb` | Saved connection profiles, encrypted | Re-enter every credential by hand |
 | `secrets.enc`, `secrets.env` | Workspace secrets | Re-enter every secret |
 | `pipelines/` | Pipeline definitions | The work itself |
 | `state/` | Watermarks, CDC snapshots, stream positions | See section 3 - this is the subtle one |

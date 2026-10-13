@@ -33,7 +33,7 @@ Duckle uses modern, industry-standard cryptography to protect sensitive assets:
        ▼                                           ▼
 ┌───────────────────────────────┐   ┌───────────────────────────────┐
 │ Connection Secrets            │   │ Git Access Tokens             │
-│ (<workspace>/connections/*.json) │   │ (<workspace>/.duckle/secrets) │
+│ (.duckle/connections.duckdb)  │   │ (<workspace>/.duckle/secrets) │
 └───────────────────────────────┘   └───────────────────────────────┘
 ```
 

@@ -462,13 +462,13 @@ function context(name: string, vars: Record<string, string>): RepoItem {
 }
 
 // ---------------------------------------------------------------------------
-// A connection whose secrets cannot be encrypted is not written in clear text.
+// A connection is saved through the connection store, never as a file.
 //
-// The server refuses to encrypt for a role that may not, and says encrypting is
-// strict so a failure never falls through to plaintext. The editor caught the
-// refusal and wrote the payload it had been given, password and all. Driven
-// through the real saveItemPayload against a fake web backend that records
-// every file write.
+// Its secrets are encrypted by the backend that stores it, so the editor must
+// never write a connection payload anywhere itself, and a store that refuses
+// or is missing (a 404 the web shim turns into null) must read as a failed
+// save, not a saved one. Driven through the real saveItemPayload against a
+// fake web backend that records every file write.
 // ---------------------------------------------------------------------------
 {
     type Invoke = (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
@@ -485,7 +485,7 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     const payload = { kind: 'postgres', host: 'db.local', username: 'u', password: secret };
     const backends: [string, Invoke][] = [
         ['refused by the server', async () => {
-            throw new Error('connection_encrypt_payload: HTTP 403 forbidden');
+            throw new Error('connection_store_save: HTTP 403 forbidden');
         }],
         ['missing from the backend (a 404 the shim turns into null)', async () => null],
     ];
@@ -495,23 +495,27 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     for (const [why, invoke] of backends) {
         writes.length = 0;
         g.__checkLogicInvoke = invoke;
-        const ok = await saveItemPayload('/ws', 'connection', 'c1', payload);
-        check(
-            `connection save: encryption ${why} writes nothing`,
-            writes.length === 0,
-            `wrote ${JSON.stringify(writes)}`,
-        );
-        check(`connection save: encryption ${why} reports a failed save`, ok === false, 'reported saved');
+        const ok = await saveItemPayload('/ws', 'connection', 'c1', payload, 'Warehouse');
+        check(`connection save: a store ${why} writes nothing`, writes.length === 0, `wrote ${JSON.stringify(writes)}`);
+        check(`connection save: a store ${why} reports a failed save`, ok === false, 'reported saved');
     }
     console.error = realError;
     writes.length = 0;
-    g.__checkLogicInvoke = async (_cmd, args) =>
-        JSON.stringify({ ...JSON.parse(String(args.payloadJson)), password: 'enc:v2:sealed' });
-    const ok = await saveItemPayload('/ws', 'connection', 'c1', payload);
+    const calls: [string, Record<string, unknown>][] = [];
+    g.__checkLogicInvoke = async (cmd, args) => {
+        calls.push([cmd, args]);
+        return true;
+    };
+    const ok = await saveItemPayload('/ws', 'connection', 'c1', payload, 'Warehouse');
     check(
-        'connection save: an encrypted payload is still written',
-        ok === true && writes.length === 1 && writes[0].includes('enc:v2:sealed') && !writes[0].includes(secret),
-        `ok=${ok}, wrote ${JSON.stringify(writes)}`,
+        'connection save: the store gets the connection with its name, and no file is written',
+        ok === true &&
+            writes.length === 0 &&
+            calls.length === 1 &&
+            calls[0][0] === 'connection_store_save' &&
+            calls[0][1].id === 'c1' &&
+            calls[0][1].name === 'Warehouse',
+        `ok=${ok}, wrote ${JSON.stringify(writes)}, calls ${JSON.stringify(calls.map(c => c[0]))}`,
     );
     g.__checkLogicInvoke = undefined;
     g.fetch = realFetch;

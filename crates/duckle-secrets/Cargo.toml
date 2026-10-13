@@ -15,6 +15,11 @@ getrandom = "0.4"
 serde_json = { workspace = true }
 duckle-metadata = { workspace = true }
 
+# flock(2) for the connection store's cross-process lock. Windows uses a
+# share-mode open, which is in std.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 duckle-duckdb-engine = { workspace = true }
 tempfile = "3.10"

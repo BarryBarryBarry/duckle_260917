@@ -31,6 +31,9 @@ pub struct ConnectionContext {
     pub port: Option<String>,
     pub database: Option<String>,
     pub schema: Option<String>,
+    /// What the user chose it for: `source`, `target` or `both`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -38,6 +41,9 @@ pub struct ConnectionContext {
 pub struct ContextPayload {
     pub workspace: String,
     pub connection: Option<ConnectionContext>,
+    /// The databases the user picked for this message, each with its role.
+    #[serde(default)]
+    pub connections: Vec<ConnectionContext>,
     #[serde(default)]
     pub selected_assets: Vec<serde_json::Value>,
 }

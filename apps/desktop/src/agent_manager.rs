@@ -315,91 +315,28 @@ pub fn agent_ui_reply_sync(request_id: String, reply: UiReply) -> Result<(), Str
     backend.reply_ui(&request_id, reply)
 }
 
-/// The names the user gave saved connections. They live on the connection's
-/// entry in `repository.json` (what the project tree shows), not in the
-/// connection file itself.
-fn repository_names(workspace: &Path) -> std::collections::HashMap<String, String> {
-    std::fs::read_to_string(workspace.join("repository.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str::<JsonValue>(&text).ok())
-        .and_then(|repo| repo.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|item| {
-            let id = item.get("id")?.as_str()?;
-            let name = item.get("name")?.as_str()?.trim();
-            (!name.is_empty()).then(|| (id.to_string(), name.to_string()))
-        })
-        .collect()
+pub fn list_connections_sync(workspace: &str) -> Result<Vec<ConnectionContext>, String> {
+    let saved = duckle_secrets::store::list_or_legacy(Path::new(workspace))?;
+    Ok(saved.into_iter().map(|c| connection_context(&c.id, &c.name, &c.payload)).collect())
 }
 
-pub fn list_connections_sync(workspace: &str) -> Result<Vec<ConnectionContext>, String> {
-    let mut out = Vec::new();
-    let names = repository_names(Path::new(workspace));
-    let dir = Path::new(workspace).join("connections");
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Ok(out);
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
-            continue;
-        }
-        let id = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(_) => continue,
-        };
-        let json = match serde_json::from_str::<JsonValue>(&text) {
-            Ok(json) => json,
-            Err(_) => continue,
-        };
-        // The repository name, else one in the file, else the database it
-        // points at; the generated id is the last resort.
-        let field = |key: &str| {
-            json.get(key)
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-        };
-        let name = names
-            .get(&id)
-            .cloned()
-            .or_else(|| field("name"))
-            .or_else(|| field("database"))
-            .unwrap_or_else(|| id.clone());
-        out.push(ConnectionContext {
-            id: id.clone(),
-            name,
-            kind: json
-                .get("kind")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            host: json
-                .get("host")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            port: json.get("port").and_then(|v| {
-                v.as_i64()
-                    .map(|n| n.to_string())
-                    .or_else(|| v.as_str().map(str::to_string))
-            }),
-            database: json
-                .get("database")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            schema: json
-                .get("schema")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-        });
+/// What the agent is told about a connection: never its secrets.
+pub fn connection_context(id: &str, name: &str, json: &JsonValue) -> ConnectionContext {
+    let text = |key: &str| json.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    ConnectionContext {
+        id: id.to_string(),
+        name: name.to_string(),
+        kind: text("kind"),
+        host: text("host"),
+        port: json.get("port").and_then(|v| {
+            v.as_i64()
+                .map(|n| n.to_string())
+                .or_else(|| v.as_str().map(str::to_string))
+        }),
+        database: text("database"),
+        schema: text("schema"),
+        role: None,
     }
-    out.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
-    Ok(out)
 }
 
 fn resolve_agent_config(
@@ -588,6 +525,7 @@ fn build_prompt_message(ctx: &ContextPayload, prompt: &str) -> String {
         serde_json::to_string(&json!({
             "workspace": ctx.workspace,
             "connection": ctx.connection,
+            "connections": ctx.connections,
             "selectedAssets": ctx.selected_assets,
         }))
         .unwrap_or_else(|_| "{}".to_string()),
@@ -1131,6 +1069,7 @@ mod tests {
         let ctx = ContextPayload {
             workspace: "/ws".into(),
             connection: None,
+            connections: Vec::new(),
             selected_assets: vec![json!({ "type": "table", "name": "orders" })],
         };
         let message = build_prompt_message(&ctx, "build it\nplease");
@@ -1594,6 +1533,7 @@ mod agent_e2e {
         let ctx = ContextPayload {
             workspace: ws.to_string_lossy().into_owned(),
             connection: None,
+            connections: Vec::new(),
             selected_assets: vec![],
         };
 

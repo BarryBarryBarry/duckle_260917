@@ -915,6 +915,40 @@ fn connection_secret_cmd(workspace: &Path, cmd: &str, body: &[u8]) -> Result<Str
     }
 }
 
+/// `connection_store_list` / `_save` / `_delete`, answered from the workspace's
+/// connection store. Split out so a test can drive the real path.
+fn connection_store_cmd(workspace: &Path, cmd: &str, body: &[u8]) -> Result<Value, String> {
+    use duckle_secrets::store;
+    let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+    match cmd {
+        "connection_store_list" => Ok(Value::Array(
+            store::list_or_legacy(workspace)?
+                .into_iter()
+                .map(|c| {
+                    json!({
+                        "id": c.id,
+                        "name": c.name,
+                        "kind": c.kind,
+                        "payload": store::decrypted(workspace, &c),
+                        "createdAt": c.created_at,
+                        "updatedAt": c.updated_at,
+                    })
+                })
+                .collect(),
+        )),
+        "connection_store_save" => {
+            let payload = args.get("payload").cloned().unwrap_or(Value::Null);
+            if payload.get("kind").and_then(Value::as_str).map(str::trim).filter(|k| !k.is_empty()).is_none() {
+                return Err("a connection needs a kind".into());
+            }
+            store::save(workspace, &text("id"), &text("name"), &payload)?;
+            Ok(Value::Bool(true))
+        }
+        _ => Ok(Value::Bool(store::delete(workspace, &text("id"))?)),
+    }
+}
+
 fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body: &[u8]) -> Reply {
     match cmd {
         // Drives the editor's runtime indicator offline -> ready.
@@ -985,6 +1019,14 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
                 Err(e) => respond_err("500 Internal Server Error",
                     &format!("connection secrets: {e}"),
                 ),
+            }
+        }
+        // The workspace's connection store, the same table and the same
+        // encryption the desktop uses.
+        "connection_store_list" | "connection_store_save" | "connection_store_delete" => {
+            match connection_store_cmd(&state.workspace, cmd, body) {
+                Ok(out) => respond_json(&out),
+                Err(e) => respond_err("500 Internal Server Error", &format!("connection store: {e}")),
             }
         }
         // Execute a pipeline on the server engine and return the RunResult (the
@@ -5357,7 +5399,7 @@ fn console_router(state: Arc<State>) -> axum::Router {
 #[cfg(test)]
 mod tests {
     use super::{
-        connection_secret_cmd, console_auth, cookie_attributes, cron_decision, deploy_into,
+        connection_secret_cmd, connection_store_cmd, console_auth, cookie_attributes, cron_decision, deploy_into,
         deploy_target, is_public_route, load_schedules, plan_step_outcome, route_console,
         scheduler_notice, Request,
         migrate_legacy_schedules, normalize_cron, read_pipeline_file, read_request,
@@ -8076,7 +8118,7 @@ mod tests {
         assert_eq!(
             fields(&body["runs"][0]["nodes"][0]),
             [
-                "category", "component", "createdAt", "durationMs", "error", "kind", "nodeId", "ordinal",
+                "category", "component", "createdAt", "durationMs", "error", "kind", "nodeId", "nodeLabel", "ordinal",
                 "rejectedRows", "rows", "startedAt", "status", "updatedAt",
             ]
         );
@@ -8506,6 +8548,37 @@ mod tests {
         let back = connection_secret_cmd(tmp.path(), "connection_decrypt_payload", &body)
             .expect("lenient");
         assert!(back.contains("hunter2"), "legacy plaintext must still load");
+    }
+
+    /// The web editor's connection store: a save is sealed, a list gives the
+    /// editor the decrypted payload, and a delete answers whether there was one.
+    #[test]
+    fn web_editor_saves_lists_and_deletes_stored_connections() {
+        if std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| std::path::Path::new(b).exists()).is_none() {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let save = serde_json::to_vec(&serde_json::json!({
+            "id": "c1", "name": "Reporting",
+            "payload": { "kind": "postgres", "host": "db.internal", "username": "r", "password": "hunter2" }
+        }))
+        .unwrap();
+        assert_eq!(connection_store_cmd(ws, "connection_store_save", &save).unwrap(), serde_json::json!(true));
+        let raw = duckle_secrets::store::get(ws, "c1").unwrap().unwrap();
+        assert!(!raw.payload.to_string().contains("hunter2"), "password stored in clear text");
+
+        let list = connection_store_cmd(ws, "connection_store_list", b"{}").unwrap();
+        assert_eq!(list[0]["name"], "Reporting");
+        assert_eq!(list[0]["payload"]["password"], "hunter2");
+
+        let no_kind = serde_json::to_vec(&serde_json::json!({ "id": "c2", "name": "x", "payload": {} })).unwrap();
+        assert!(connection_store_cmd(ws, "connection_store_save", &no_kind).is_err());
+
+        let del = serde_json::to_vec(&serde_json::json!({ "id": "c1" })).unwrap();
+        assert_eq!(connection_store_cmd(ws, "connection_store_delete", &del).unwrap(), serde_json::json!(true));
+        assert_eq!(connection_store_cmd(ws, "connection_store_delete", &del).unwrap(), serde_json::json!(false));
     }
 
     /// Editing a cron expression has to take effect before the old one fires.

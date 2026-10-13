@@ -46,7 +46,7 @@ After setting up the engines, the **Workspace Picker Modal** will ask you to sel
 ### What is inside the Workspace Folder?
 Your workspace is organized into simple, human-readable files that make version control easy:
 * **`pipelines/`**: Stores your canvas designs as JSON files. You can save, copy, or rename these in your operating system's file manager.
-* **`connections/`**: Holds saved logins and API keys. Sensitive properties are automatically encrypted with a workspace-specific key.
+* **`.duckle/connections.duckdb`**: Holds saved logins and API keys, in one DuckDB table. Sensitive properties are automatically encrypted with a workspace-specific key.
 * **`contexts/`**: Contains environment configurations (such as different file paths for Developer and Production modes).
 * **`routines/`**: Holds custom SQL files you can reference inside canvas nodes.
 * **`documents/`**: A folder for markdown notes that you can read inside the app.

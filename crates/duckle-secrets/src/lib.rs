@@ -3,11 +3,11 @@
 //!
 //! Sensitive connection fields (passwords, tokens, keys) are encrypted with a
 //! per-workspace AES-256-GCM key kept at `<workspace>/.duckle/keys/secret.key`
-//! (owner-only on unix, excluded from version control). The connection JSON in
-//! `<workspace>/connections/` therefore holds ciphertext for those fields, so
-//! the folder is safe to commit or share as long as `.duckle/keys/` is not.
-//! `${...}` placeholders are never encrypted - they resolve from the
-//! environment at run time.
+//! (owner-only on unix, excluded from version control). Saved connections live
+//! in the [`store`] (`<workspace>/.duckle/connections.duckdb`), which holds
+//! ciphertext for those fields, so it is safe to commit or share as long as
+//! `.duckle/keys/` is not. `${...}` placeholders are never encrypted - they
+//! resolve from the environment at run time.
 //!
 //! This crate is the single decrypt path shared by the desktop app and the
 //! headless runner (#166): both call [`resolve_connection_refs`] before their
@@ -21,6 +21,8 @@ use base64::Engine;
 use duckle_metadata::PipelineNode;
 use serde_json::Value as JsonValue;
 use std::path::{Path, PathBuf};
+
+pub mod store;
 
 pub const ENC_PREFIX: &str = "enc:v1:";
 /// Ciphertext bound to its field via AES-GCM associated data. See [`aad_for`].
@@ -324,22 +326,16 @@ fn any_encrypted(value: &JsonValue) -> bool {
     }
 }
 
-/// Run-time load of `<workspace>/connections/<id>.json`, decrypted. STRICT:
-/// a missing file, or an `enc:v1:` field that cannot be decrypted (missing or
+/// Run-time load of a saved connection, decrypted. STRICT: a missing
+/// connection, or an encrypted field that cannot be decrypted (missing or
 /// wrong workspace key), is an error - unlike the lenient editor-facing
 /// [`decrypt_payload_json`].
+///
+/// Connections live in the store ([`store`]). Where there is no DuckDB CLI to
+/// read it with yet (a first launch before the engine is downloaded), a
+/// connection still in the old `connections/<id>.json` is read from there.
 pub fn load_connection(workspace: &Path, id: &str) -> Result<JsonValue, String> {
-    let path = workspace.join("connections").join(format!("{}.json", id));
-    let txt = std::fs::read_to_string(&path).map_err(|e| {
-        format!(
-            "connection '{}' not found under {} ({})",
-            id,
-            workspace.display(),
-            e
-        )
-    })?;
-    let mut v: JsonValue = serde_json::from_str(&txt)
-        .map_err(|e| format!("connection '{}': invalid JSON: {}", id, e))?;
+    let mut v = load_sealed(workspace, id)?;
     if any_encrypted(&v) {
         let key = workspace_key(workspace, false).map_err(|_| {
             format!(
@@ -359,6 +355,73 @@ pub fn load_connection(workspace: &Path, id: &str) -> Result<JsonValue, String> 
         }
     }
     Ok(v)
+}
+
+thread_local! {
+    /// Connections fetched in one query for the document being resolved, so a
+    /// pipeline with many referencing nodes costs one store call, not one per
+    /// node. Only set for the duration of a `resolve_connection_refs*` call.
+    static PREFETCHED: std::cell::RefCell<Option<std::collections::HashMap<String, JsonValue>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn not_found(workspace: &Path, id: &str) -> String {
+    format!("connection '{}' not found in {}", id, store::store_path(workspace).display())
+}
+
+/// A saved connection as stored - its secrets still sealed - for callers that
+/// inspect it without needing the plaintext (which secrets are missing, say).
+pub fn load_sealed_connection(workspace: &Path, id: &str) -> Result<JsonValue, String> {
+    load_sealed(workspace, id)
+}
+
+fn load_sealed(workspace: &Path, id: &str) -> Result<JsonValue, String> {
+    if let Some(hit) = PREFETCHED.with(|p| p.borrow().as_ref().map(|m| m.get(id).cloned())) {
+        return hit.ok_or_else(|| not_found(workspace, id));
+    }
+    match store::get(workspace, id) {
+        Ok(Some(c)) => Ok(c.payload),
+        Ok(None) => Err(not_found(workspace, id)),
+        Err(store::StoreError::EngineMissing(bin)) => {
+            let path = workspace.join("connections").join(format!("{}.json", id));
+            let txt = std::fs::read_to_string(&path).map_err(|e| {
+                format!(
+                    "connection '{}' cannot be read: there is no DuckDB CLI at {} to open the \
+                     connection store, and no {} ({})",
+                    id,
+                    bin.display(),
+                    path.display(),
+                    e
+                )
+            })?;
+            serde_json::from_str(&txt).map_err(|e| format!("connection '{}': invalid JSON: {}", id, e))
+        }
+        Err(e) => Err(format!("connection '{}': {}", id, e)),
+    }
+}
+
+/// Ids a node's properties point at.
+fn referenced_ids(props: &JsonValue, out: &mut Vec<String>) {
+    for key in ["connectionRef", "transportRef"] {
+        if let Some(id) = props.get(key).and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            if !out.iter().any(|x| x == id) {
+                out.push(id.to_string());
+            }
+        }
+    }
+}
+
+/// Run `f` with these connections fetched up front. Without a CLI (or on any
+/// store error) nothing is prefetched and each load reports for itself.
+fn with_prefetched<T>(workspace: &Path, ids: Vec<String>, f: impl FnOnce() -> T) -> T {
+    if ids.is_empty() {
+        return f();
+    }
+    let Ok(found) = store::load_many(workspace, &ids) else { return f() };
+    PREFETCHED.with(|p| *p.borrow_mut() = Some(found));
+    let out = f();
+    PREFETCHED.with(|p| *p.borrow_mut() = None);
+    out
 }
 
 /// The payload holds a connection JSON object; read a non-empty string field.
@@ -743,32 +806,48 @@ pub fn resolve_connection_refs_value(
     let Some(nodes) = doc.get_mut("nodes").and_then(|n| n.as_array_mut()) else {
         return Ok(());
     };
-    for node in nodes.iter_mut() {
-        let Some(component_id) = node
-            .pointer("/data/componentId")
-            .and_then(|v| v.as_str())
-            .map(str::to_string)
-        else {
-            continue;
-        };
-        let Some(props) = node.pointer_mut("/data/properties") else {
-            continue;
-        };
-        resolve_connection_ref_props(workspace, &component_id, props)?;
+    let mut ids = Vec::new();
+    for node in nodes.iter() {
+        if let Some(props) = node.pointer("/data/properties") {
+            referenced_ids(props, &mut ids);
+        }
     }
-    Ok(())
+    with_prefetched(workspace, ids, || {
+        for node in nodes.iter_mut() {
+            let Some(component_id) = node
+                .pointer("/data/componentId")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let Some(props) = node.pointer_mut("/data/properties") else {
+                continue;
+            };
+            resolve_connection_ref_props(workspace, &component_id, props)?;
+        }
+        Ok(())
+    })
 }
 
 pub fn resolve_connection_refs(workspace: &Path, nodes: &mut [PipelineNode]) -> Result<(), String> {
-    for node in nodes.iter_mut() {
-        let Some(component_id) = node.data.component_id.clone() else {
-            continue;
-        };
-        if let Some(props) = node.data.properties.as_mut() {
-            resolve_connection_ref_props(workspace, &component_id, props)?;
+    let mut ids = Vec::new();
+    for node in nodes.iter() {
+        if let Some(props) = node.data.properties.as_ref() {
+            referenced_ids(props, &mut ids);
         }
     }
-    Ok(())
+    with_prefetched(workspace, ids, || {
+        for node in nodes.iter_mut() {
+            let Some(component_id) = node.data.component_id.clone() else {
+                continue;
+            };
+            if let Some(props) = node.data.properties.as_mut() {
+                resolve_connection_ref_props(workspace, &component_id, props)?;
+            }
+        }
+        Ok(())
+    })
 }
 
 /// Does any node in the document carry a non-empty `connectionRef`? Lets a host
