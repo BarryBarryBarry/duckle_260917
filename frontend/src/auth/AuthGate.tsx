@@ -335,9 +335,13 @@ function SignInScreen({ storePath, onSignedIn }: { storePath: string; onSignedIn
     const [mode, setMode] = useState<'sign-in' | 'forgot'>('sign-in');
     const [username, setUsername] = useState(() => loadPersisted<string>(LAST_USER_KEY, ''));
     const [password, setPassword] = useState('');
-    const [remember, setRemember] = useState<RememberDays>(() => {
+    const [rememberDays, setRememberDays] = useState<RememberDays>(() => {
         const saved = loadPersisted<number>(REMEMBER_KEY, 0);
-        return (REMEMBER_DAYS as readonly number[]).includes(saved) ? (saved as RememberDays) : 0;
+        return (REMEMBER_DAYS as readonly number[]).includes(saved) ? (saved as RememberDays) : 7;
+    });
+    const [remember, setRemember] = useState(() => {
+        const saved = loadPersisted<number>(REMEMBER_KEY, 0);
+        return (REMEMBER_DAYS as readonly number[]).includes(saved);
     });
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
@@ -357,9 +361,10 @@ function SignInScreen({ storePath, onSignedIn }: { storePath: string; onSignedIn
         setBusy(true);
         setError(null);
         try {
-            const next = await authSignIn(username, password, remember);
+            const rememberFor = remember ? rememberDays : 0;
+            const next = await authSignIn(username, password, rememberFor);
             savePersisted(LAST_USER_KEY, next.user?.username ?? username.trim());
-            savePersisted(REMEMBER_KEY, remember);
+            savePersisted(REMEMBER_KEY, rememberFor);
             onSignedIn(next);
         } catch (err) {
             setError(authErrorMessage(t, err));
@@ -383,20 +388,26 @@ function SignInScreen({ storePath, onSignedIn }: { storePath: string; onSignedIn
                     />
                 </label>
                 <PasswordField label={t('auth.password')} value={password} onChange={setPassword} autoFocus={!!username} />
-                <label className="acct-label">
+                <label className="auth-check">
+                    <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
                     {t('auth.remember')}
-                    <select
-                        className="auth-select"
-                        value={remember}
-                        onChange={e => setRemember(Number(e.target.value) as RememberDays)}
-                    >
-                        {REMEMBER_DAYS.map(d => (
-                            <option key={d} value={d}>
-                                {d === 0 ? t('auth.rememberNone') : t('auth.rememberDays', { count: d })}
-                            </option>
-                        ))}
-                    </select>
                 </label>
+                {remember ? (
+                    <label className="acct-label">
+                        {t('auth.rememberFor')}
+                        <select
+                            className="auth-select"
+                            value={rememberDays}
+                            onChange={e => setRememberDays(Number(e.target.value) as RememberDays)}
+                        >
+                            {REMEMBER_DAYS.map(d => (
+                                <option key={d} value={d}>
+                                    {t('auth.rememberDays', { count: d })}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                ) : null}
                 {error ? <p className="auth-error" role="alert">{error}</p> : null}
                 <div className="auth-actions-split">
                     <button type="button" className="acct-link" onClick={() => setMode('forgot')}>

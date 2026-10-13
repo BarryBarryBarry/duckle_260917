@@ -17,9 +17,9 @@ export type AuthStatus = {
 
 export type AuthUserRow = AuthUser & { createdAt: number };
 
-/** "Remember me" choices; 0 keeps the sign-in until the app closes. */
-export const REMEMBER_DAYS = [0, 1, 7, 30] as const;
-export type RememberDays = (typeof REMEMBER_DAYS)[number];
+/** "Remember me" choices shown in the sign-in dropdown. */
+export const REMEMBER_DAYS = [1, 7, 30] as const;
+export type RememberDays = 0 | (typeof REMEMBER_DAYS)[number];
 
 export const MIN_PASSWORD_LENGTH = 8;
 
