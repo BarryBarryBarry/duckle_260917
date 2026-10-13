@@ -40,9 +40,6 @@ export const authChangePassword = (current: string, next: string) =>
 
 export const authListUsers = () => invoke<AuthUserRow[]>('auth_list_users');
 
-export const authCreateUser = (username: string, password: string, isAdmin: boolean) =>
-    invoke<AuthUser>('auth_create_user', { username, password, isAdmin });
-
 export const authDeleteUser = (username: string) => invoke<void>('auth_delete_user', { username });
 
 export const authResetPassword = (username: string, password: string) =>

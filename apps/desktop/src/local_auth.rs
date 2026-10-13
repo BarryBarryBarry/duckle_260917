@@ -230,10 +230,6 @@ fn find<'a>(file: &'a AuthFile, username: &str) -> Option<&'a StoredUser> {
     file.users.iter().find(|u| same_name(&u.username, username))
 }
 
-fn info(user: &StoredUser) -> UserInfo {
-    UserInfo { username: user.username.clone(), is_admin: user.is_admin }
-}
-
 fn require_admin(session: &Option<Session>) -> Result<&Session, String> {
     match session {
         Some(s) if s.is_admin => Ok(s),
@@ -393,28 +389,6 @@ pub fn list_users(path: &Path, session: &Option<Session>) -> Result<Vec<UserRow>
         .collect())
 }
 
-pub fn create_user(
-    path: &Path,
-    now: i64,
-    session: &Option<Session>,
-    username: &str,
-    password: &str,
-    is_admin: bool,
-) -> Result<UserInfo, String> {
-    require_admin(session)?;
-    let username = clean_username(username)?;
-    check_password(password)?;
-    let mut file = load(path)?;
-    if find(&file, &username).is_some() {
-        return Err("username_taken".into());
-    }
-    let user = StoredUser { username, password_hash: hash_secret(password)?, is_admin, created_at: now };
-    let out = info(&user);
-    file.users.push(user);
-    save(path, &file)?;
-    Ok(out)
-}
-
 pub fn delete_user(path: &Path, session: &Option<Session>, username: &str) -> Result<(), String> {
     let me = require_admin(session)?;
     if same_name(&me.username, username) {
@@ -571,21 +545,6 @@ pub async fn auth_change_password(app: tauri::AppHandle, current: String, next: 
 #[tauri::command]
 pub fn auth_list_users(app: tauri::AppHandle) -> Result<Vec<UserRow>, String> {
     list_users(&store_path(&app)?, &*session_lock()?)
-}
-
-#[tauri::command]
-pub async fn auth_create_user(
-    app: tauri::AppHandle,
-    username: String,
-    password: String,
-    is_admin: bool,
-) -> Result<UserInfo, String> {
-    let path = store_path(&app)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        create_user(&path, now_secs(), &*session_lock()?, &username, &password, is_admin)
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -765,20 +724,8 @@ mod tests {
     fn only_an_administrator_manages_users() {
         let mut f = fixture();
         set_up(&mut f);
-        create_user(&f.path, NOW, &f.session, "Ann", "ann-password", false).unwrap();
-        assert_eq!(create_user(&f.path, NOW, &f.session, "ann", "ann-password", false).unwrap_err(), "username_taken");
-        assert_eq!(list_users(&f.path, &f.session).unwrap().len(), 2);
-
-        let mut ann = None;
-        sign_in(&f.path, NOW, &mut ann, &mut f.throttle, "Ann", "ann-password", 0).unwrap();
-        assert_eq!(list_users(&f.path, &ann).unwrap_err(), "not_admin");
-        assert_eq!(create_user(&f.path, NOW, &ann, "Bob", "bob-password", false).unwrap_err(), "not_admin");
-        assert_eq!(delete_user(&f.path, &ann, "Barry").unwrap_err(), "not_admin");
+        assert_eq!(list_users(&f.path, &f.session).unwrap().len(), 1);
         assert_eq!(list_users(&f.path, &None).unwrap_err(), "not_signed_in");
-
-        reset_password(&f.path, &f.session, "Ann", "reset-password").unwrap();
-        let mut ann_again = None;
-        sign_in(&f.path, NOW, &mut ann_again, &mut f.throttle, "Ann", "reset-password", 0).unwrap();
     }
 
     #[test]
@@ -786,24 +733,8 @@ mod tests {
         let mut f = fixture();
         set_up(&mut f);
         assert_eq!(delete_user(&f.path, &f.session, "barry").unwrap_err(), "cannot_delete_self");
-        create_user(&f.path, NOW, &f.session, "Ann", "ann-password", true).unwrap();
-        let mut ann = None;
-        sign_in(&f.path, NOW, &mut ann, &mut f.throttle, "Ann", "ann-password", 0).unwrap();
-        delete_user(&f.path, &ann, "Barry").unwrap();
-        assert_eq!(delete_user(&f.path, &ann, "Ann").unwrap_err(), "cannot_delete_self");
-        assert_eq!(delete_user(&f.path, &ann, "Nobody").unwrap_err(), "user_not_found");
-    }
-
-    #[test]
-    fn a_deleted_user_is_signed_out_on_their_next_check() {
-        let mut f = fixture();
-        set_up(&mut f);
-        create_user(&f.path, NOW, &f.session, "Ann", "ann-password", false).unwrap();
-        let mut ann = None;
-        sign_in(&f.path, NOW, &mut ann, &mut f.throttle, "Ann", "ann-password", 7).unwrap();
-        delete_user(&f.path, &f.session, "Ann").unwrap();
-        assert!(status(&f.path, NOW, &mut ann).unwrap().user.is_none());
-        assert!(ann.is_none());
+        assert_eq!(delete_user(&f.path, &f.session, "Nobody").unwrap_err(), "user_not_found");
+        assert_eq!(delete_user(&f.path, &f.session, "Barry").unwrap_err(), "cannot_delete_self");
     }
 
     #[test]

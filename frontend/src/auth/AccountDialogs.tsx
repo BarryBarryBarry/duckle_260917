@@ -6,14 +6,13 @@ import { useTranslation } from 'react-i18next';
 import { KeyRound, Trash2, X } from 'lucide-react';
 import {
     authChangePassword,
-    authCreateUser,
     authDeleteUser,
     authErrorMessage,
     authListUsers,
     authRegenerateRecovery,
     authResetPassword,
     MIN_PASSWORD_LENGTH,
-    type AuthUserRow,
+    type AuthUserRow
 } from './auth-api';
 import { RecoveryCodePanel, useAuth } from './AuthGate';
 
@@ -139,7 +138,7 @@ export function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
     );
 }
 
-type Pane = { kind: 'list' } | { kind: 'add' } | { kind: 'reset'; username: string } | { kind: 'recovery' };
+type Pane = { kind: 'list' } | { kind: 'reset'; username: string } | { kind: 'recovery' };
 
 export function UserManagementDialog({ onClose }: { onClose: () => void }) {
     const { t } = useTranslation();
@@ -179,9 +178,7 @@ export function UserManagementDialog({ onClose }: { onClose: () => void }) {
 
     return (
         <Dialog title={t('auth.manageUsers')} onClose={onClose} wide>
-            {pane.kind === 'add' ? (
-                <AddUserPane onDone={back} onCancel={() => setPane({ kind: 'list' })} />
-            ) : pane.kind === 'reset' ? (
+            {pane.kind === 'reset' ? (
                 <ResetPasswordPane username={pane.username} onDone={back} onCancel={() => setPane({ kind: 'list' })} />
             ) : pane.kind === 'recovery' ? (
                 <RegenerateRecoveryPane onDone={back} onCancel={() => setPane({ kind: 'list' })} />
@@ -229,59 +226,10 @@ export function UserManagementDialog({ onClose }: { onClose: () => void }) {
                         <button type="button" className="acct-link" onClick={() => setPane({ kind: 'recovery' })}>
                             {t('auth.newRecoveryCode')}
                         </button>
-                        <button type="button" className="acct-btn acct-btn-primary" onClick={() => setPane({ kind: 'add' })}>
-                            {t('auth.addUser')}
-                        </button>
                     </div>
                 </div>
             )}
         </Dialog>
-    );
-}
-
-function AddUserPane({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
-    const { t } = useTranslation();
-    const [username, setUsername] = useState('');
-    const [password, setPassword] = useState('');
-    const [confirm, setConfirm] = useState('');
-    const [isAdmin, setIsAdmin] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [busy, setBusy] = useState(false);
-
-    const submit = async (e: FormEvent) => {
-        e.preventDefault();
-        const problem = passwordProblem(t, password, confirm);
-        if (problem) return setError(problem);
-        setBusy(true);
-        setError(null);
-        try {
-            await authCreateUser(username, password, isAdmin);
-            onDone();
-        } catch (err) {
-            setError(authErrorMessage(t, err));
-            setBusy(false);
-        }
-    };
-
-    return (
-        <form className="acct-form" onSubmit={submit}>
-            <Field label={t('auth.username')} value={username} onChange={setUsername} type="text" autoComplete="off" autoFocus />
-            <Field label={t('auth.password')} value={password} onChange={setPassword} />
-            <Field label={t('auth.confirmPassword')} value={confirm} onChange={setConfirm} />
-            <label className="auth-check">
-                <input type="checkbox" checked={isAdmin} onChange={e => setIsAdmin(e.target.checked)} />
-                {t('auth.makeAdmin')}
-            </label>
-            {error ? <p className="auth-error" role="alert">{error}</p> : null}
-            <div className="acct-form-actions">
-                <button type="button" className="acct-btn" onClick={onCancel}>
-                    {t('auth.cancel')}
-                </button>
-                <button type="submit" className="acct-btn acct-btn-primary" disabled={busy || !username.trim()}>
-                    {busy ? t('auth.working') : t('auth.addUser')}
-                </button>
-            </div>
-        </form>
     );
 }
 

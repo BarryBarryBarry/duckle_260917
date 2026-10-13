@@ -297,7 +297,6 @@ pub fn run() {
             local_auth::auth_sign_out,
             local_auth::auth_change_password,
             local_auth::auth_list_users,
-            local_auth::auth_create_user,
             local_auth::auth_delete_user,
             local_auth::auth_reset_password,
             local_auth::auth_recover,
