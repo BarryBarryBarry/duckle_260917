@@ -116,8 +116,23 @@ fn seed(bin: &Path, ws: &Path) {
         .unwrap();
     }
     s.apply_node_patches(&[
-        NodeRunPatch { run_key: "r1".into(), node_id: "b".into(), ordinal: Some(1), status: Some(NodeStatus::Ok), ..Default::default() },
-        NodeRunPatch { run_key: "r1".into(), node_id: "a".into(), ordinal: Some(0), status: Some(NodeStatus::Ok), rows: Some(7), ..Default::default() },
+        NodeRunPatch {
+            run_key: "r1".into(),
+            node_id: "b".into(),
+            node_label: Some("Copy".into()),
+            ordinal: Some(1),
+            status: Some(NodeStatus::Ok),
+            ..Default::default()
+        },
+        NodeRunPatch {
+            run_key: "r1".into(),
+            node_id: "a".into(),
+            node_label: Some("Read orders".into()),
+            ordinal: Some(0),
+            status: Some(NodeStatus::Ok),
+            rows: Some(7),
+            ..Default::default()
+        },
     ])
     .unwrap();
     s.ensure_run_started_event("r1").unwrap();
@@ -147,6 +162,7 @@ fn runs_come_back_named_with_their_nodes_and_a_cursor() {
     assert_eq!(r1["pipelineName"], "Orders (repo)", "repository.json names it first");
     let nodes: Vec<&str> = r1["nodes"].as_array().unwrap().iter().map(|n| n["nodeId"].as_str().unwrap()).collect();
     assert_eq!(nodes, ["a", "b"], "in stage order");
+    assert_eq!(r1["nodes"][0]["nodeLabel"], "Read orders");
     assert_eq!((r1["nodes"][0]["rows"].clone(), r1["durationMs"].clone(), r1["startedAt"].clone()), (json!(7), json!(1500), json!("2026-10-01T10:00:00.000000Z")));
     let v3 = runs(ws.path(), &bin, &params(&[("limit", "2"), ("cursor", v2["nextCursor"].as_str().unwrap())])).unwrap();
     assert!(keys(&v3).is_empty() && v3["nextCursor"].is_null());
@@ -166,6 +182,41 @@ fn filters_narrow_and_nodes_can_be_left_out() {
     assert_eq!(keys(&v), Vec::<String>::new(), "a run key on a page that does not exist");
     let v = runs(ws.path(), &bin, &params(&[("runKey", "r1")])).unwrap();
     assert_eq!(v["runs"][0]["nodes"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn stages_recorded_without_a_name_take_the_nodes_label_from_the_pipeline_file() {
+    let bin = cli_or_skip!();
+    let ws = tempfile::tempdir().unwrap();
+    seed(&bin, ws.path());
+    std::fs::write(
+        ws.path().join("pipelines").join("orders.json"),
+        json!({ "name": "Orders file", "edges": [], "nodes": [
+            { "id": "a", "data": { "label": "Read orders" } },
+            { "id": "old", "data": { "label": "Old stage" } },
+            { "id": "migrated", "data": { "label": "Migrated stage" } },
+        ] })
+        .to_string(),
+    )
+    .unwrap();
+    let s = MetricsStore::open(ws.path(), &bin).unwrap();
+    s.apply_node_patches(&[
+        NodeRunPatch { run_key: "r2".into(), node_id: "old".into(), ordinal: Some(0), ..Default::default() },
+        NodeRunPatch {
+            run_key: "r2".into(),
+            node_id: "migrated".into(),
+            node_label: Some("migrated".into()),
+            ordinal: Some(1),
+            ..Default::default()
+        },
+        NodeRunPatch { run_key: "r2".into(), node_id: "gone".into(), ordinal: Some(2), ..Default::default() },
+    ])
+    .unwrap();
+    let v = runs(ws.path(), &bin, &params(&[("runKey", "r2")])).unwrap();
+    let labels: Vec<Value> = v["runs"][0]["nodes"].as_array().unwrap().iter().map(|n| n["nodeLabel"].clone()).collect();
+    assert_eq!(labels, [json!("Old stage"), json!("Migrated stage"), Value::Null], "a node no longer in the file stays unnamed");
+    let v = runs(ws.path(), &bin, &params(&[("runKey", "r1")])).unwrap();
+    assert_eq!(v["runs"][0]["nodes"][1]["nodeLabel"], "Copy", "a recorded name is kept over the file's");
 }
 
 #[test]

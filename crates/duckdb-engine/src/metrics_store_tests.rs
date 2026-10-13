@@ -131,13 +131,49 @@ fn the_schema_is_checked_once_per_process_per_store() {
 #[test]
 fn a_newer_schema_is_refused() {
     let (ws, s) = store_or_skip!();
-    s.exec("UPDATE metrics_meta SET value = '2' WHERE key = 'schema_version';", false).unwrap();
+    s.exec("UPDATE metrics_meta SET value = '3' WHERE key = 'schema_version';", false).unwrap();
     mark_schema_ready(s.db_path(), false);
     match MetricsStore::open(ws.path(), &s.bin) {
-        Err(MetricsError::SchemaTooNew { found: 2, supported: SCHEMA_VERSION }) => {}
+        Err(MetricsError::SchemaTooNew { found: 3, supported: SCHEMA_VERSION }) => {}
         other => panic!("expected SchemaTooNew, got {other:?}"),
     }
     assert!(!schema_ready(s.db_path()), "a refused store is not marked ready");
+}
+
+#[test]
+fn opening_migrates_a_v1_store_without_inventing_node_labels() {
+    let bin = cli_or_skip!();
+    let ws = tempfile::tempdir().unwrap();
+    let db = ws.path().join(METRICS_DB_FILE);
+    std::fs::create_dir_all(db.parent().unwrap()).unwrap();
+    run_cli(
+        &bin,
+        &db,
+        "CREATE TABLE pipeline_run (\
+         run_key VARCHAR NOT NULL PRIMARY KEY, pipeline_id VARCHAR NOT NULL, pipeline_name VARCHAR, \
+         trigger VARCHAR, status VARCHAR NOT NULL, started_at TIMESTAMPTZ NOT NULL, duration_ms BIGINT, \
+         rows BIGINT, rejected_rows BIGINT, node_count BIGINT, unchanged BOOLEAN, incomplete BOOLEAN, \
+         incomplete_reason VARCHAR, queue_ms BIGINT, error VARCHAR, category VARCHAR, \
+         created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());\
+         CREATE TABLE node_run (\
+         run_key VARCHAR NOT NULL, node_id VARCHAR NOT NULL, ordinal BIGINT, component VARCHAR, kind VARCHAR, \
+         status VARCHAR NOT NULL, started_at TIMESTAMPTZ, duration_ms BIGINT, rows BIGINT, rejected_rows BIGINT, \
+         error VARCHAR, category VARCHAR, \
+         created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
+         PRIMARY KEY (run_key, node_id));\
+         CREATE TABLE pipeline_event (\
+         event_id VARCHAR NOT NULL PRIMARY KEY, run_key VARCHAR NOT NULL, pipeline_id VARCHAR NOT NULL, \
+         pipeline_name VARCHAR, kind VARCHAR NOT NULL, occurred_at TIMESTAMPTZ NOT NULL, trigger VARCHAR, \
+         detail VARCHAR, created_at TIMESTAMPTZ NOT NULL DEFAULT now());\
+         CREATE TABLE metrics_meta (key VARCHAR NOT NULL PRIMARY KEY, value VARCHAR NOT NULL);\
+         INSERT INTO metrics_meta VALUES ('schema_version', '1');\
+         INSERT INTO node_run (run_key, node_id, status) VALUES ('r1', 's1', 'ok');",
+        false,
+    )
+    .unwrap();
+    let s = MetricsStore::open(ws.path(), &bin).expect("migrated open");
+    let rows = s.query_nodes(&["r1".to_string()]).unwrap();
+    assert_eq!(rows[0].node_label, None, "the query fills it from the pipeline file, not the id");
 }
 
 // ---- upsert rules -----------------------------------------------------------

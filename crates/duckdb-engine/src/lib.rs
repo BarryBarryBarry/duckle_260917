@@ -538,6 +538,7 @@ impl DuckdbEngine {
             .enumerate()
             .map(|(i, st)| metrics_bus::PlannedStage {
                 node_id: st.node_id.clone(),
+                label: st.label.clone(),
                 component: Some(st.component_id.clone()),
                 kind: capabilities::component_kind(&st.component_id).map(str::to_string),
                 ordinal: i64::try_from(i).unwrap_or(i64::MAX),

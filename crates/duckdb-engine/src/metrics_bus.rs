@@ -96,6 +96,7 @@ pub struct EndedNode {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlannedStage {
     pub node_id: String,
+    pub label: String,
     pub component: Option<String>,
     /// Catalog kind.
     pub kind: Option<String>,
@@ -413,6 +414,7 @@ fn apply(bin: &Path, event: &MetricsEvent) -> Result<(), MetricsError> {
                 .map(|s| NodeRunPatch {
                     run_key: run_key.clone(),
                     node_id: s.node_id.clone(),
+                    node_label: Some(s.label.clone()),
                     ordinal: Some(s.ordinal),
                     component: s.component.clone(),
                     kind: s.kind.clone(),

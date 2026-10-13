@@ -162,8 +162,14 @@ fn queued_delivery_keeps_one_runs_events_in_order() {
         workspace: ws.path().into(),
         run_key: "r1".into(),
         stages: vec![
-            PlannedStage { node_id: "a".into(), component: Some("src.csv".into()), kind: Some("source".into()), ordinal: 0 },
-            PlannedStage { node_id: "b".into(), component: None, kind: None, ordinal: 1 },
+            PlannedStage {
+                node_id: "a".into(),
+                label: "Extract".into(),
+                component: Some("src.csv".into()),
+                kind: Some("source".into()),
+                ordinal: 0,
+            },
+            PlannedStage { node_id: "b".into(), label: "Transform".into(), component: None, kind: None, ordinal: 1 },
         ],
     });
     bus.publish(MetricsEvent::StageStarted { workspace: ws.path().into(), run_key: "r1".into(), node_id: "a".into(), at: "2026-10-04T10:00:01Z".into() });
@@ -181,6 +187,7 @@ fn queued_delivery_keeps_one_runs_events_in_order() {
     let n = s.query_nodes(&["r1".to_string()]).unwrap();
     assert_eq!((n[0].node_id.as_str(), n[0].status, n[0].rows, n[0].ordinal), ("a", NodeStatus::Ok, Some(3), Some(0)));
     assert_eq!(n[0].started_at.as_deref(), Some("2026-10-04T10:00:01.000000Z"));
+    assert_eq!(n[0].node_label.as_deref(), Some("Extract"));
     assert_eq!(n[0].kind.as_deref(), Some("source"));
     assert_eq!((n[1].node_id.as_str(), n[1].status), ("b", NodeStatus::Pending));
 }
@@ -195,8 +202,8 @@ fn an_interrupted_run_is_closed_by_its_interruption_not_its_placeholder_record()
         workspace: ws.path().into(),
         run_key: "r1".into(),
         stages: vec![
-            PlannedStage { node_id: "a".into(), component: None, kind: None, ordinal: 0 },
-            PlannedStage { node_id: "b".into(), component: None, kind: None, ordinal: 1 },
+            PlannedStage { node_id: "a".into(), label: "Extract".into(), component: None, kind: None, ordinal: 0 },
+            PlannedStage { node_id: "b".into(), label: "Transform".into(), component: None, kind: None, ordinal: 1 },
         ],
     });
     bus.publish(MetricsEvent::StageStarted { workspace: ws.path().into(), run_key: "r1".into(), node_id: "a".into(), at: "2026-10-04T10:00:01Z".into() });
@@ -355,7 +362,7 @@ fn legacy_keys_are_stable_and_distinct() {
 #[test]
 fn the_stage_tap_places_once_and_reports_only_what_a_stage_stream_can_know() {
     let ws = PathBuf::from("/ws");
-    let planned = vec![PlannedStage { node_id: "a".into(), component: None, kind: None, ordinal: 0 }];
+    let planned = vec![PlannedStage { node_id: "a".into(), label: "Extract".into(), component: None, kind: None, ordinal: 0 }];
     let mut tap = StageTap::new(ws, "r1".into(), planned);
     let now = chrono::Utc::now();
     let started = crate::PipelineEvent::Started { total_stages: 1 };

@@ -372,6 +372,7 @@ export type CatalogFreshness = {
 /** One stage of a run, from the run metrics store. */
 export type MetricsNode = {
     nodeId: string;
+    nodeLabel: string | null;
     ordinal: number | null;
     component: string | null;
     /** Catalog kind: source / transform / sink / quality / control / custom. */

@@ -160,7 +160,8 @@ function NodePanel({ run, state, onClose }: { run: MetricsRun; state: NodeState;
                 <table className="run-table run-metrics-nodes">
                     <thead>
                         <tr>
-                            <th>{t('metrics.nodes.node')}</th>
+                            <th>{t('metrics.nodes.nodeId')}</th>
+                            <th>{t('metrics.nodes.nodeName')}</th>
                             <th>{t('metrics.nodes.status')}</th>
                             <th>{t('metrics.nodes.executeTime')}</th>
                             <th className="run-num">{t('metrics.columns.cost')}</th>
@@ -178,6 +179,11 @@ function NodePanel({ run, state, onClose }: { run: MetricsRun; state: NodeState;
                                             {firstLine(n.error)}
                                         </div>
                                     ) : null}
+                                </td>
+                                <td>
+                                    <span className="run-metrics-node-name" title={n.nodeLabel ?? undefined}>
+                                        {n.nodeLabel ?? EMPTY}
+                                    </span>
                                 </td>
                                 <td>
                                     <span className="run-metrics-status">

@@ -30,7 +30,7 @@ use std::time::{Duration, Instant, SystemTime};
 /// Where the store lives, relative to the workspace.
 pub const METRICS_DB_FILE: &str = ".duckle/metrics.duckdb";
 /// The schema this build writes and understands.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 const STORE_LOCK: &str = "metrics-db";
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 /// Leftover NDJSON older than this belongs to a call that died.
@@ -189,6 +189,9 @@ impl MetricsStore {
             .ok_or_else(|| MetricsError::Output(format!("no usable schema_version in {out}")))?;
         if found > SCHEMA_VERSION {
             return Err(MetricsError::SchemaTooNew { found, supported: SCHEMA_VERSION });
+        }
+        if found < SCHEMA_VERSION {
+            self.exec(&migration_sql(found), false)?;
         }
         mark_schema_ready(&self.db, true);
         Ok(())
@@ -515,7 +518,7 @@ fn schema_sql() -> String {
          incomplete_reason VARCHAR, queue_ms BIGINT, error VARCHAR, category VARCHAR, \
          created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());\n\
          CREATE TABLE IF NOT EXISTS node_run (\
-         run_key VARCHAR NOT NULL, node_id VARCHAR NOT NULL, ordinal BIGINT, component VARCHAR, kind VARCHAR, \
+         run_key VARCHAR NOT NULL, node_id VARCHAR NOT NULL, node_label VARCHAR, ordinal BIGINT, component VARCHAR, kind VARCHAR, \
          status VARCHAR NOT NULL, started_at TIMESTAMPTZ, duration_ms BIGINT, rows BIGINT, rejected_rows BIGINT, \
          error VARCHAR, category VARCHAR, \
          created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), \
@@ -527,6 +530,18 @@ fn schema_sql() -> String {
          CREATE TABLE IF NOT EXISTS metrics_meta (key VARCHAR NOT NULL PRIMARY KEY, value VARCHAR NOT NULL);\n\
          INSERT INTO metrics_meta VALUES ('schema_version', '{SCHEMA_VERSION}') ON CONFLICT DO NOTHING;"
     )
+}
+
+fn migration_sql(found: i64) -> String {
+    let mut sql = String::new();
+    if found < 2 {
+        sql.push_str(
+            "ALTER TABLE node_run ADD COLUMN IF NOT EXISTS node_label VARCHAR;\n\
+             INSERT INTO metrics_meta VALUES ('schema_version', '2') \
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value;\n",
+        );
+    }
+    sql
 }
 
 fn set_backfill_sql(needed: bool) -> String {
@@ -608,6 +623,7 @@ const RUN_COLS: &[Col] = &[
 const NODE_COLS: &[Col] = &[
     col("run_key", "VARCHAR", Merge::Key),
     col("node_id", "VARCHAR", Merge::Key),
+    col("node_label", "VARCHAR", Merge::Overwrite),
     col("ordinal", "BIGINT", Merge::Overwrite),
     col("component", "VARCHAR", Merge::Overwrite),
     col("kind", "VARCHAR", Merge::Overwrite),

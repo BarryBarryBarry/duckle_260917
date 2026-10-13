@@ -19,7 +19,7 @@ use base64::Engine as _;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 /// The response shape's version, independent of the store's.
@@ -231,6 +231,7 @@ fn parse_runs(p: &HashMap<String, String>) -> Result<RunsRequest, QueryError> {
 #[serde(rename_all = "camelCase")]
 struct NodeDto {
     node_id: String,
+    node_label: Option<String>,
     ordinal: Option<i64>,
     component: Option<String>,
     kind: Option<String>,
@@ -274,6 +275,7 @@ struct RunDto {
 fn node_dto(n: NodeRunMetric) -> NodeDto {
     NodeDto {
         node_id: n.node_id,
+        node_label: n.node_label,
         ordinal: n.ordinal,
         component: n.component,
         kind: n.kind,
@@ -369,6 +371,7 @@ pub fn runs(workspace: &Path, bin: &Path, params: &HashMap<String, String>) -> R
     let found = if query_store { store.query_runs(&query)? } else { Default::default() };
     let never = if req.pending && req.run_key.is_none() { never_run_ids(workspace, &store, &req.pipelines, &names)? } else { Vec::new() };
     let mut node_map = nodes_by_run(&store, &found.runs, req.include_nodes)?;
+    fill_node_labels(workspace, &found.runs, &mut node_map);
     let next_cursor = match &req.paging {
         Paging::Cursor(_) if found.runs.len() as u32 == limit => {
             found.runs.last().map(|r| encode_cursor(&r.started_at, &r.run_key))
@@ -526,6 +529,59 @@ fn discover(workspace: &Path) -> BTreeMap<String, String> {
         }
         let name = v.get("name").and_then(Value::as_str).map(str::trim).unwrap_or("").to_string();
         out.insert(id, name);
+    }
+    out
+}
+
+/// A stage with no name of its own: recorded before stage names were kept,
+/// or by a store migration that could only repeat the id.
+fn lacks_label(n: &NodeRunMetric) -> bool {
+    n.node_label.as_deref().map(str::trim).filter(|l| !l.is_empty() && *l != n.node_id).is_none()
+}
+
+/// Name the stages that were recorded without a name after the node's label
+/// in its pipeline file as it is now. Only the files of runs that need it are
+/// read.
+fn fill_node_labels(workspace: &Path, runs: &[PipelineRunMetric], nodes: &mut HashMap<String, Vec<NodeRunMetric>>) {
+    let wanted: HashSet<&str> = runs
+        .iter()
+        .filter(|r| nodes.get(&r.run_key).is_some_and(|ns| ns.iter().any(lacks_label)))
+        .map(|r| r.pipeline_id.as_str())
+        .collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let labels = current_node_labels(workspace, &wanted);
+    for run in runs {
+        let (Some(found), Some(stages)) = (labels.get(&run.pipeline_id), nodes.get_mut(&run.run_key)) else { continue };
+        for n in stages.iter_mut().filter(|n| lacks_label(n)) {
+            if let Some(label) = found.get(&n.node_id) {
+                n.node_label = Some(label.clone());
+            }
+        }
+    }
+}
+
+/// Pipeline id -> node id -> label, for these pipelines' files.
+fn current_node_labels(workspace: &Path, ids: &HashSet<&str>) -> HashMap<String, HashMap<String, String>> {
+    let mut out = HashMap::new();
+    for path in crate::catalog::discover_pipeline_files(workspace) {
+        let Some(id) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else { continue };
+        if !ids.contains(id.as_str()) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else { continue };
+        let Some(list) = v.get("nodes").and_then(Value::as_array) else { continue };
+        let labels: HashMap<String, String> = list
+            .iter()
+            .filter_map(|n| {
+                let node_id = n.get("id")?.as_str()?;
+                let label = n.get("data")?.get("label")?.as_str()?.trim();
+                (!label.is_empty()).then(|| (node_id.to_string(), label.to_string()))
+            })
+            .collect();
+        out.insert(id, labels);
     }
     out
 }

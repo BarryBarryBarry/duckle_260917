@@ -285,7 +285,8 @@
     },
     "nodes": {
       "title": "{{name}} 的节点",
-      "node": "节点",
+      "nodeId": "节点 ID",
+      "nodeName": "节点名称",
       "status": "节点状态",
       "executeTime": "执行时间",
       "type": "节点类型",

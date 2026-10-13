@@ -316,7 +316,8 @@
     },
     "nodes": {
       "title": "Stages of {{name}}",
-      "node": "Node",
+      "nodeId": "Node ID",
+      "nodeName": "Node name",
       "status": "Node status",
       "executeTime": "Execute time",
       "type": "Node type",

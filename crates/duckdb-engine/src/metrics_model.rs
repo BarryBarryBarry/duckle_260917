@@ -154,6 +154,7 @@ pub struct PipelineRunMetric {
 pub struct NodeRunMetric {
     pub run_key: String,
     pub node_id: String,
+    pub node_label: Option<String>,
     /// Position in the compiled stage order, from 0. Absent for rows filled
     /// from a record that did not say.
     pub ordinal: Option<i64>,
@@ -227,6 +228,7 @@ pub struct PipelineRunPatch {
 pub struct NodeRunPatch {
     pub run_key: String,
     pub node_id: String,
+    pub node_label: Option<String>,
     pub ordinal: Option<i64>,
     pub component: Option<String>,
     pub kind: Option<String>,
