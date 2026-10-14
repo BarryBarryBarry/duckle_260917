@@ -55,7 +55,7 @@ pub enum MetricsError {
     Busy(String),
     #[error("the metrics store did not answer within {0} seconds")]
     Timeout(u64),
-    #[error("the metrics store has schema version {found}, newer than the {supported} this Duckle understands")]
+    #[error("the metrics store has schema version {found}, newer than the {supported} this Otter ETL agent understands")]
     SchemaTooNew { found: i64, supported: i64 },
     #[error("the metrics store refused the statement: {0}")]
     Cli(String),

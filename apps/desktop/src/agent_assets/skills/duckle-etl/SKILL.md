@@ -1,9 +1,9 @@
 ---
 name: duckle-etl
-description: Build, validate, run and debug Duckle ETL pipelines with the duckle MCP tools. Use when the user asks to create, check, run or fix a pipeline.
+description: Build, validate, run and debug Otter ETL agent pipelines with the duckle MCP tools. Use when the user asks to create, check, run or fix a pipeline.
 ---
 
-# Duckle ETL workflow
+# Otter ETL agent workflow
 
 1. Understand the data: list_connections, and the tables in the [Duckle Context].
 2. Pick components: list_components, then get_component_schema for each one you use.

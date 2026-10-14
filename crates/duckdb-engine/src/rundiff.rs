@@ -352,7 +352,7 @@ consequence of that rather than a cause of it."
     if !code && !runtime && !params && !ended_differently && in_area(Area::Output) {
         out.push(
             "Identical code, engine and parameters, but the output differs - which points at \
-             the sources rather than at Duckle."
+             the sources rather than at Otter ETL agent."
                 .into(),
         );
     }

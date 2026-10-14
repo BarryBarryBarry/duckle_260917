@@ -447,7 +447,7 @@ fn parse_web_args() -> Result<WebArgs, String> {
             "--token" => token = Some(take("--token")?),
             "-h" | "--help" => {
                 println!(
-                    "duckle-runner web - serve the Duckle editor as a web app (spike)\n\n\
+                    "duckle-runner web - serve the Otter ETL agent editor as a web app (spike)\n\n\
                      USAGE:\n    duckle-runner web --dist <dir> [--host <ip>] [--port <n>] [--workspace <dir>] [--token <secret>]\n\n\
                      Same accounts and roles as `duckle-runner serve`: open on 127.0.0.1\n\
                      with no accounts, and UNCLAIMED on any other --host without a credential,\n\

@@ -43,7 +43,7 @@ export function parseGenerated(text: string): GeneratedDive | null {
 }
 
 function prompt(fromExpr: string, card: string, question: string): string {
-    return `You generate a chart for Duckle (DuckDB). Write ONE read-only SQL SELECT that answers the question, plus a Vega-Lite chart spec.
+    return `You generate a chart for Otter ETL agent (DuckDB). Write ONE read-only SQL SELECT that answers the question, plus a Vega-Lite chart spec.
 Rules: the SQL must read FROM ${fromExpr}. The chart is a Vega-Lite spec with NO data and NO width/height; its encoding fields MUST be output columns of the SELECT.
 Output ONLY a \`\`\`json fenced block: {"sql": "SELECT ...", "chart": {"mark": "bar", "encoding": {"x": {"field": "...", "type": "nominal"}, "y": {"field": "...", "type": "quantitative"}}}}.
 

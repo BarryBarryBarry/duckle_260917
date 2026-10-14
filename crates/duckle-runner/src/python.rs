@@ -148,7 +148,7 @@ pub fn run() -> Result<i32, String> {
                 .output()
                 .map_err(|e| {
                     format!(
-                        "cannot run uv: {e}. Install it from https://docs.astral.sh/uv/ - Duckle \
+                        "cannot run uv: {e}. Install it from https://docs.astral.sh/uv/ - Otter ETL agent \
                          does not install dependencies during a pipeline run, so this is the step \
                          that has to happen first."
                     )

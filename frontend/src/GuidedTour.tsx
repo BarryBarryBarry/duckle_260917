@@ -64,8 +64,8 @@ interface Step {
 const ALL_STEPS: Step[] = [
     {
         sel: null,
-        title: 'Welcome to Duckle',
-        body: 'A studio for building data pipelines on DuckDB. Draw one here and run it on this machine, or deploy the same file to a server you own. No JVM, and nothing is sent anywhere you did not choose. This walks through everything Duckle does, once. You can replay it any time from Settings.',
+        title: 'Welcome to Otter ETL agent',
+        body: 'A studio for building data pipelines on DuckDB. Draw one here and run it on this machine, or deploy the same file to a server you own. No JVM, and nothing is sent anywhere you did not choose. This walks through everything Otter ETL agent does, once. You can replay it any time from Settings.',
         placement: 'center',
     },
 
@@ -95,7 +95,7 @@ const ALL_STEPS: Step[] = [
         sel: '[data-tour="tabs"]',
         chapter: 'Build',
         title: 'Canvas, Plan, Run, History',
-        body: 'Four views of the same pipeline. Plan shows the SQL each block compiles to, which is the fastest way to understand what Duckle is actually doing. Run shows the last result with a data preview. History lists every previous run of this pipeline.',
+        body: 'Four views of the same pipeline. Plan shows the SQL each block compiles to, which is the fastest way to understand what Otter ETL agent is actually doing. Run shows the last result with a data preview. History lists every previous run of this pipeline.',
         placement: 'bottom',
         requireAnchor: true,
     },
@@ -142,7 +142,7 @@ const ALL_STEPS: Step[] = [
         sel: '[data-tour="home"]',
         chapter: 'Operate',
         title: 'Home is the index of everything',
-        body: 'Everything Duckle can do is on this one screen, in three groups: Build, Operate and Govern. Open it any time from here. The next few steps are what lives inside it.',
+        body: 'Everything Otter ETL agent can do is on this one screen, in three groups: Build, Operate and Govern. Open it any time from here. The next few steps are what lives inside it.',
         placement: 'bottom',
         requireAnchor: true,
     },
@@ -167,7 +167,7 @@ const ALL_STEPS: Step[] = [
         sel: '[data-tour="git"]',
         chapter: 'Operate',
         title: 'Version control',
-        body: 'Commit, push and pull your workspace without leaving Duckle. Because a pipeline is one JSON file, a change reviews like any other code change.',
+        body: 'Commit, push and pull your workspace without leaving Otter ETL agent. Because a pipeline is one JSON file, a change reviews like any other code change.',
         placement: 'bottom',
         requireAnchor: true,
     },
@@ -199,7 +199,7 @@ const ALL_STEPS: Step[] = [
         sel: '[data-tour="dives"]',
         chapter: 'Govern',
         title: 'Dives',
-        body: 'Explore results in live, auto-charting views and pin them into dashboards, all local-first. A quick way to look at what a pipeline produced without leaving Duckle.',
+        body: 'Explore results in live, auto-charting views and pin them into dashboards, all local-first. A quick way to look at what a pipeline produced without leaving Otter ETL agent.',
         placement: 'bottom',
         requireAnchor: true,
     },
@@ -214,7 +214,7 @@ const ALL_STEPS: Step[] = [
     {
         sel: '[data-tour="topbar"]',
         chapter: 'Govern',
-        title: 'Let an AI agent drive Duckle',
+        title: 'Let an AI agent drive Otter ETL agent',
         body: 'Connect Claude, Cursor or any MCP client to this workspace. The agent can list components, read and write pipelines, run them and read the logs, with the same permissions you have.',
         placement: 'bottom',
     },
@@ -427,7 +427,7 @@ export function GuidedTour({ ready = true }: TourProps) {
     }
 
     return (
-        <div className="tour-root" role="dialog" aria-modal="true" aria-label="Duckle guided tour">
+        <div className="tour-root" role="dialog" aria-modal="true" aria-label="Otter ETL agent guided tour">
             {/* Spotlight: a transparent box with a huge shadow dims everything else. */}
             {box ? (
                 <div

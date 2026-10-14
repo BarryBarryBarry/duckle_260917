@@ -206,7 +206,7 @@ function AuthScreen({ children, wide = false }: { children: ReactNode; wide?: bo
             <div className={'acct-modal auth-card' + (wide ? ' auth-card-wide' : '')}>
                 <div className="auth-brand">
                     <DuckleLogo size={28} />
-                    <span>Duckle</span>
+                    <span>Otter ETL agent</span>
                 </div>
                 {children}
             </div>

@@ -55,7 +55,7 @@ export function ReviewPrompt() {
     };
 
     return (
-        <div className="review-prompt" role="dialog" aria-label="Enjoying Duckle?">
+        <div className="review-prompt" role="dialog" aria-label="Enjoying Otter ETL agent?">
             <button
                 type="button"
                 className="review-prompt-x"
@@ -65,9 +65,9 @@ export function ReviewPrompt() {
             >
                 ×
             </button>
-            <div className="review-prompt-title">Enjoying Duckle?</div>
+            <div className="review-prompt-title">Enjoying Otter ETL agent?</div>
             <div className="review-prompt-body">
-                If Duckle's been useful, a quick review on G2 really helps others find it.
+                If Otter ETL agent's been useful, a quick review on G2 really helps others find it.
             </div>
             <div className="review-prompt-actions">
                 <button type="button" className="review-prompt-cta" onClick={review}>

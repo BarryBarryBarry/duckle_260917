@@ -212,7 +212,7 @@ function describeAction(tool: string, input: unknown): [string, string] {
 	if (tool === "create_connection" && typeof args.name === "string") {
 		return [`新建连接「${args.name}」？`, typeof args.workspace === "string" ? args.workspace : ""];
 	}
-	const label = CONFIRM_LABELS[tool] ?? `使用 Duckle 工具 ${tool}`;
+	const label = CONFIRM_LABELS[tool] ?? `使用 Otter ETL agent 工具 ${tool}`;
 	// Inline pipeline objects are long and say little here; the rest is what the call will do.
 	const shown = Object.fromEntries(Object.entries(args).filter(([, v]) => typeof v !== "object" || v === null));
 	return [`${label}？`, JSON.stringify(shown, null, 1).slice(0, 600)];
@@ -267,7 +267,7 @@ function checkPath(raw: string, cwd: string, forRead: boolean): PathCheck {
 		if (!hidden) return { ok: true, resolved };
 		return {
 			ok: false,
-			reason: `${raw}: the workspace's ${hidden} folder holds Duckle's keys and settings and is not available to the agent.`,
+			reason: `${raw}: the workspace's ${hidden} folder holds Otter ETL agent's keys and settings and is not available to the agent.`,
 		};
 	}
 	const agentDir = process.env.PI_CODING_AGENT_DIR;
@@ -324,12 +324,12 @@ export default function (pi: ExtensionAPI) {
 		}
 		if (event.toolName === "duckle_subagent" && DEPTH === 0) return undefined;
 		if (!event.toolName.startsWith(MCP_PREFIX)) {
-			return { block: true, reason: `The ${event.toolName} tool is not available in Duckle.` };
+			return { block: true, reason: `The ${event.toolName} tool is not available in Otter ETL agent.` };
 		}
 
 		const tool = event.toolName.slice(MCP_PREFIX.length);
 		if (input.duckdb !== undefined) {
-			return { block: true, reason: "Do not pass 'duckdb': Duckle provides the DuckDB binary itself." };
+			return { block: true, reason: "Do not pass 'duckdb': Otter ETL agent provides the DuckDB binary itself." };
 		}
 		const confined = confineMcpPaths(input, cwd);
 		if (confined) return confined;
@@ -338,7 +338,7 @@ export default function (pi: ExtensionAPI) {
 		if (DEPTH > 0) {
 			return {
 				block: true,
-				reason: `A subagent only inspects; ${tool} writes or runs something. Report what should be done and leave it to the main Duckle agent.`,
+				reason: `A subagent only inspects; ${tool} writes or runs something. Report what should be done and leave it to the main agent.`,
 			};
 		}
 		if (AUTHORING_TOOLS.has(tool)) {
@@ -368,10 +368,10 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerTool({
 		name: "duckle_subagent",
-		label: "Duckle subagent",
+		label: "Otter ETL agent subagent",
 		description:
-			"Delegate a self-contained Duckle task to a specialised subagent with its own context. " +
-			"It can use the Duckle MCP tools but cannot run pipelines. Available agents: " +
+			"Delegate a self-contained Otter ETL agent task to a specialised subagent with its own context. " +
+			"It can use the Otter ETL agent MCP tools but cannot run pipelines. Available agents: " +
 			agents.map((a) => `${a.name} (${a.description})`).join("; "),
 		parameters: Type.Object({
 			agent: Type.String({ description: `One of: ${agents.map((a) => a.name).join(", ")}` }),

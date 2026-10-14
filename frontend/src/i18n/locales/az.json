@@ -113,7 +113,7 @@
     "localTag": "yerli",
     "checking": "AI mühərriki yoxlanılır...",
     "installTitle": "Duckie AI köməkçisini quraşdırın",
-    "installBody": "Duckle kiçik yerli modeli (~1,1 GB) endirir, beləliklə, köməkçi tamamilə sizin maşınınızda işləyir - API düymələri yoxdur, bulud zəngləri yoxdur.",
+    "installBody": "Otter ETL agent kiçik yerli modeli (~1,1 GB) endirir, beləliklə, köməkçi tamamilə sizin maşınınızda işləyir - API düymələri yoxdur, bulud zəngləri yoxdur.",
     "installCta": "Quraşdırma (~1,1 GB)",
     "installFailedTitle": "Quraşdırma uğursuz oldu",
     "retry": "Yenidən cəhd edin",

@@ -319,18 +319,18 @@ fn duckie_prompt(workspace: &Path, replay: Option<&str>, user_prompt: &str) -> S
     let earlier = replay
         .map(|t| {
             format!(
-                "Earlier conversation, restored from Duckle's saved history (the previous agent session could not be resumed):\n{t}\n\n"
+                "Earlier conversation, restored from Otter ETL agent's saved history (the previous agent session could not be resumed):\n{t}\n\n"
             )
         })
         .unwrap_or_default();
     format!(
-        "You are Duckie, the AI assistant inside Duckle.\n\
-Use the attached Duckle MCP tools instead of inventing pipeline JSON.\n\
-When the user wants a new pipeline, call create_pipeline with the workspace path so Duckle writes pipelines/<id>.json and registers it in repository.json.\n\
+        "You are Duckie, the AI assistant inside Otter ETL agent.\n\
+Use the attached Otter ETL agent MCP tools instead of inventing pipeline JSON.\n\
+When the user wants a new pipeline, call create_pipeline with the workspace path so Otter ETL agent writes pipelines/<id>.json and registers it in repository.json.\n\
 When the user wants to change an existing pipeline, call update_pipeline so the on-disk file stays authoritative.\n\
 Prefer list_components and get_component_schema before writing a pipeline when you are not certain about component ids or required properties.\n\
 Database credentials: never ask the user for a password and never write one into a pipeline, a connection or your reply. Call list_connections and set the database node's connectionRef to a saved connection's id, leaving host/username/password off the node. If none fits, call create_connection without the password and use the returned id.\n\
-If a run_pipeline result contains needsCredentials, Duckle is showing the user a secure form for the password: tell them in one short sentence to fill it in, then stop and wait. When they say it is saved, run the pipeline again.\n\
+If a run_pipeline result contains needsCredentials, Otter ETL agent is showing the user a secure form for the password: tell them in one short sentence to fill it in, then stop and wait. When they say it is saved, run the pipeline again.\n\
 Reply with a short summary after tool work completes.\n\
 Workspace: {}\n\n\
 {}User request:\n{}",
@@ -397,7 +397,7 @@ fn humanize_dsh_error(message: &str) -> String {
         return "无法启动 DeepSeek Harness。请检查 DSH 是否已安装，或在设置里填写正确的 DSH 命令路径。".into();
     }
     if message.contains("protocolVersion") {
-        return "DeepSeek Harness ACP 握手失败：协议版本不匹配。请重启 Duckle，并确认当前代码已经更新到最新版本。".into();
+        return "DeepSeek Harness ACP 握手失败：协议版本不匹配。请重启 Otter ETL agent，并确认当前代码已经更新到最新版本。".into();
     }
     if message.contains("session/new returned no sessionId") {
         return "DeepSeek Harness 已启动，但未能创建 ACP 会话。请检查 DSH profile 与本地环境配置。"

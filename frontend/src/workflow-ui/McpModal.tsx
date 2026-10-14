@@ -80,7 +80,7 @@ export function McpModal({ onClose }: { onClose: () => void }) {
                 <div className="modal-header">
                     <div className="modal-title">
                         <ClaudeIcon size={16} className="claude-icon claude-icon-glow" />
-                        <span style={{ marginLeft: 8 }}>Connect Duckle to Claude</span>
+                        <span style={{ marginLeft: 8 }}>Connect Otter ETL agent to Claude</span>
                     </div>
                     <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
                         <X size={16} />
@@ -95,7 +95,7 @@ export function McpModal({ onClose }: { onClose: () => void }) {
                     ) : (
                         <>
                             <p className="mcp-muted">
-                                Duckle ships a Model Context Protocol (MCP) server, so Claude can
+                                Otter ETL agent ships a Model Context Protocol (MCP) server, so Claude can
                                 generate, validate, run and build your pipelines for you - right in
                                 this workspace.
                             </p>

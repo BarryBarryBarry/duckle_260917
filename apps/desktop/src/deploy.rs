@@ -147,7 +147,7 @@ pub fn probe(url: &str) -> Result<String, String> {
         200 => Ok("unclaimed".into()),
         // Already set up, so it wants a key rather than a name.
         410 => Ok("claimed".into()),
-        s => Err(format!("{url} answered {s}; is that a Duckle server?")),
+        s => Err(format!("{url} answered {s}; is that an Otter ETL agent server?")),
     }
 }
 

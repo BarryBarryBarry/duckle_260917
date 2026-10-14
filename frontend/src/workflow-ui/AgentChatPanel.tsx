@@ -1227,7 +1227,7 @@ export default function AgentChatPanel({
                     <div className="chat-panel-setup-body">
                         {setup.phase === 'install-failed'
                             ? setup.message
-                            : '首次使用需要下载 Node.js 运行时和 Agent（约 75 MB 下载，解压后约 350 MB），安装在 Duckle 自己的数据目录中。'}
+                            : '首次使用需要下载 Node.js 运行时和 Agent（约 75 MB 下载，解压后约 350 MB），安装在 Otter ETL agent 自己的数据目录中。'}
                     </div>
                     <button type="button" className="chat-panel-setup-cta" onClick={() => void handleInstall()}>
                         <Download size={14} /> {setup.phase === 'install-failed' ? '重新安装' : '安装'}

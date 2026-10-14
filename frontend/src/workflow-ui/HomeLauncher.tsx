@@ -315,7 +315,7 @@ export function buildModules(a: LauncherActions): LauncherModule[] {
         mods.splice(1, 0, {
             id: 'import',
             name: 'Import a Job',
-            blurb: 'Translate a Talend .item job into a Duckle pipeline',
+            blurb: 'Translate a Talend .item job into an Otter ETL agent pipeline',
             group: 'build',
             icon: Upload,
             status: 'ready',
@@ -518,7 +518,7 @@ export default function HomeLauncher({
                             checked={showOnStartup}
                             onChange={e => onToggleShowOnStartup(e.target.checked)}
                         />
-                        {t('launcher.showOnStartup', 'Show this when Duckle opens')}
+                        {t('launcher.showOnStartup', 'Show this when Otter ETL agent opens')}
                     </label>
                     <span className="home-launcher-count">
                         {t('launcher.readyCount', '{{n}} available now', { n: readyCount })}

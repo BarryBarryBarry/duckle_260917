@@ -83,7 +83,7 @@
     "installFailedTitle": "Nabigo ang pag - install",
     "retry": "Subukang muli",
     "emptyTitle": "Ilarawan ang pipeline",
-    "emptyHint": "Ang assistant outputs isang Duckle pipeline maaari mong i - click upang ipasok sa canvas.",
+    "emptyHint": "Ang assistant outputs isang Otter ETL agent pipeline maaari mong i - click upang ipasok sa canvas.",
     "insertIntoCanvas": "Ipasok sa canvas",
     "thinking": "Pag-iisip",
     "placeholder": "Ilarawan kung ano ang kailangan mo...",

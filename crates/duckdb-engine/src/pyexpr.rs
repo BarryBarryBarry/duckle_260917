@@ -94,7 +94,7 @@ fn tokenize(src: &str) -> Result<Vec<Tok>, CompileError> {
             continue;
         }
         if c == '#' {
-            return err("comments are not supported in a Duckle Python expression");
+            return err("comments are not supported in an Otter ETL agent Python expression");
         }
         // f-string
         if (c == 'f' || c == 'F') && i + 1 < b.len() && (b[i + 1] == '"' || b[i + 1] == '\'') {

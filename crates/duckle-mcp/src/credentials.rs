@@ -25,14 +25,14 @@ const EXTRA_AUTH_NEEDLES: &[&str] = &[
 const ERROR_EXCERPT_CHARS: usize = 300;
 
 pub const AGENT_NOTE: &str = "The database refused the login for the saved connection(s) in needsCredentials. \
-Duckle is now showing the user a secure form to enter the password; the password is stored encrypted in the \
+Otter ETL agent is now showing the user a secure form to enter the password; the password is stored encrypted in the \
 connection and is never shown to you. Tell the user in one short sentence to fill in the form, then STOP and \
 wait. Do not ask them to type a password in the chat and do not put one in any pipeline or connection. When the \
 user says the credentials are saved, call run_pipeline again with the same arguments.";
 
 pub const INLINE_HINT: &str = "A node failed to authenticate and has no saved connection. Create one with \
 create_connection (host, port, database, username - omit the password), set the node's 'connectionRef' to the \
-returned id with update_pipeline, and run again: Duckle will then ask the user for the password securely.";
+returned id with update_pipeline, and run again: Otter ETL agent will then ask the user for the password securely.";
 
 /// The first node property that holds a literal password, as (node id, key).
 /// Placeholders (`${...}`), ciphertext and empty values are fine. Only
@@ -58,7 +58,7 @@ pub fn literal_password_error(node_id: &str, key: &str) -> String {
     format!(
         "node '{node_id}' property '{key}' holds a literal password; secrets must not be written into a pipeline. \
 Reference a saved connection instead: call list_connections, or create_connection without the password, \
-set the node's 'connectionRef' to its id and leave '{key}' out. Duckle asks the user for the password securely."
+set the node's 'connectionRef' to its id and leave '{key}' out. Otter ETL agent asks the user for the password securely."
     )
 }
 

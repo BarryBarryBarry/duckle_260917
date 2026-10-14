@@ -43,7 +43,7 @@ export function buildDiveHtml(dive: Dive, columns: Column[], rows: Record<string
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>${esc(dive.title)} - Duckle dive</title>
+<title>${esc(dive.title)} - Otter ETL agent dive</title>
 <style>
   body { font: 14px/1.5 system-ui, "Segoe UI", Arial, sans-serif; margin: 24px; color: #1b2030; background: #fff; }
   h1 { font-size: 20px; margin: 0 0 4px; }
@@ -57,7 +57,7 @@ export function buildDiveHtml(dive: Dive, columns: Column[], rows: Record<string
 </head>
 <body>
 <h1>${esc(dive.title)}</h1>
-<div class="sub">Duckle dive - snapshot of ${rows.length} rows</div>
+<div class="sub">Otter ETL agent dive - snapshot of ${rows.length} rows</div>
 ${hasChart ? '<div id="chart"></div>' : ''}
 <table><thead>${head}</thead><tbody>${body}</tbody></table>
 ${more}

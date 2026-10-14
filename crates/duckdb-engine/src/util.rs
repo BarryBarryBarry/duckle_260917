@@ -351,32 +351,32 @@ pub(crate) fn procedural_note(s: &plan::Stage) -> String {
     } else if cid.starts_with("snk.") {
         match s.from.as_deref() {
             Some(from) => format!(
-                "sink: '{}' connector writes rows from \"{}\" (runs in the Duckle runtime, no DuckDB SQL)",
+                "sink: '{}' connector writes rows from \"{}\" (runs in the Otter ETL agent runtime, no DuckDB SQL)",
                 cid, from
             ),
             None => format!(
-                "sink: '{}' connector (runs in the Duckle runtime, no DuckDB SQL)",
+                "sink: '{}' connector (runs in the Otter ETL agent runtime, no DuckDB SQL)",
                 cid
             ),
         }
     } else if cid.starts_with("src.") {
         format!(
-            "source: '{}' connector fetches rows and materializes them as \"{}\" (runs in the Duckle runtime, no DuckDB SQL)",
+            "source: '{}' connector fetches rows and materializes them as \"{}\" (runs in the Otter ETL agent runtime, no DuckDB SQL)",
             cid, s.node_id
         )
     } else if cid.starts_with("code.") {
         format!(
-            "code step: '{}' transforms rows in the Duckle runtime (no DuckDB SQL)",
+            "code step: '{}' transforms rows in the Otter ETL agent runtime (no DuckDB SQL)",
             cid
         )
     } else if cid.starts_with("xf.ai.") {
         format!(
-            "AI step: '{}' processes rows in the Duckle runtime (no DuckDB SQL)",
+            "AI step: '{}' processes rows in the Otter ETL agent runtime (no DuckDB SQL)",
             cid
         )
     } else {
         format!(
-            "'{}' runs in the Duckle runtime (no DuckDB SQL)",
+            "'{}' runs in the Otter ETL agent runtime (no DuckDB SQL)",
             cid
         )
     };

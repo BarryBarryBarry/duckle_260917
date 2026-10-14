@@ -88,11 +88,11 @@ fn gdk_backend_for(
     if set(display) {
         return Ok(None);
     }
-    Err("Duckle cannot open its window: this session has no display (neither DISPLAY nor \
+    Err("Otter ETL agent cannot open its window: this session has no display (neither DISPLAY nor \
          WAYLAND_DISPLAY is set), which is what a login over SSH or a server without a \
          desktop looks like. Start it from a desktop session, or run it without a window: \
-         `Duckle-linux-x64 serve` runs the scheduler and the web console, and \
-         `Duckle-linux-x64 run` runs a pipeline."
+         `Otter ETL agent-linux-x64 serve` runs the scheduler and the web console, and \
+         `Otter ETL agent-linux-x64 run` runs a pipeline."
         .to_string())
 }
 
@@ -2158,13 +2158,13 @@ async fn build_pipeline_bundle(
         match target.as_str() {
             "macos" => {
                 return Err(
-                    "Building a macOS file requires a Mac. Apple's toolchain and code signing are only available on macOS, so run Duckle on a Mac to build the macOS artifact."
+                    "Building a macOS file requires a Mac. Apple's toolchain and code signing are only available on macOS, so run Otter ETL agent on a Mac to build the macOS artifact."
                         .to_string(),
                 )
             }
             "windows" => {
                 return Err(
-                    "Building a Windows file requires running Duckle on Windows.".to_string(),
+                    "Building a Windows file requires running Otter ETL agent on Windows.".to_string(),
                 )
             }
             "linux" => {
@@ -2393,7 +2393,7 @@ fn write_if_changed(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
         return Ok(());
     }
     Err(format!(
-        "stage {}: locked (close other Duckle instances)",
+        "stage {}: locked (close other Otter ETL agent instances)",
         path.display()
     ))
 }
@@ -2887,7 +2887,7 @@ fn mcp_inject_config(app: tauri::AppHandle, client: String) -> Result<String, St
     let tmp = target.with_extension(format!("duckletmp{}", std::process::id()));
     let write_err = |e: std::io::Error| {
         format!(
-            "could not write {} ({}). If this needs elevated permissions, run Duckle as administrator and retry, or copy the config manually.",
+            "could not write {} ({}). If this needs elevated permissions, run Otter ETL agent as administrator and retry, or copy the config manually.",
             target.display(),
             e
         )

@@ -59,7 +59,7 @@ impl std::fmt::Display for TooNew {
         write!(
             f,
             "this file is format version {} and this build reads up to {}. \
-             Upgrade Duckle rather than running it - a newer format may carry \
+             Upgrade Otter ETL agent rather than running it - a newer format may carry \
              settings this build cannot see, and ignoring them would run \
              something other than what the file describes.",
             self.found, self.max
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(e.found, MAX_READABLE + 1);
         // The message has to say what to do, because the reader's instinct is
         // to delete the field and try again.
-        assert!(e.to_string().contains("Upgrade Duckle"), "{e}");
+        assert!(e.to_string().contains("Upgrade Otter ETL agent"), "{e}");
     }
 
     #[test]

@@ -179,7 +179,7 @@ pub fn run(on_progress: impl FnMut(Progress)) -> Result<(), String> {
     if !info.update_available {
         return Err(info
             .error
-            .unwrap_or_else(|| "Duckle is already up to date.".into()));
+            .unwrap_or_else(|| "Otter ETL agent is already up to date.".into()));
     }
     let download_url = info
         .download_url

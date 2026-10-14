@@ -402,18 +402,18 @@ fn build_message(event: Event, pipeline: &str, result: &RunResult) -> Message {
             let why = result.error.as_deref().unwrap_or("no error message");
             // One line, most important part first: people read alerts in a
             // notification preview, not in the channel.
-            format!("Duckle: {pipeline} FAILED after {seconds:.1}s - {why}")
+            format!("Otter ETL agent: {pipeline} FAILED after {seconds:.1}s - {why}")
         }
         Event::Recovery => {
-            format!("Duckle: {pipeline} recovered, succeeded in {seconds:.1}s")
+            format!("Otter ETL agent: {pipeline} recovered, succeeded in {seconds:.1}s")
         }
-        Event::Success => format!("Duckle: {pipeline} succeeded in {seconds:.1}s"),
+        Event::Success => format!("Otter ETL agent: {pipeline} succeeded in {seconds:.1}s"),
         // Not reachable through this function - a freshness alert has no run to
         // describe and builds its own message - but spelled out rather than
         // wildcarded, so adding a third non-run event is a compile error here
         // instead of a sentence about a run that did not happen.
-        Event::Stale => format!("Duckle: {pipeline} is stale"),
-        Event::Refreshed => format!("Duckle: {pipeline} was written again"),
+        Event::Stale => format!("Otter ETL agent: {pipeline} is stale"),
+        Event::Refreshed => format!("Otter ETL agent: {pipeline} was written again"),
     };
     Message {
         event: event.as_str().to_string(),
@@ -697,7 +697,7 @@ fn send_email(
     if to.is_empty() {
         return Err("email alert has no recipients".into());
     }
-    let subject = format!("[Duckle] {} {}", message.pipeline, message.event);
+    let subject = format!("[Otter ETL agent] {} {}", message.pipeline, message.event);
     let mut builder = Mail::builder()
         .from(from.parse().map_err(|e| format!("from address: {e}"))?)
         .subject(subject)
@@ -832,7 +832,7 @@ mod tests {
     fn the_message_leads_with_what_went_wrong() {
         let msg = build_message(Event::Failure, "nightly-load", &result("error", Some("ORA-01017")));
         // Read in a notification preview, the first few words have to carry it.
-        assert!(msg.text.starts_with("Duckle: nightly-load FAILED"), "{}", msg.text);
+        assert!(msg.text.starts_with("Otter ETL agent: nightly-load FAILED"), "{}", msg.text);
         assert!(msg.text.contains("ORA-01017"), "the cause was dropped: {}", msg.text);
         assert_eq!(msg.event, "failure");
 
@@ -911,7 +911,7 @@ mod tests {
         assert_eq!(open["payload"]["severity"], "error");
         assert_eq!(open["payload"]["source"], "duckle");
         assert!(
-            open["payload"]["summary"].as_str().unwrap_or("").starts_with("Duckle: nightly FAILED"),
+            open["payload"]["summary"].as_str().unwrap_or("").starts_with("Otter ETL agent: nightly FAILED"),
             "{open}"
         );
         assert_eq!(open["payload"]["custom_details"]["error"], "ORA-01017");
@@ -968,7 +968,7 @@ mod tests {
         // Slack, Teams and Discord all render this field, so it has to be there
         // and it has to lead with the pipeline and the verdict.
         assert!(
-            sent["text"].as_str().unwrap().starts_with("Duckle: nightly-load FAILED"),
+            sent["text"].as_str().unwrap().starts_with("Otter ETL agent: nightly-load FAILED"),
             "text was {}",
             sent["text"]
         );

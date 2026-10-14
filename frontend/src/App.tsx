@@ -297,7 +297,7 @@ const INITIAL_PIPELINE_DATA: Record<string, PipelineState> = {
 };
 
 const INITIAL_REPO: RepoItem[] = [
-    { id: 'root', name: 'Duckle Project', type: 'project' },
+    { id: 'root', name: 'Otter ETL agent Project', type: 'project' },
     { id: 'pipelines', name: 'Pipelines', type: 'folder', parentId: 'root' },
     { id: 'connections', name: 'Connections', type: 'folder', parentId: 'root' },
     { id: 'contexts', name: 'Contexts', type: 'folder', parentId: 'root' },
@@ -1664,7 +1664,7 @@ export default function App() {
         await saveTextFile(
             `${activeJobName}.duckle.json`,
             JSON.stringify(payload, null, 2),
-            [{ name: 'Duckle pipeline', extensions: ['json'] }],
+            [{ name: 'Otter ETL agent pipeline', extensions: ['json'] }],
         );
     }, [nodes, edges, activeJobName]);
 
@@ -1729,7 +1729,7 @@ export default function App() {
                 const picked = await open({
                     multiple: false,
                     filters: [
-                        { name: 'Duckle pipeline', extensions: ['json', 'duckle.json'] },
+                        { name: 'Otter ETL agent pipeline', extensions: ['json', 'duckle.json'] },
                         { name: 'All files', extensions: ['*'] },
                     ],
                 });
@@ -2444,7 +2444,7 @@ export default function App() {
                 <div className="brand" data-tauri-drag-region>
                     <DuckleLogo size={26} className="brand-logo" />
                     <span className="brand-text">
-                        <span className="brand-name">Duckle</span>
+                        <span className="brand-name">Otter ETL agent</span>
                         <span className="brand-by">by SlothFlowLabs</span>
                     </span>
                 </div>
@@ -2563,7 +2563,7 @@ export default function App() {
                     data-tour="topbar"
                     onClick={() => setShowMcpModal(true)}
                     title="Connect to Claude"
-                    aria-label="Connect Duckle to Claude"
+                    aria-label="Connect Otter ETL agent to Claude"
                 >
                     <ClaudeIcon size={14} className="claude-icon claude-icon-glow" />
                 </button>

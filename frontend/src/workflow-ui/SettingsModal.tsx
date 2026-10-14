@@ -321,7 +321,7 @@ export function SettingsModal({
                     <SettingsSection {...sectionState('proxy')} title="HTTP / HTTPS proxy">
                         <p style={help}>
                             Routes REST and cloud-API connectors and the in-app updater through a proxy, so
-                            Duckle works behind a corporate proxy without setting a system environment
+                            Otter ETL agent works behind a corporate proxy without setting a system environment
                             variable. Leave empty for a direct connection.
                         </p>
                         <input
@@ -469,7 +469,7 @@ export function SettingsModal({
                                         style={aiInput}
                                     />
                                     <p style={help}>
-                                        Leave blank to auto-detect DSH. Duckle launches it as <code>--profile acp</code>.
+                                        Leave blank to auto-detect DSH. Otter ETL agent launches it as <code>--profile acp</code>.
                                     </p>
                                     <input
                                         type="text"
@@ -492,7 +492,7 @@ export function SettingsModal({
                                         style={{ ...aiInput, marginTop: 8 }}
                                     />
                                     <p style={help}>
-                                        Set both provider and model to make Duckle call ACP <code>session/set_config_option</code>
+                                        Set both provider and model to make Otter ETL agent call ACP <code>session/set_config_option</code>
                                         after <code>session/new</code>. Leave both blank to use the ACP profile default.
                                     </p>
                                     <input
@@ -619,7 +619,7 @@ export function SettingsModal({
                     {isTauri() ? (
                         <SettingsSection {...sectionState('signin')} title="Sign-in and lock">
                             <p style={help}>
-                                Lock Duckle after a while without keyboard or mouse input. Locking keeps
+                                Lock Otter ETL agent after a while without keyboard or mouse input. Locking keeps
                                 open pipelines, unsaved edits and running work as they are; the password
                                 opens it again. Applies immediately.
                             </p>
@@ -728,7 +728,7 @@ export function SettingsModal({
 
                     <SettingsSection {...sectionState('tour')} title="First run">
                         <p style={help}>
-                            Everything you were shown the first time you opened Duckle, available
+                            Everything you were shown the first time you opened Otter ETL agent, available
                             again whenever you want it.
                         </p>
                         <button

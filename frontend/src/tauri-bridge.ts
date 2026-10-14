@@ -450,7 +450,7 @@ export async function metricsRuns(
     query: MetricsRunQuery,
 ): Promise<MetricsRunsPage | MetricsFailure> {
     if (!isTauri() && !isWebBackend()) {
-        return { error: 'Run metrics need the desktop app or a Duckle server.' };
+        return { error: 'Run metrics need the desktop app or an Otter ETL agent server.' };
     }
     try {
         const answer = await invoke<MetricsRunsPage | MetricsFailure | null>('metrics_runs', { workspacePath, query });

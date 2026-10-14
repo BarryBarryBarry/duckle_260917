@@ -2394,7 +2394,7 @@ impl DuckdbEngine {
         _spec: &OracleSinkSpec,
     ) -> Result<String, EngineError> {
         Err(EngineError::Config(
-            "snk.oracle: this Duckle binary was built without the default \
+            "snk.oracle: this Otter ETL agent binary was built without the default \
              `oracle` feature. Default builds include Oracle support; if \
              you're seeing this, rebuild with `cargo build --release` (no \
              --no-default-features). At runtime users still need Oracle \
@@ -3708,7 +3708,7 @@ impl DuckdbEngine {
         _spec: &OracleSourceSpec,
     ) -> Result<String, EngineError> {
         Err(EngineError::Config(
-            "src.oracle: this Duckle binary was built without the default \
+            "src.oracle: this Otter ETL agent binary was built without the default \
              `oracle` feature. Default builds include Oracle support."
                 .into(),
         ))
@@ -18540,7 +18540,7 @@ fn spawn_dbt_and_wait(
     let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             EngineError::Config(format!(
-                "xf.dbt: dbt was not found (tried '{}'). Duckle ships a bundled dbt \
+                "xf.dbt: dbt was not found (tried '{}'). Otter ETL agent ships a bundled dbt \
                  engine; if you are running a bare build, install dbt with the DuckDB \
                  adapter (pipx install dbt-duckdb) or set the 'dbtBin' property to the \
                  dbt executable path.",

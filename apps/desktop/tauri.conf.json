@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Duckle",
+  "productName": "Otter ETL agent",
   "version": "0.7.4",
   "identifier": "io.duckle.app",
     "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Duckle",
+        "title": "Otter ETL agent",
         "width": 1400,
         "height": 900,
         "minWidth": 1000,
@@ -37,7 +37,7 @@
     "targets": [],
     "category": "DeveloperTool",
     "shortDescription": "Embedded, ultra-fast data engineering platform.",
-    "longDescription": "Duckle is an open-source, local-first ETL/ELT/streaming platform with a drag-and-drop UI and native execution speed.",
+    "longDescription": "Otter ETL agent is an open-source, local-first ETL/ELT/streaming platform with a drag-and-drop UI and native execution speed.",
     "copyright": "Copyright 2026 SlothFlowLabs",
     "publisher": "SlothFlowLabs",
     "icon": [

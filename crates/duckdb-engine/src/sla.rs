@@ -391,7 +391,7 @@ pub fn check_and_alert(workspace: &Path, now: chrono::DateTime<chrono::Utc>) -> 
             State::Stale => (
                 crate::alerts::Event::Stale,
                 format!(
-                    "Duckle: {} is STALE{}{}",
+                    "Otter ETL agent: {} is STALE{}{}",
                     a.asset,
                     a.maximum_age.as_deref().map(|m| format!(" (limit {m})")).unwrap_or_default(),
                     match (&a.last_written_at, a.age_seconds) {
@@ -405,7 +405,7 @@ pub fn check_and_alert(workspace: &Path, now: chrono::DateTime<chrono::Utc>) -> 
             State::Recovered => (
                 crate::alerts::Event::Refreshed,
                 format!(
-                    "Duckle: {} was written again{}",
+                    "Otter ETL agent: {} was written again{}",
                     a.asset,
                     a.stale_since.as_deref().map(|s| format!(", stale since {s}")).unwrap_or_default()
                 ),

@@ -76,7 +76,7 @@ impl std::fmt::Display for Warning {
         match self {
             Warning::UnmappedComponent { node, component } => write!(
                 f,
-                "{node}: no Duckle equivalent for {component}; the node was imported as a \
+                "{node}: no Otter ETL agent equivalent for {component}; the node was imported as a \
                  placeholder and needs replacing by hand"
             ),
             Warning::RepositoryConnection { node, component } => write!(

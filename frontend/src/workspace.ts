@@ -152,7 +152,7 @@ export async function pickWorkspaceDirectory(): Promise<string | null> {
         const result = await open({
             directory: true,
             multiple: false,
-            title: 'Choose Duckle workspace folder',
+            title: 'Choose Otter ETL agent workspace folder',
         });
         return typeof result === 'string' ? result : null;
     } catch (err) {

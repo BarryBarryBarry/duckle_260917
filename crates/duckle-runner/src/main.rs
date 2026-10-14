@@ -60,7 +60,7 @@ mod xsd_cmd;
 mod serve;
 
 const USAGE: &str = "\
-duckle-runner - run a Duckle pipeline headlessly
+duckle-runner - run an Otter ETL agent pipeline headlessly
 
 USAGE:
     duckle-runner --pipeline <file.json> [options]
@@ -150,7 +150,7 @@ under --workspace (or the pipeline's parent):
     --clear-watermark <node>     Delete a node's saved state (forces full reload); repeatable
 
     -h, --help           Print this help
-    -V, --version        Print the Duckle release this runner was built from";
+    -V, --version        Print the Otter ETL agent release this runner was built from";
 
 struct Args {
     pipeline: Option<PathBuf>,
@@ -1351,7 +1351,7 @@ fn run_quickstart() -> ExitCode {
         "\nNext:\n\
          \x20 duckle validate            compile-check every pipeline (no engine needed)\n\
          \x20 duckle --pipeline {}\n\
-         \x20 open {} in the Duckle studio to edit it visually\n\
+         \x20 open {} in the Otter ETL agent studio to edit it visually\n\
          \n\
          Docs: https://duckle.org   Components: duckle-mcp exposes them to AI agents\n",
         pipeline.display(),

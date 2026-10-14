@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Sent to the client on initialize: a compact operating guide.
 pub const INSTRUCTIONS: &str = "\
-Duckle MCP: generate, validate, run and build Duckle ETL pipelines.
+Otter ETL agent MCP: generate, validate, run and build Otter ETL agent ETL pipelines.
 
 A pipeline is JSON: { \"name\", \"nodes\": [...], \"edges\": [...] }.
 - node: { \"id\": \"n1\", \"type\": \"source|transform|sink\", \"position\": {\"x\":0,\"y\":0}, \
@@ -41,7 +41,7 @@ without the password first); never ask the user for a password. A run_pipeline r
 pub fn list_tools() -> Value {
     json!([
         tool("list_components",
-            "List Duckle components (sources, transforms, sinks, control, quality, custom code). Optionally filter by kind or a search query.",
+            "List Otter ETL agent components (sources, transforms, sinks, control, quality, custom code). Optionally filter by kind or a search query.",
             json!({ "type": "object", "properties": {
                 "kind": { "type": "string", "enum": ["source","transform","sink","control","quality","custom"], "description": "Filter to one kind." },
                 "query": { "type": "string", "description": "Case-insensitive substring over id/label/summary." },
@@ -300,12 +300,12 @@ pub fn list_tools() -> Value {
                 "duckdb": { "type": "string" }
             }, "required": ["out"] })),
         tool("list_connections",
-            "List the workspace's saved connections (secret fields masked). Each has an 'id': set it as a database node's 'connectionRef' property and leave host/username/password off the node - the saved connection supplies them at run time. 'missingSecrets' lists secrets the user has not entered yet; do not ask for them, run the pipeline and Duckle will prompt the user securely.",
+            "List the workspace's saved connections (secret fields masked). Each has an 'id': set it as a database node's 'connectionRef' property and leave host/username/password off the node - the saved connection supplies them at run time. 'missingSecrets' lists secrets the user has not entered yet; do not ask for them, run the pipeline and Otter ETL agent will prompt the user securely.",
             json!({ "type": "object", "properties": {
                 "workspace": { "type": "string" }
             }, "required": ["workspace"] })),
         tool("create_connection",
-            "Create a saved connection in the workspace connection store (.duckle/connections.duckdb) so pipelines can reference it via a node's 'connectionRef' (the returned id). Omit the password: Duckle asks the user for it securely the first time a run needs it, and stores it encrypted.",
+            "Create a saved connection in the workspace connection store (.duckle/connections.duckdb) so pipelines can reference it via a node's 'connectionRef' (the returned id). Omit the password: Otter ETL agent asks the user for it securely the first time a run needs it, and stores it encrypted.",
             json!({ "type": "object", "properties": {
                 "workspace": { "type": "string" },
                 "name": { "type": "string" },
@@ -1768,7 +1768,7 @@ pub fn read_resource(params: Value) -> Result<Value, (i64, String)> {
 }
 
 const PIPELINE_FORMAT_DOC: &str = "\
-# Duckle pipeline format
+# Otter ETL agent pipeline format
 
 ```json
 {
@@ -1801,7 +1801,7 @@ const PIPELINE_FORMAT_DOC: &str = "\
 
 pub fn list_prompts() -> Value {
     json!([
-        { "name": "generate_pipeline", "description": "Generate a Duckle pipeline from a plain-English goal.",
+        { "name": "generate_pipeline", "description": "Generate an Otter ETL agent pipeline from a plain-English goal.",
           "arguments": [ { "name": "goal", "description": "What the pipeline should do.", "required": true } ] }
     ])
 }
@@ -1820,7 +1820,7 @@ pub fn get_prompt(params: Value) -> Result<Value, (i64, String)> {
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let text = format!(
-        "Build a Duckle pipeline that: {goal}\n\nFirst call list_components and \
+        "Build an Otter ETL agent pipeline that: {goal}\n\nFirst call list_components and \
 get_component_schema to choose components and property keys. Then call create_pipeline \
 to write and validate it. Keep credentials as ${{ENV:KEY}} placeholders. {INSTRUCTIONS}"
     );

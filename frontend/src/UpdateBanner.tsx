@@ -122,7 +122,7 @@ export function UpdateBanner() {
                     <>Update failed: {updateErr} Open the releases page to download manually.</>
                 ) : (
                     <>
-                        A newer Duckle build{tag} is available. You're on {display.current_build}.
+                        A newer Otter ETL agent build{tag} is available. You're on {display.current_build}.
                     </>
                 )}
             </span>

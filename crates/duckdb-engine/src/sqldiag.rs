@@ -351,7 +351,7 @@ pub fn remote_hints(sql: &str) -> Vec<Diagnostic> {
         "INSERT" | "UPDATE" | "DELETE" | "DROP" | "TRUNCATE" | "ALTER" | "CREATE" | "GRANT"
     ) {
         out.push(hint(format!(
-            "starts with {first}, and a source position expects something that returns rows - Duckle wraps it as `SELECT * FROM (...)`. If the remote system must be changed, that is a job for a step that is allowed to change it."
+            "starts with {first}, and a source position expects something that returns rows - Otter ETL agent wraps it as `SELECT * FROM (...)`. If the remote system must be changed, that is a job for a step that is allowed to change it."
         )));
     }
 

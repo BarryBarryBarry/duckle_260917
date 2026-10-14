@@ -247,7 +247,7 @@ pub fn add_all(workspace: &Path) -> GitResult<()> {
     // ignore file was written before the list grew; without it, an older workspace
     // stays one click away from committing its own encryption key.
     write_gitignore_safety(workspace).map_err(|e| {
-        format!("nothing was staged: the ignore file that keeps Duckle's keys and secrets out of git could not be updated ({e})")
+        format!("nothing was staged: the ignore file that keeps Otter ETL agent's keys and secrets out of git could not be updated ({e})")
     })?;
     run_git(workspace, &["add", "-A"])?;
     Ok(())

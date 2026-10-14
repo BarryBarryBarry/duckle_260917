@@ -69,7 +69,7 @@ fn dependency_gate(workspace: &Path, release: &Release) -> Vec<String> {
     if release.body.files.is_empty() {
         problems.push(
             "this release stored no content, so activating it would move a pointer without \
-             changing what runs. Rebuild it with a newer Duckle."
+             changing what runs. Rebuild it with a newer Otter ETL agent."
                 .to_string(),
         );
     }

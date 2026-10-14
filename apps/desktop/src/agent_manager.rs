@@ -411,7 +411,7 @@ fn write_mcp_config(config: &AgentConfig) -> Result<(), String> {
             "command": config.mcp_bin.to_string_lossy().into_owned(),
             "args": [],
             "exposure": "direct",
-            "description": "Duckle ETL pipeline tools",
+            "description": "Otter ETL agent ETL pipeline tools",
         }),
     );
     write_json_atomic(&path, &root)

@@ -145,7 +145,7 @@ impl Decoder {
                 }
                 Err(format!(
                     "pgoutput: TRUNCATE of {} cannot be expressed as row changes. Publish only \
-                     insert, update and delete (the publication Duckle creates does), and reload \
+                     insert, update and delete (the publication Otter ETL agent creates does), and reload \
                      the table if it really was emptied",
                     names.join(", ")
                 ))

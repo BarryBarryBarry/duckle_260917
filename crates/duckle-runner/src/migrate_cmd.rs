@@ -197,7 +197,7 @@ pub fn run() -> ExitCode {
             }
         }
         if !refused.is_empty() {
-            println!("\nwritten by a newer Duckle, left alone:");
+            println!("\nwritten by a newer Otter ETL agent, left alone:");
             for r in &refused {
                 println!("    {r}");
             }
@@ -332,7 +332,7 @@ mod tests {
         let (plans, refused) = survey(&ws).unwrap();
         assert!(plans.is_empty(), "must not plan to rewrite it");
         assert_eq!(refused.len(), 1);
-        assert!(refused[0].contains("Upgrade Duckle"), "{refused:?}");
+        assert!(refused[0].contains("Upgrade Otter ETL agent"), "{refused:?}");
     }
 
     #[test]

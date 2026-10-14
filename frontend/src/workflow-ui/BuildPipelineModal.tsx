@@ -89,10 +89,10 @@ export default function BuildPipelineModal({
 
     const unsupportedNote = !targetSupported
         ? targetOs === 'macos'
-            ? "Building a macOS file requires a Mac. Apple's toolchain and code signing are only available on macOS, so run Duckle on a Mac to build it."
+            ? "Building a macOS file requires a Mac. Apple's toolchain and code signing are only available on macOS, so run Otter ETL agent on a Mac to build it."
             : targetOs === 'windows'
-            ? 'Building a Windows file requires running Duckle on Windows.'
-            : 'This build cannot target Linux: the Linux runner was not bundled. Rebuild Duckle after staging it (scripts/build-runner-linux.sh).'
+            ? 'Building a Windows file requires running Otter ETL agent on Windows.'
+            : 'This build cannot target Linux: the Linux runner was not bundled. Rebuild Otter ETL agent after staging it (scripts/build-runner-linux.sh).'
         : null;
 
     const canBuild =
