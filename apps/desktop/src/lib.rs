@@ -410,7 +410,16 @@ async fn autodetect_schema(
         None => {}
     }
     let inspection = match engine() {
-        Ok(eng) => match eng.inspect(&format, options.clone()) {
+        // Off the async runtime, as connection_test is: the engine blocks, and a
+        // reader that drives a runtime of its own (SQL Server's) panics on a
+        // thread that is already driving this one (#375).
+        Ok(eng) => match tokio::task::spawn_blocking({
+            let (format, options) = (format.clone(), options.clone());
+            move || eng.inspect(&format, options)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        {
             Ok(insp) => insp,
             Err(e) => {
                 tracing::warn!(
@@ -2602,6 +2611,29 @@ mod tests {
         // With no workspace to resolve it from, the reason is said.
         let err = compile_pipeline(pipeline, None).unwrap_err();
         assert!(err.contains("saved connection"), "{err}");
+    }
+
+    /// #375: Autodetect on a SQL Server source failed every time, whatever the
+    /// table, with "the SQL Server driver panicked running a catalog query". The
+    /// command is async and called the engine on the async runtime; the SQL
+    /// Server reader blocks on a runtime of its own, and tokio panics when a
+    /// thread that is already driving one tries. Nothing listens on the port,
+    /// so the answer has to be the connection failing: the reader really ran.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn autodetect_runs_a_sqlserver_source_off_the_async_runtime() {
+        let Some(bin) = std::env::var_os("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN to a duckdb CLI to run");
+            return;
+        };
+        let _ = DUCKDB_BIN.set(PathBuf::from(bin));
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let options = serde_json::json!({
+            "host": "127.0.0.1", "port": port, "user": "etl", "password": "p",
+            "database": "sales", "tableName": "orders", "encrypt": false
+        });
+        let err = autodetect_schema("sqlserver".into(), options, None).await.unwrap_err();
+        assert!(!err.contains("panicked"), "{err}");
+        assert!(err.contains("connect"), "the reader tried the server: {err}");
     }
 
     /// #361: on a Wayland session with no X server the window never opened -
