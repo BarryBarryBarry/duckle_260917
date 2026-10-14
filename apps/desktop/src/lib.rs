@@ -2636,6 +2636,28 @@ mod tests {
         assert!(err.contains("connect"), "the reader tried the server: {err}");
     }
 
+    /// #371: deleting a pipeline, dive or dashboard in the desktop app left its
+    /// file on disk, and a pipeline file is registered again when the workspace
+    /// opens, so a deleted pipeline came back under its id. The editor deletes
+    /// through the fs plugin, but the window was never granted `remove`: the
+    /// plugin refused and the editor only logged it. The web edition deletes.
+    /// Resolved by Tauri's own ACL code from the plugin permission sets
+    /// tauri-build wrote for this build, and checked the way a call is checked.
+    #[test]
+    fn the_main_window_is_allowed_to_remove_files() {
+        use tauri::utils::acl::{capability::Capability, manifest::Manifest, resolved::Resolved};
+        let read = |p: &str| std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(p)).unwrap();
+        let acl: std::collections::BTreeMap<String, Manifest> =
+            serde_json::from_str(&read("gen/schemas/acl-manifests.json")).unwrap();
+        let cap: Capability = serde_json::from_str(&read("capabilities/default.json")).unwrap();
+        let caps = [(cap.identifier.clone(), cap)].into();
+        let resolved = Resolved::resolve(&acl, caps, tauri::utils::platform::Target::current()).unwrap();
+        let authority = tauri::runtime_authority!(acl, resolved);
+        let local = tauri::ipc::Origin::Local;
+        assert!(authority.resolve_access("plugin:fs|write_text_file", "main", "main", &local).is_some());
+        assert!(authority.resolve_access("plugin:fs|remove", "main", "main", &local).is_some());
+    }
+
     /// #361: on a Wayland session with no X server the window never opened -
     /// "Failed to initialize gtk backend!" - because the #169 workaround sent
     /// GTK to X11 whenever WAYLAND_DISPLAY was set, and there was no X11 to go
