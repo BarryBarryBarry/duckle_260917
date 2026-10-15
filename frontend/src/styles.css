@@ -10359,14 +10359,6 @@ select.modal-select:focus {
     font-size: 1.4cqw;
     font-weight: 700;
 }
-.auth-hero-node-sub {
-    font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 1.5cqw;
-    color: var(--text-3);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
 .auth-hero-chip {
     position: absolute;
     display: inline-flex;

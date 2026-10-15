@@ -296,9 +296,9 @@ const GROUP_ICON: Record<ModuleGroup, typeof Workflow> = { build: Workflow, oper
 function HeroArt({ groups }: { groups: GroupFigure[] }) {
     const { t } = useTranslation();
     const nodes = [
-        { kind: 'source', name: 'MySQL', sub: 'orders' },
-        { kind: 'transform', name: 'Filter', sub: "status = 'paid'" },
-        { kind: 'sink', name: 'PostgreSQL', sub: 'new_order' },
+        { kind: 'source', name: 'MySQL' },
+        { kind: 'transform', name: 'Filter' },
+        { kind: 'sink', name: 'PostgreSQL' },
     ] as const;
     return (
         <div className="auth-hero-art" aria-hidden="true">
@@ -321,7 +321,6 @@ function HeroArt({ groups }: { groups: GroupFigure[] }) {
                                 <span className="auth-hero-node-seq">{i + 1}</span>
                                 {n.name}
                             </span>
-                            <span className="auth-hero-node-sub">{n.sub}</span>
                         </div>
                     ))}
                 </div>
