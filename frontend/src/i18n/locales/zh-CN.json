@@ -724,5 +724,11 @@
       "bottomLeft": "拖动以调整 {{name}} 面板大小（左下角）",
       "bottomRight": "拖动以调整 {{name}} 面板大小（右下角）"
     }
+  },
+  "toolStrip": {
+    "aria": "工具窗口",
+    "properties": "属性",
+    "propertiesTitle": "打开或关闭属性面板",
+    "agentTitle": "打开或关闭 Agent"
   }
 }

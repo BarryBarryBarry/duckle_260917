@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Edge, Node } from '@xyflow/react';
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, MousePointer2, Workflow } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronRight, MousePointer2, Workflow } from 'lucide-react';
 import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema, deriveSchemaFromEngine, diagnosticsFor } from '../schema-resolve';
 import { analyzeNodeSql } from '../tauri-bridge';
 import { setSqlContext } from './fields/sql-context';
@@ -137,6 +137,8 @@ type Props = {
     onUpdate: (id: string, patch: Partial<DuckleNodeData>) => void;
     onOpenMapper?: (nodeId: string) => void;
     focusNameRequest?: number;
+    /** Hide the panel; the right tool strip shows it again. */
+    onHide: () => void;
 };
 
 export default function PropertiesPanel({
@@ -149,6 +151,7 @@ export default function PropertiesPanel({
     onUpdate,
     onOpenMapper,
     focusNameRequest,
+    onHide,
 }: Props) {
     const { t } = useTranslation();
     const [tab, setTab] = useState<TabId>('basic');
@@ -254,22 +257,6 @@ export default function PropertiesPanel({
         return { id: item.id, name: item.name, variables: payload?.variables ?? [] };
     }, [activeContextId, repoItems]);
 
-    // Right panel collapse: a thin rail on the right edge with an expand button,
-    // so the canvas can use the full width. Persists per machine.
-    const [collapsed, setCollapsed] = useState(
-        () => localStorage.getItem('duckle.properties.collapsed') === '1',
-    );
-    const toggleCollapsed = () =>
-        setCollapsed(c => {
-            const next = !c;
-            try {
-                localStorage.setItem('duckle.properties.collapsed', next ? '1' : '0');
-            } catch {
-                /* localStorage unavailable - non-fatal */
-            }
-            return next;
-        });
-
     // #102 item 4a: drag the panel's left edge to resize; width persists per machine.
     const [panelWidth, setPanelWidth] = useState<number>(() => {
         const saved = Number(localStorage.getItem('duckle.properties.width'));
@@ -299,22 +286,6 @@ export default function PropertiesPanel({
         document.addEventListener('mouseup', onUp);
     };
 
-    if (collapsed) {
-        return (
-            <aside className="properties properties-collapsed" data-tour="properties">
-                <button
-                    type="button"
-                    className="properties-collapse-toggle"
-                    onClick={toggleCollapsed}
-                    title={t('properties.expandPanel', { defaultValue: 'Expand panel' })}
-                    aria-label={t('properties.expandPanel', { defaultValue: 'Expand panel' })}
-                >
-                    <ChevronLeft size={16} />
-                </button>
-            </aside>
-        );
-    }
-
     if (!selected) {
         return (
             <aside className="properties" data-tour="properties" style={{ width: panelWidth }}>
@@ -322,7 +293,7 @@ export default function PropertiesPanel({
                 <button
                     type="button"
                     className="properties-collapse-toggle properties-collapse-toggle-float"
-                    onClick={toggleCollapsed}
+                    onClick={onHide}
                     title={t('properties.collapsePanel', { defaultValue: 'Collapse panel' })}
                     aria-label={t('properties.collapsePanel', { defaultValue: 'Collapse panel' })}
                 >
@@ -447,7 +418,7 @@ export default function PropertiesPanel({
             <button
                 type="button"
                 className="properties-collapse-toggle properties-collapse-toggle-float"
-                onClick={toggleCollapsed}
+                onClick={onHide}
                 title={t('properties.collapsePanel', { defaultValue: 'Collapse panel' })}
                 aria-label={t('properties.collapsePanel', { defaultValue: 'Collapse panel' })}
             >

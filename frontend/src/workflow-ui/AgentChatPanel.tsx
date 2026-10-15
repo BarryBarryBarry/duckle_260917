@@ -76,7 +76,12 @@ type Props = {
     connections?: RepoItem[];
     /** Save a connection (id null = new) to the connection store; resolves to its id. */
     onSaveConnection?: (id: string | null, name: string, payload: Record<string, unknown>) => Promise<string>;
+    /** `side`: docked as a tool window beside the canvas, filling its
+     *  container, instead of a floating, draggable window. */
+    placement?: 'floating' | 'side';
 };
+
+const SIDE_SIDEBAR_KEY = 'pi-agent-side-sidebar';
 
 type ToolCall = {
     id: string;
@@ -437,6 +442,7 @@ export default function AgentChatPanel({
     onOpenSettings,
     connections = NO_CONNECTIONS,
     onSaveConnection,
+    placement = 'floating',
 }: Props) {
     const { t } = useTranslation();
     const workspace = useMemo(() => workspaceProp ?? getWorkspacePath(), [workspaceProp]);
@@ -481,9 +487,34 @@ export default function AgentChatPanel({
         resizeHandles,
         toggleCollapsed,
         toggleMaximized,
-        toggleSidebar,
-        sidebarShown,
+        toggleSidebar: toggleFloatingSidebar,
+        sidebarShown: floatingSidebarShown,
     } = useFloatingPanel('pi-agent-panel-position', 'Agent', AGENT_PANEL_LIMITS);
+    const side = placement === 'side';
+    // Docked beside the canvas, the history sidebar is simply on or off: the
+    // tool window's width is the user's, so it is not grown to make room.
+    const [sideSidebar, setSideSidebar] = useState(() => {
+        try {
+            return localStorage.getItem(SIDE_SIDEBAR_KEY) === '1';
+        } catch {
+            return false;
+        }
+    });
+    const sidebarShown = side ? sideSidebar : floatingSidebarShown;
+    const toggleSidebar = () => {
+        if (!side) {
+            toggleFloatingSidebar();
+            return;
+        }
+        setSideSidebar(prev => {
+            try {
+                localStorage.setItem(SIDE_SIDEBAR_KEY, prev ? '0' : '1');
+            } catch {
+                /* localStorage unavailable - non-fatal */
+            }
+            return !prev;
+        });
+    };
     /** The conversation whose Pi session is running, if any. */
     const startedConversationRef = useRef<string | null>(null);
     /** Serializes history writes so a slow save cannot land after a newer one. */
@@ -1211,20 +1242,21 @@ export default function AgentChatPanel({
     const ready = setup.phase === 'ready';
     // Docked, a ready panel keeps its conversation and input; anything else
     // (installing, checking) shrinks to the header as before.
-    const headerOnly = layout.collapsed && !(docked && ready);
+    const headerOnly = !side && layout.collapsed && !(docked && ready);
+    const floatingClasses = side
+        ? 'agent-chat-panel-side'
+        : `${dragging ? 'chat-panel-dragging' : ''} ${resizing ? 'chat-panel-resizing' : ''} ${
+              headerOnly ? 'chat-panel-collapsed' : ''
+          } ${docked ? 'chat-panel-docked' : ''} ${layout.maximized ? 'chat-panel-maximized' : ''}`;
 
     return (
         <aside
-            className={`chat-panel agent-chat-panel ${dragging ? 'chat-panel-dragging' : ''} ${
-                resizing ? 'chat-panel-resizing' : ''
-            } ${headerOnly ? 'chat-panel-collapsed' : ''} ${docked ? 'chat-panel-docked' : ''} ${
-                layout.maximized ? 'chat-panel-maximized' : ''
-            }`}
+            className={`chat-panel agent-chat-panel ${floatingClasses}`}
             role="complementary"
             aria-label="Agent"
-            style={panelStyle}
+            style={side ? undefined : panelStyle}
         >
-            <header className="chat-panel-head" {...headerProps}>
+            <header className="chat-panel-head" {...(side ? {} : headerProps)}>
                 <div className="chat-panel-title-wrap">
                     <div className="chat-panel-title">
                         <Bot size={14} aria-hidden="true" />
@@ -1253,30 +1285,34 @@ export default function AgentChatPanel({
                     ) : null}
                 </div>
                 <div className="chat-panel-head-actions">
-                    <span className="chat-panel-drag-hint">{t('panel.dragHint')}</span>
-                    <button
-                        type="button"
-                        className="chat-panel-head-btn"
-                        onClick={toggleCollapsed}
-                        title={layout.collapsed ? t('panel.restore', { name: 'Agent' }) : t('panel.minimize', { name: 'Agent' })}
-                        aria-label={layout.collapsed ? t('panel.restore', { name: 'Agent' }) : t('panel.minimize', { name: 'Agent' })}
-                    >
-                        {layout.collapsed ? (
-                            docked ? <ChevronUp size={14} /> : <ChevronDown size={14} />
-                        ) : (
-                            <Minus size={14} />
-                        )}
-                    </button>
-                    <button
-                        type="button"
-                        className="chat-panel-head-btn"
-                        onClick={toggleMaximized}
-                        title={layout.maximized ? t('panel.restoreSize', { name: 'Agent' }) : t('panel.maximize', { name: 'Agent' })}
-                        aria-label={layout.maximized ? t('panel.restoreSize', { name: 'Agent' }) : t('panel.maximize', { name: 'Agent' })}
-                        aria-pressed={layout.maximized}
-                    >
-                        {layout.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                    </button>
+                    {side ? null : (
+                        <>
+                            <span className="chat-panel-drag-hint">{t('panel.dragHint')}</span>
+                            <button
+                                type="button"
+                                className="chat-panel-head-btn"
+                                onClick={toggleCollapsed}
+                                title={layout.collapsed ? t('panel.restore', { name: 'Agent' }) : t('panel.minimize', { name: 'Agent' })}
+                                aria-label={layout.collapsed ? t('panel.restore', { name: 'Agent' }) : t('panel.minimize', { name: 'Agent' })}
+                            >
+                                {layout.collapsed ? (
+                                    docked ? <ChevronUp size={14} /> : <ChevronDown size={14} />
+                                ) : (
+                                    <Minus size={14} />
+                                )}
+                            </button>
+                            <button
+                                type="button"
+                                className="chat-panel-head-btn"
+                                onClick={toggleMaximized}
+                                title={layout.maximized ? t('panel.restoreSize', { name: 'Agent' }) : t('panel.maximize', { name: 'Agent' })}
+                                aria-label={layout.maximized ? t('panel.restoreSize', { name: 'Agent' }) : t('panel.maximize', { name: 'Agent' })}
+                                aria-pressed={layout.maximized}
+                            >
+                                {layout.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                            </button>
+                        </>
+                    )}
                     <button
                         type="button"
                         className="chat-panel-close"
@@ -1510,7 +1546,7 @@ export default function AgentChatPanel({
                     </div>
                 </div>
             )}
-            {resizeHandles}
+            {side ? null : resizeHandles}
             {sourceMenuOpen ? (
                 <DataSourceMenu
                     anchor={sourceButtonRef.current}

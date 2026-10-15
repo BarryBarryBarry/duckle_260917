@@ -503,6 +503,91 @@ textarea:focus-visible {
     min-height: 0;
 }
 
+/* The tool strip on the workspace's right edge (as in IntelliJ IDEA): one
+   icon-and-label button per tool window. */
+.tool-strip {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    flex: none;
+    width: 52px;
+    padding: 6px 4px;
+    background: var(--bg-1);
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+}
+.tool-strip-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    width: 100%;
+    padding: 7px 2px 6px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-2);
+    font: inherit;
+    cursor: pointer;
+    transition: background 80ms ease, color 80ms ease;
+}
+.tool-strip-btn:hover:not(:disabled) {
+    background: var(--bg-2);
+    color: var(--text-1);
+}
+.tool-strip-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+.tool-strip-btn-active,
+.tool-strip-btn-active:hover:not(:disabled) {
+    background: var(--accent-soft);
+    color: var(--accent-text);
+}
+.tool-strip-icon {
+    display: inline-flex;
+}
+.tool-strip-label {
+    max-width: 100%;
+    font-size: 0.6923rem;
+    line-height: 1.2;
+    text-align: center;
+    overflow-wrap: anywhere;
+}
+
+/* A tool window docked between the canvas and the strip. */
+.tool-window {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    min-height: 0;
+    min-width: 0;
+    background: var(--bg-1);
+    border-left: 1px solid var(--border);
+}
+.tool-window[hidden] {
+    display: none;
+}
+.tool-window-resize {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 5px;
+    cursor: ew-resize;
+    z-index: 3;
+}
+.tool-window-resize:hover,
+.tool-window-resizing .tool-window-resize {
+    background: var(--accent);
+    opacity: 0.5;
+}
+.tool-window-resizing {
+    user-select: none;
+}
+
 /* Palette ---------------------------------------------------------------- */
 .palette {
     width: var(--sidebar-w);
@@ -2182,13 +2267,6 @@ textarea:focus-visible {
     min-height: 0;
     flex-shrink: 0;
     position: relative;
-}
-
-/* Collapsed: a thin rail on the right edge with an expand button. */
-.properties.properties-collapsed {
-    width: 32px;
-    align-items: center;
-    padding-top: 8px;
 }
 
 .properties-collapse-toggle {
@@ -8300,6 +8378,26 @@ select.modal-select:focus {
    empty-state art and spacing as it gets small. */
 .agent-chat-panel {
     container: agent-panel / inline-size;
+}
+/* Docked as a tool window: it fills the window beside the canvas instead of
+   floating over it. */
+.agent-chat-panel.agent-chat-panel-side {
+    position: relative;
+    flex: 1;
+    width: 100%;
+    height: auto;
+    min-height: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    animation: none;
+    z-index: auto;
+}
+.agent-chat-panel-side .chat-panel-head {
+    cursor: default;
+}
+:root[data-theme='light'] .agent-chat-panel-side {
+    box-shadow: none;
 }
 .agent-chat-panel .chat-panel-main {
     container: agent-main / size;

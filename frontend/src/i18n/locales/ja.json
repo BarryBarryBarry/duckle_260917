@@ -616,5 +616,11 @@
       "bottomLeft": "ドラッグして {{name}} パネルのサイズを変更（左下）",
       "bottomRight": "ドラッグして {{name}} パネルのサイズを変更（右下）"
     }
+  },
+  "toolStrip": {
+    "aria": "ツールウィンドウ",
+    "properties": "プロパティ",
+    "propertiesTitle": "プロパティパネルを表示/非表示",
+    "agentTitle": "Agent を表示/非表示"
   }
 }

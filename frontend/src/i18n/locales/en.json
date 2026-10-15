@@ -759,5 +759,11 @@
       "bottomLeft": "Drag to resize the {{name}} panel (bottom-left corner)",
       "bottomRight": "Drag to resize the {{name}} panel (bottom-right corner)"
     }
+  },
+  "toolStrip": {
+    "aria": "Tool windows",
+    "properties": "Properties",
+    "propertiesTitle": "Show or hide the Properties panel",
+    "agentTitle": "Show or hide the Agent"
   }
 }

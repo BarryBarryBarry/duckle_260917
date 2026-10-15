@@ -12,7 +12,7 @@ import {
     type OnSelectionChangeParams,
 } from '@xyflow/react';
 import type { ConnectionType } from './canvas/connection-types';
-import { BarChart3, Bot, Braces, FolderOpen, GitBranch, LayoutDashboard, Loader2, Moon, PanelLeftClose, PanelLeftOpen, RotateCw, ShieldCheck, Sparkles, Sun, Waypoints } from 'lucide-react';
+import { BarChart3, Bot, Braces, FolderOpen, GitBranch, LayoutDashboard, Loader2, Moon, PanelLeftClose, PanelLeftOpen, RotateCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import LanguageSelector from './i18n/LanguageSelector';
 import { UpdateBanner } from './UpdateBanner';
@@ -50,6 +50,7 @@ import EngineSetupModal from './workflow-ui/EngineSetupModal';
 import SetupWizard from './workflow-ui/SetupWizard';
 import ChatPanel from './workflow-ui/ChatPanel';
 import AgentChatPanel from './workflow-ui/AgentChatPanel';
+import { RightToolStrip, SideToolWindow, type RightTool } from './workflow-ui/RightToolStrip';
 import GitPanel from './workflow-ui/GitPanel';
 import WindowControls from './workflow-ui/WindowControls';
 import WindowResizeHandles from './workflow-ui/WindowResizeHandles';
@@ -417,11 +418,27 @@ export default function App() {
     useEffect(() => {
         if (showChatPanel) setChatPanelMounted(true);
     }, [showChatPanel]);
-    const [showAgentPanel, setShowAgentPanel] = useState(false);
-    const [agentPanelMounted, setAgentPanelMounted] = useState(false);
+    // The tool window docked on the right (as in IntelliJ IDEA), opened from
+    // the tool strip on the right edge. Persists per machine; before the strip,
+    // the properties panel kept its own collapsed flag, which seeds it once.
+    const [rightTool, setRightTool] = useState<RightTool | null>(() => {
+        try {
+            const saved = localStorage.getItem('duckle.rightTool');
+            if (saved === 'properties' || saved === 'agent') return saved;
+            if (saved === 'none') return null;
+            return localStorage.getItem('duckle.properties.collapsed') === '1' ? null : 'properties';
+        } catch {
+            return 'properties';
+        }
+    });
     useEffect(() => {
-        if (showAgentPanel) setAgentPanelMounted(true);
-    }, [showAgentPanel]);
+        try {
+            localStorage.setItem('duckle.rightTool', rightTool ?? 'none');
+        } catch {
+            /* localStorage unavailable - non-fatal */
+        }
+    }, [rightTool]);
+    const toggleRightTool = useCallback((tool: RightTool) => setRightTool(cur => (cur === tool ? null : tool)), []);
     const [showGitPanel, setShowGitPanel] = useState(false);
 
     useEffect(() => {
@@ -452,6 +469,11 @@ export default function App() {
     useEffect(() => {
         if (signedInUser && workspacePathState) rememberWorkspace(signedInUser, workspacePathState);
     }, [signedInUser, workspacePathState]);
+    const showAgentPanel = rightTool === 'agent' && !!workspacePathState;
+    const [agentPanelMounted, setAgentPanelMounted] = useState(false);
+    useEffect(() => {
+        if (showAgentPanel) setAgentPanelMounted(true);
+    }, [showAgentPanel]);
     // In Tauri AND the web edition: stay un-ready until the workspace has
     // hydrated, so auto-save can't overwrite the server/disk files with empty
     // in-memory defaults. Pure browser (no backend) is ready immediately.
@@ -1914,6 +1936,7 @@ export default function App() {
             switch (action) {
                 case 'rename':
                     setSelectedId(nodeId);
+                    setRightTool('properties');
                     setRenameRequest(n => n + 1);
                     break;
 
@@ -2640,17 +2663,6 @@ export default function App() {
                         <GitBranch size={14} />
                     </button>
                 ) : null}
-                <button
-                    type="button"
-                    className="topbar-theme-toggle"
-                    onClick={() => setShowAgentPanel(s => !s)}
-                    title="Agent"
-                    aria-label="Toggle Agent"
-                    aria-pressed={showAgentPanel}
-                    disabled={!workspacePathState}
-                >
-                    <Bot size={14} />
-                </button>
                 {DUCKIE_ENABLED ? (
                     <button
                         type="button"
@@ -2847,16 +2859,62 @@ export default function App() {
                         layoutDirection={layoutDirection}
                     />
                 </section>
-                <PropertiesPanel
-                    selected={selectedNode}
-                    allNodes={nodes}
-                    edges={edges}
-                    repoItems={repo}
-                    activeContextId={activeContextId}
-                    workspacePath={workspacePathState}
-                    onUpdate={handleUpdateNode}
-                    onOpenMapper={handleOpenMapper}
-                    focusNameRequest={renameRequest}
+                {rightTool === 'properties' ? (
+                    <PropertiesPanel
+                        selected={selectedNode}
+                        allNodes={nodes}
+                        edges={edges}
+                        repoItems={repo}
+                        activeContextId={activeContextId}
+                        workspacePath={workspacePathState}
+                        onUpdate={handleUpdateNode}
+                        onOpenMapper={handleOpenMapper}
+                        focusNameRequest={renameRequest}
+                        onHide={() => setRightTool(null)}
+                    />
+                ) : null}
+                {agentPanelMounted ? (
+                    <SideToolWindow
+                        storageKey="duckle.agentWindow.width"
+                        defaultWidth={460}
+                        minWidth={340}
+                        maxWidth={1100}
+                        hidden={!showAgentPanel}
+                    >
+                        <AgentChatPanel
+                            placement="side"
+                            workspace={workspacePathState}
+                            open={showAgentPanel}
+                            onClose={() => setRightTool(null)}
+                            onOpenPipeline={handleOpenPersistedPipeline}
+                            onWorkspaceChanged={handleReloadWorkspace}
+                            onOpenSettings={() => setShowSettings(true)}
+                            connections={savedConnections}
+                            onSaveConnection={handleAgentSaveConnection}
+                        />
+                    </SideToolWindow>
+                ) : null}
+                <RightToolStrip
+                    ariaLabel={t('toolStrip.aria')}
+                    active={showAgentPanel ? 'agent' : rightTool === 'properties' ? 'properties' : null}
+                    onToggle={toggleRightTool}
+                    items={[
+                        {
+                            id: 'properties',
+                            label: t('toolStrip.properties'),
+                            icon: <SlidersHorizontal size={18} />,
+                            title: t('toolStrip.propertiesTitle'),
+                            // The guided tour points here while the panel is hidden.
+                            tour: rightTool === 'properties' ? undefined : 'properties',
+                        },
+                        {
+                            id: 'agent',
+                            label: 'Agent',
+                            icon: <Bot size={18} />,
+                            disabled: !workspacePathState,
+                            title: t('toolStrip.agentTitle'),
+                        },
+                    ]}
                 />
             </main>
 
@@ -2929,19 +2987,6 @@ export default function App() {
                     onInsertPipeline={handleInsertAiPipeline}
                     onPersistedPipeline={handleOpenPersistedPipeline}
                     onConnectionsChanged={handleReloadWorkspace}
-                />
-            ) : null}
-
-            {showAgentPanel || agentPanelMounted ? (
-                <AgentChatPanel
-                    workspace={workspacePathState}
-                    open={showAgentPanel}
-                    onClose={() => setShowAgentPanel(false)}
-                    onOpenPipeline={handleOpenPersistedPipeline}
-                    onWorkspaceChanged={handleReloadWorkspace}
-                    onOpenSettings={() => setShowSettings(true)}
-                    connections={savedConnections}
-                    onSaveConnection={handleAgentSaveConnection}
                 />
             ) : null}
 
