@@ -187,6 +187,7 @@ const ALL_STEPS: Step[] = [
         title: 'Column lineage',
         body: 'Trace any output column back through every transform to the source columns it came from. Worth doing before you change a query somebody else depends on.',
         placement: 'bottom',
+        requireAnchor: true,
     },
     {
         sel: '[data-tour="trust"]',
@@ -194,6 +195,7 @@ const ALL_STEPS: Step[] = [
         title: 'Trust report',
         body: 'A 0-100 score where every lost point is a named finding: whether the pipeline compiles, structural risks, and columns that look like personal data with no mask or contract tag. Switch on live schema drift to read each source now and compare it with the schema its node declares. Use it to mark a pipeline review-ready.',
         placement: 'bottom',
+        requireAnchor: true,
     },
     {
         sel: '[data-tour="dives"]',

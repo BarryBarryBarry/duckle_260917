@@ -115,7 +115,14 @@ import type {
 import { getDefaults, getManifest } from './workflow-ui/fields/component-manifests';
 import type { DuckleNodeData } from './pipeline-types';
 import { flowTypeForComponent, normalizePipelineForCanvas } from './canvas/normalize-pipeline';
-import { DUCKIE_ENABLED } from './features';
+import {
+    DUCKIE_ENABLED,
+    TOPBAR_DIVES,
+    TOPBAR_GIT,
+    TOPBAR_LINEAGE,
+    TOPBAR_TRUST,
+    TOPBAR_WEB_DASHBOARD,
+} from './features';
 import type { DropPosition, NodeAction, PaneAction } from './canvas/Canvas';
 import { useUndoRedo, type CanvasSnapshot } from './useUndoRedo';
 import type { RepoItem } from './repo-types';
@@ -2504,7 +2511,7 @@ export default function App() {
                         </select>
                     </div>
                 ) : null}
-                {workspacePathState && isInTauri() ? (
+                {TOPBAR_WEB_DASHBOARD && workspacePathState && isInTauri() ? (
                     <button
                         type="button"
                         className="topbar-theme-toggle dashboard-glow-btn"
@@ -2525,7 +2532,7 @@ export default function App() {
                         <LayoutDashboard size={14} className="dashboard-icon-glow" />
                     </button>
                 ) : null}
-                {!hideDivesButton ? (
+                {TOPBAR_DIVES && !hideDivesButton ? (
                     <button
                         type="button"
                         className="topbar-theme-toggle"
@@ -2537,26 +2544,30 @@ export default function App() {
                         <BarChart3 size={14} />
                     </button>
                 ) : null}
-                <button
-                    type="button"
-                    className="topbar-theme-toggle"
-                    data-tour="lineage"
-                    onClick={() => setShowLineage(true)}
-                    title="Column lineage - trace each column back to its sources"
-                    aria-label="Open column lineage"
-                >
-                    <Waypoints size={14} />
-                </button>
-                <button
-                    type="button"
-                    className="topbar-theme-toggle"
-                    data-tour="trust"
-                    onClick={() => setShowTrust(true)}
-                    title="Trust score - an explainable score for this pipeline"
-                    aria-label="Open trust score"
-                >
-                    <ShieldCheck size={14} />
-                </button>
+                {TOPBAR_LINEAGE ? (
+                    <button
+                        type="button"
+                        className="topbar-theme-toggle"
+                        data-tour="lineage"
+                        onClick={() => setShowLineage(true)}
+                        title="Column lineage - trace each column back to its sources"
+                        aria-label="Open column lineage"
+                    >
+                        <Waypoints size={14} />
+                    </button>
+                ) : null}
+                {TOPBAR_TRUST ? (
+                    <button
+                        type="button"
+                        className="topbar-theme-toggle"
+                        data-tour="trust"
+                        onClick={() => setShowTrust(true)}
+                        title="Trust score - an explainable score for this pipeline"
+                        aria-label="Open trust score"
+                    >
+                        <ShieldCheck size={14} />
+                    </button>
+                ) : null}
                 <button
                     type="button"
                     className="topbar-theme-toggle"
@@ -2577,18 +2588,20 @@ export default function App() {
                 >
                     <SettingsIcon size={14} />
                 </button>
-                <button
-                    type="button"
-                    className="topbar-theme-toggle"
-                    data-tour="git"
-                    onClick={() => setShowGitPanel(s => !s)}
-                    title={t('topbar.git')}
-                    aria-label={t('topbar.gitAriaToggle')}
-                    aria-pressed={showGitPanel}
-                    disabled={!workspacePathState}
-                >
-                    <GitBranch size={14} />
-                </button>
+                {TOPBAR_GIT ? (
+                    <button
+                        type="button"
+                        className="topbar-theme-toggle"
+                        data-tour="git"
+                        onClick={() => setShowGitPanel(s => !s)}
+                        title={t('topbar.git')}
+                        aria-label={t('topbar.gitAriaToggle')}
+                        aria-pressed={showGitPanel}
+                        disabled={!workspacePathState}
+                    >
+                        <GitBranch size={14} />
+                    </button>
+                ) : null}
                 <button
                     type="button"
                     className="topbar-theme-toggle"
