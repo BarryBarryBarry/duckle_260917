@@ -16,3 +16,5 @@ export const TOPBAR_LINEAGE = false;
 export const TOPBAR_TRUST = false;
 /** Git version control panel. */
 export const TOPBAR_GIT = false;
+/** Execution engine picker (DuckDB, ...). The current engine still applies. */
+export const TOPBAR_ENGINE_SELECTOR = false;

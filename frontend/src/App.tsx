@@ -118,6 +118,7 @@ import { flowTypeForComponent, normalizePipelineForCanvas } from './canvas/norma
 import {
     DUCKIE_ENABLED,
     TOPBAR_DIVES,
+    TOPBAR_ENGINE_SELECTOR,
     TOPBAR_GIT,
     TOPBAR_LINEAGE,
     TOPBAR_TRUST,
@@ -2460,7 +2461,9 @@ export default function App() {
                     </span>
                 </div>
                 <div className="topbar-sep" aria-hidden="true" />
-                <EngineSelector value={engine} onChange={setEngine} />
+                {TOPBAR_ENGINE_SELECTOR ? (
+                    <EngineSelector value={engine} onChange={setEngine} />
+                ) : null}
                 <button
                     type="button"
                     className="topbar-theme-toggle"
