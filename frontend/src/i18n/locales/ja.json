@@ -125,7 +125,22 @@
     "thinking": "Thinking...",
     "placeholder": "Describe what you need...",
     "sendAria": "Send",
-    "sendTooltip": "Send (Enter)"
+    "sendTooltip": "Send (Enter)",
+    "stage": {
+      "thinking": "考え中",
+      "dshConnected": "DSH に接続済み",
+      "callingTool": "ツールを呼び出し中",
+      "toolDone": "ツール完了",
+      "toolFailed": "ツールの呼び出しに失敗",
+      "seeError": "エラーメッセージを確認してください",
+      "updated": "pipeline を更新しました",
+      "created": "pipeline を作成しました",
+      "runFailed": "実行に失敗しました",
+      "errorReturned": "エラーが返されました",
+      "current": "現在の段階：{{label}}",
+      "dshTokens": "DSH が報告したトークン使用量",
+      "acpEstimate": "この ACP セッションはトークン使用量を報告しなかったため、返信の長さから推定した値です"
+    }
   },
   "properties": {
     "nothingSelected": "Nothing selected",
@@ -432,6 +447,169 @@
           "step3": "NOT SET UP という行が出るまで待ちます。"
         }
       }
+    }
+  },
+  "agent": {
+    "error": {
+      "model": "モデルの呼び出しに失敗しました：{{raw}}",
+      "quota": "モデルサービスの利用枠を使い切ったため、リクエストが拒否されました。チャージするか、「設定 → AI assistant」で別のモデルに切り替えてから「続けて」と送信してください。\n\n{{raw}}",
+      "apiKey": "モデルサービスが API キーを拒否しました。「設定 → AI assistant」で確認してください。\n\n{{raw}}",
+      "rateLimit": "モデルサービスのレート制限に達しました。しばらくしてから再試行してください。\n\n{{raw}}",
+      "llmNotConfigured": "Agent は「設定 → AI assistant」の External OpenAI モデルを使いますが、現在有効になっていません。External OpenAI を選び、Base URL とモデルを入力してから再試行してください。",
+      "runtimeIncomplete": "Agent の実行環境が不完全です。パネルを閉じて再インストールしてください。",
+      "startFailed": "Agent を起動できませんでした：{{raw}}",
+      "noWorkspace": "先にワークスペースを開いてください。",
+      "exited": "Agent のプロセスが予期せず終了しました。もう一度送信してください。",
+      "truncated": "モデルの出力が 1 回あたりの長さの上限を超えて途中で切れたため、タスクは完了していません。「続けて」と送ると続きを実行します。内容が大きい場合は、まず動く骨組みを作らせてからノードを段階的に追加させてください。",
+      "cannotSaveConnection": "ここでは接続を保存できません"
+    },
+    "install": {
+      "preparing": "インストールを準備中…",
+      "downloadingOf": "Node.js をダウンロード中 {{received}} / {{total}} MB",
+      "downloading": "Node.js をダウンロード中 {{received}} MB",
+      "extracting": "ランタイムを展開中…",
+      "verifying": "検証中…",
+      "extension": "拡張機能をインストール中 ({{index}}/{{total}})",
+      "model": "モデルをダウンロード中…",
+      "done": "インストール完了"
+    },
+    "interrupted": "中断されました",
+    "connected": "接続済み",
+    "busy": "Agent が処理中",
+    "working": "処理中",
+    "you": "あなた",
+    "openSettings": "設定を開く",
+    "placeholder": "Agent に任せたい pipeline の作業を入力…",
+    "stop": "停止",
+    "dialog": {
+      "deny": "拒否",
+      "allow": "許可",
+      "submit": "送信"
+    },
+    "errorTitle": {
+      "model": "モデルの呼び出しに失敗しました",
+      "noModel": "モデルが未設定です",
+      "generic": "エラーが発生しました"
+    },
+    "empty": {
+      "title": "pipeline の作業を Agent に任せる",
+      "hint": "やりたいことを書くだけ：pipeline の作成・確認・実行・トラブルシュート。入力欄の「データソース」でソースとターゲットのデータベースを選ぶと、接続情報がメッセージと一緒に Agent に送られます。"
+    },
+    "setup": {
+      "checking": "Agent の実行環境を確認中…",
+      "title": "Agent をインストール",
+      "failedTitle": "インストールに失敗しました",
+      "body": "初回は Node.js ランタイムと Agent をダウンロードします（約 75 MB、展開後約 350 MB）。Otter ETL agent 専用のデータフォルダにインストールされます。",
+      "install": "インストール",
+      "reinstall": "再インストール",
+      "foot": "Agent は「設定 → AI assistant」の External OpenAI モデルを使います。"
+    },
+    "ds": {
+      "button": "データソース",
+      "buttonTitle": "データベース接続を選択または新規作成",
+      "menuAria": "データソースを選択",
+      "configured": "{{count}} 件の接続を設定済み",
+      "notConfigured": "未設定 — クリックして作成",
+      "dialogTitle": "{{name}} 接続",
+      "savedCount": "{{count}} 件の接続を保存済み",
+      "noneYet": "このデータベースの接続はまだありません。入力して保存してください",
+      "connection": "接続",
+      "newConnection": "+ 新しい接続",
+      "connectionName": "接続名",
+      "testTitle": "この設定でデータベースに接続し、つながるか確認します",
+      "testing": "テスト中…",
+      "test": "接続をテスト",
+      "missing": "入力してください：{{fields}}",
+      "listSep": "、",
+      "saving": "保存中…",
+      "saveAndUse": "保存して使う",
+      "use": "この接続を使う",
+      "roleTitle": "この接続の用途は？",
+      "noSourceTitle": "データソースが選択されていません",
+      "noSourceBody": "どのデータベースから読み取り、どこに書き込むかを Agent に伝えると、生成される pipeline がより正確になります。接続情報はこのメッセージと一緒に送られますが、パスワードは送信されません。",
+      "sendAnyway": "不要、このまま送信",
+      "pick": "データソースを選択",
+      "chipTitle": "{{role}}：{{name}}",
+      "editRole": "{{name}} の用途を変更",
+      "remove": "{{name}} を削除",
+      "role": {
+        "source": {
+          "title": "ソースデータベース",
+          "hint": "Agent はここからデータを読み取ります",
+          "short": "ソース"
+        },
+        "target": {
+          "title": "ターゲットデータベース",
+          "hint": "Agent は結果をここに書き込みます",
+          "short": "ターゲット"
+        },
+        "both": {
+          "title": "両方",
+          "hint": "ここから読み取り、ここに書き戻します",
+          "short": "ソース + ターゲット"
+        }
+      }
+    },
+    "run": {
+      "live": "処理中",
+      "done": "完了",
+      "thinking": "思考過程",
+      "progress": "実行状況",
+      "log": "今回の実行記録",
+      "skill": "スキルを使用 {{name}}",
+      "result": "結果",
+      "subagent": "サブ Agent · {{task}}",
+      "params": "パラメーター",
+      "details": "詳細",
+      "open": "開く",
+      "reportedTokens": "モデルサービスが報告したトークン使用量",
+      "estimatedTokens": "モデルサービスがトークン使用量を報告しなかったため、返信の長さから推定した値です"
+    },
+    "tool": {
+      "create_pipeline": "pipeline を作成",
+      "update_pipeline": "pipeline を更新",
+      "validate_pipeline": "pipeline を検証",
+      "verify_pipeline": "pipeline を確認",
+      "run_pipeline": "pipeline を実行",
+      "read_pipeline": "pipeline を読み取り",
+      "list_pipelines": "pipeline を一覧",
+      "list_components": "コンポーネントを一覧",
+      "get_component_schema": "コンポーネント schema を読み取り",
+      "check_node_sql": "ノード SQL を確認",
+      "read_run_logs": "実行ログを読み取り",
+      "list_connections": "接続を一覧",
+      "read": "ファイルを読み取り",
+      "unknown": "不明なツール"
+    }
+  },
+  "reply": {
+    "copied": "コピーしました",
+    "copy": "返信をコピー",
+    "usage": "使用量 {{value}}",
+    "elapsed": "所要時間 {{value}}",
+    "cacheHit": "（キャッシュヒット {{count}}、{{pct}}%）",
+    "input": "入力 {{count}}",
+    "output": "出力 {{count}}",
+    "calls": "モデル呼び出し {{count}} 回（毎回コンテキスト全体を再送信します）",
+    "seconds": "{{s}} 秒",
+    "minutes": "{{m}} 分 {{s}} 秒"
+  },
+  "panel": {
+    "dragHint": "ドラッグ / スナップ",
+    "minimize": "{{name}} を最小化",
+    "restore": "{{name}} を元に戻す",
+    "maximize": "{{name}} を最大化",
+    "restoreSize": "{{name}} のウィンドウサイズを元に戻す",
+    "minimized": "{{name}} は最小化されています",
+    "resize": {
+      "top": "ドラッグして {{name}} パネルの高さを変更（上端）",
+      "bottom": "ドラッグして {{name}} パネルの高さを変更（下端）",
+      "left": "ドラッグして {{name}} パネルの幅を変更（左端）",
+      "right": "ドラッグして {{name}} パネルの幅を変更（右端）",
+      "topLeft": "ドラッグして {{name}} パネルのサイズを変更（左上）",
+      "topRight": "ドラッグして {{name}} パネルのサイズを変更（右上）",
+      "bottomLeft": "ドラッグして {{name}} パネルのサイズを変更（左下）",
+      "bottomRight": "ドラッグして {{name}} パネルのサイズを変更（右下）"
     }
   }
 }

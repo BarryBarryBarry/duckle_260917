@@ -4,6 +4,7 @@
 // for the agent - read from, written to, or both.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { ArrowDownToLine, ArrowUpFromLine, Check, Database, Plug, Repeat, Save, X } from 'lucide-react';
 import ComponentIcon from './ComponentIcon';
 import FieldRenderer from './fields/FieldRenderer';
@@ -20,7 +21,6 @@ export type SourceRole = 'source' | 'target' | 'both';
 /** A saved connection the user picked for the agent, and what it is for. */
 export type PickedSource = { id: string; role: SourceRole };
 
-export const ROLE_LABEL: Record<SourceRole, string> = { source: '源', target: '目标', both: '源 + 目标' };
 
 /** The databases of the palette's Sources → Databases group whose connection
  *  this menu can configure; the others are left out rather than shown disabled. */
@@ -103,6 +103,7 @@ export function DataSourceMenu({
     onPick: (def: ComponentDef) => void;
     onClose: () => void;
 }) {
+    const { t } = useTranslation();
     const defs = useMemo(databaseSources, []);
     const pickedKinds = useMemo(() => {
         const kinds = new Set<string>();
@@ -137,8 +138,8 @@ export function DataSourceMenu({
     return createPortal(
         <>
             <div className="agent-ds-backdrop" onClick={onClose} />
-            <div className="agent-ds-menu" role="menu" aria-label="选择数据源" style={{ ...style, maxHeight: MAX_H }}>
-                <div className="agent-ds-menu-head">数据源</div>
+            <div className="agent-ds-menu" role="menu" aria-label={t('agent.ds.menuAria')} style={{ ...style, maxHeight: MAX_H }}>
+                <div className="agent-ds-menu-head">{t('agent.ds.button')}</div>
                 {defs.map(def => {
                     const kind = connectionKindOf(def);
                     const count = kind ? connectionsOfKind(connections, kind).length : 0;
@@ -154,7 +155,7 @@ export function DataSourceMenu({
                             <span className="agent-ds-item-text">
                                 <span className="agent-ds-item-name">{def.label}</span>
                                 <span className="agent-ds-item-sub">
-                                    {count > 0 ? `已配置 ${count} 个连接` : '未配置，点击新建'}
+                                    {count > 0 ? t('agent.ds.configured', { count }) : t('agent.ds.notConfigured')}
                                 </span>
                             </span>
                             {kind && pickedKinds.has(kind) ? <Check size={14} className="agent-ds-item-check" /> : null}
@@ -188,6 +189,7 @@ export function ConnectionDialog({
     onUse: (id: string) => void;
     onClose: () => void;
 }) {
+    const { t } = useTranslation();
     const kind = connectionKindOf(def) ?? '';
     const fields = useMemo(() => connectionFields(def.id), [def.id]);
     const [selected, setSelected] = useState<string>(connections[0]?.id ?? NEW);
@@ -262,18 +264,20 @@ export function ConnectionDialog({
 
     return createPortal(
         <div className="modal-backdrop agent-ds-modal-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
-            <div className="modal modal-editor agent-ds-dialog" role="dialog" aria-label={`${def.label} 连接`}>
+            <div className="modal modal-editor agent-ds-dialog" role="dialog" aria-label={t('agent.ds.dialogTitle', { name: def.label })}>
                 <div className="modal-header">
                     <div className="modal-title-row">
                         <ComponentIcon componentId={def.id} kind="source" size={16} className="modal-title-icon" />
                         <div>
-                            <div className="modal-title">{def.label} 连接</div>
+                            <div className="modal-title">{t('agent.ds.dialogTitle', { name: def.label })}</div>
                             <div className="modal-subtitle">
-                                {connections.length > 0 ? `已保存 ${connections.length} 个连接` : '还没有这种数据库的连接，填写后保存'}
+                                {connections.length > 0
+                                    ? t('agent.ds.savedCount', { count: connections.length })
+                                    : t('agent.ds.noneYet')}
                             </div>
                         </div>
                     </div>
-                    <button type="button" className="modal-close" onClick={onClose} aria-label="关闭">
+                    <button type="button" className="modal-close" onClick={onClose} aria-label={t('common.close')}>
                         <X size={16} />
                     </button>
                 </div>
@@ -281,19 +285,19 @@ export function ConnectionDialog({
                 <div className="modal-body">
                     {connections.length > 0 ? (
                         <div className="modal-field">
-                            <label className="modal-field-label">连接</label>
+                            <label className="modal-field-label">{t('agent.ds.connection')}</label>
                             <select className="modal-input" value={selected} onChange={e => setSelected(e.target.value)}>
                                 {connections.map(c => (
                                     <option key={c.id} value={c.id}>
                                         {connectionLabel(c)}
                                     </option>
                                 ))}
-                                <option value={NEW}>+ 新建连接</option>
+                                <option value={NEW}>{t('agent.ds.newConnection')}</option>
                             </select>
                         </div>
                     ) : null}
                     <div className="modal-field">
-                        <label className="modal-field-label">连接名称</label>
+                        <label className="modal-field-label">{t('agent.ds.connectionName')}</label>
                         <input
                             ref={nameRef}
                             type="text"
@@ -330,23 +334,23 @@ export function ConnectionDialog({
                         className="btn btn-secondary conn-test-button"
                         onClick={() => void handleTest()}
                         disabled={testing || missing.length > 0}
-                        title="用这些设置连接数据库，确认能连上"
+                        title={t('agent.ds.testTitle')}
                     >
                         <Plug size={13} />
-                        {testing ? '测试中…' : '测试连接'}
+                        {testing ? t('agent.ds.testing') : t('agent.ds.test')}
                     </button>
                     <button type="button" className="btn btn-secondary" onClick={onClose}>
-                        取消
+                        {t('common.cancel')}
                     </button>
                     <button
                         type="button"
                         className="btn btn-primary"
                         onClick={() => void handleSubmit()}
                         disabled={!canSubmit}
-                        title={missing.length ? `请填写：${missing.map(f => f.label).join('、')}` : undefined}
+                        title={missing.length ? t('agent.ds.missing', { fields: missing.map(f => f.label).join(t('agent.ds.listSep')) }) : undefined}
                     >
                         {needsSave ? <Save size={13} /> : <Check size={13} />}
-                        {saving ? '保存中…' : needsSave ? '保存并使用' : '使用此连接'}
+                        {saving ? t('agent.ds.saving') : needsSave ? t('agent.ds.saveAndUse') : t('agent.ds.use')}
                     </button>
                 </div>
             </div>
@@ -358,6 +362,7 @@ export function ConnectionDialog({
 // ---- the role and "no data source" dialogs -------------------------------------------
 
 function SmallDialog({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+    const { t } = useTranslation();
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
@@ -373,7 +378,7 @@ function SmallDialog({ title, children, onClose }: { title: string; children: Re
             <div className="modal agent-ds-small" role="dialog" aria-label={title}>
                 <div className="modal-header">
                     <div className="modal-title">{title}</div>
-                    <button type="button" className="modal-close" onClick={onClose} aria-label="关闭">
+                    <button type="button" className="modal-close" onClick={onClose} aria-label={t('common.close')}>
                         <X size={16} />
                     </button>
                 </div>
@@ -384,10 +389,10 @@ function SmallDialog({ title, children, onClose }: { title: string; children: Re
     );
 }
 
-const ROLE_CHOICES: { role: SourceRole; title: string; hint: string; icon: React.ReactNode }[] = [
-    { role: 'source', title: '源数据库', hint: 'Agent 从这里读取数据', icon: <ArrowDownToLine size={16} /> },
-    { role: 'target', title: '目标数据库', hint: 'Agent 把结果写到这里', icon: <ArrowUpFromLine size={16} /> },
-    { role: 'both', title: '二者都是', hint: '既从这里读取，也写回这里', icon: <Repeat size={16} /> },
+const ROLE_CHOICES: { role: SourceRole; icon: React.ReactNode }[] = [
+    { role: 'source', icon: <ArrowDownToLine size={16} /> },
+    { role: 'target', icon: <ArrowUpFromLine size={16} /> },
+    { role: 'both', icon: <Repeat size={16} /> },
 ];
 
 export function RoleDialog({
@@ -401,8 +406,9 @@ export function RoleDialog({
     onConfirm: (role: SourceRole) => void;
     onClose: () => void;
 }) {
+    const { t } = useTranslation();
     return (
-        <SmallDialog title="这个连接用作？" onClose={onClose}>
+        <SmallDialog title={t('agent.ds.roleTitle')} onClose={onClose}>
             <div className="modal-body">
                 <p className="agent-ds-small-text">
                     <Database size={13} /> {connectionName}
@@ -416,8 +422,8 @@ export function RoleDialog({
                             onClick={() => onConfirm(c.role)}
                         >
                             <span className="agent-ds-role-icon">{c.icon}</span>
-                            <span className="agent-ds-role-title">{c.title}</span>
-                            <span className="agent-ds-role-hint">{c.hint}</span>
+                            <span className="agent-ds-role-title">{t(`agent.ds.role.${c.role}.title`)}</span>
+                            <span className="agent-ds-role-hint">{t(`agent.ds.role.${c.role}.hint`)}</span>
                         </button>
                     ))}
                 </div>
@@ -435,19 +441,20 @@ export function NoSourceDialog({
     onSkip: () => void;
     onClose: () => void;
 }) {
+    const { t } = useTranslation();
     return (
-        <SmallDialog title="还没有选择数据源" onClose={onClose}>
+        <SmallDialog title={t('agent.ds.noSourceTitle')} onClose={onClose}>
             <div className="modal-body">
                 <p className="agent-ds-small-text">
-                    告诉 Agent 从哪个数据库读取、写入哪个数据库，它生成的 pipeline 会更准确。连接信息会随这条消息一起发给它，密码不会发送。
+                    {t('agent.ds.noSourceBody')}
                 </p>
             </div>
             <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={onSkip}>
-                    不需要，直接发送
+                    {t('agent.ds.sendAnyway')}
                 </button>
                 <button type="button" className="btn btn-primary" onClick={onChoose}>
-                    <Database size={13} /> 选择数据源
+                    <Database size={13} /> {t('agent.ds.pick')}
                 </button>
             </div>
         </SmallDialog>
@@ -467,18 +474,19 @@ export function PickedChips({
     onEdit: (id: string) => void;
     onRemove: (id: string) => void;
 }) {
+    const { t } = useTranslation();
     return (
         <>
             {picked.map(p => {
                 const c = connections.find(x => x.id === p.id);
                 if (!c) return null;
                 return (
-                    <span key={p.id} className={`agent-ds-chip agent-ds-chip-${p.role}`} title={`${ROLE_LABEL[p.role]}：${connectionLabel(c)}`}>
-                        <button type="button" className="agent-ds-chip-main" onClick={() => onEdit(p.id)} aria-label={`修改 ${c.name} 的用途`}>
-                            <span className="agent-ds-chip-role">{ROLE_LABEL[p.role]}</span>
+                    <span key={p.id} className={`agent-ds-chip agent-ds-chip-${p.role}`} title={t('agent.ds.chipTitle', { role: t(`agent.ds.role.${p.role}.short`), name: connectionLabel(c) })}>
+                        <button type="button" className="agent-ds-chip-main" onClick={() => onEdit(p.id)} aria-label={t('agent.ds.editRole', { name: c.name })}>
+                            <span className="agent-ds-chip-role">{t(`agent.ds.role.${p.role}.short`)}</span>
                             <span className="agent-ds-chip-name">{c.name}</span>
                         </button>
-                        <button type="button" className="agent-ds-chip-x" onClick={() => onRemove(p.id)} aria-label={`移除 ${c.name}`}>
+                        <button type="button" className="agent-ds-chip-x" onClick={() => onRemove(p.id)} aria-label={t('agent.ds.remove', { name: c.name })}>
                             <X size={11} />
                         </button>
                     </span>

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import {
     AlertCircle,
     ArrowUp,
@@ -143,13 +145,13 @@ type ChatError = {
 /** A provider failure in words the user can act on. */
 function modelError(raw: string): ChatError {
     const lower = raw.toLowerCase();
-    let message = `模型调用失败：${raw}`;
+    let message = i18n.t('agent.error.model', { raw });
     if (lower.includes('insufficient_quota') || lower.includes('quota exhausted') || lower.includes('quota')) {
-        message = `模型服务的额度已用完，请求被拒绝。请充值，或在「设置 → AI assistant」中换一个模型后，发送「继续」接着完成。\n\n${raw}`;
+        message = i18n.t('agent.error.quota', { raw });
     } else if (lower.startsWith('401') || lower.includes('invalid api key') || lower.includes('unauthorized')) {
-        message = `模型服务拒绝了 API Key，请在「设置 → AI assistant」中检查。\n\n${raw}`;
+        message = i18n.t('agent.error.apiKey', { raw });
     } else if (lower.startsWith('429') || lower.includes('rate limit')) {
-        message = `模型服务限流了，请稍后再试。\n\n${raw}`;
+        message = i18n.t('agent.error.rateLimit', { raw });
     }
     return { message, needsSettings: true, fromModel: true };
 }
@@ -158,15 +160,14 @@ function modelError(raw: string): ChatError {
 function startError(raw: string): ChatError {
     if (raw.includes('agent_llm_not_configured')) {
         return {
-            message:
-                'Agent 使用「设置 → AI assistant」中的 External OpenAI 模型，目前未启用。请选择 External OpenAI，并填写 Base URL 和模型后重试。',
+            message: i18n.t('agent.error.llmNotConfigured'),
             needsSettings: true,
         };
     }
     if (raw.includes('nodejs_not_installed') || raw.includes('pi_not_installed')) {
-        return { message: 'Agent 运行环境不完整，请关闭面板后重新安装。', needsSettings: false };
+        return { message: i18n.t('agent.error.runtimeIncomplete'), needsSettings: false };
     }
-    return { message: `Agent 无法启动：${raw}`, needsSettings: false };
+    return { message: i18n.t('agent.error.startFailed', { raw }), needsSettings: false };
 }
 
 type Message =
@@ -244,24 +245,27 @@ function connectionContext(item: RepoItem, role: SourceRole): AgentConnectionCon
 }
 
 function installLabel(progress: InstallProgress | null): string {
-    if (!progress) return '准备安装…';
+    if (!progress) return i18n.t('agent.install.preparing');
     switch (progress.phase) {
         case 'downloading':
             return progress.total
-                ? `正在下载 Node.js ${Math.round(progress.received / 1_000_000)} / ${Math.round(progress.total / 1_000_000)} MB`
-                : `正在下载 Node.js ${Math.round(progress.received / 1_000_000)} MB`;
+                ? i18n.t('agent.install.downloadingOf', {
+                      received: Math.round(progress.received / 1_000_000),
+                      total: Math.round(progress.total / 1_000_000),
+                  })
+                : i18n.t('agent.install.downloading', { received: Math.round(progress.received / 1_000_000) });
         case 'extracting':
-            return '正在解压运行时…';
+            return i18n.t('agent.install.extracting');
         case 'verifying':
-            return '正在校验…';
+            return i18n.t('agent.install.verifying');
         case 'running_command':
             return progress.label;
         case 'installing_extension':
-            return `正在安装扩展 (${progress.index}/${progress.total})`;
+            return i18n.t('agent.install.extension', { index: progress.index, total: progress.total });
         case 'downloading_model':
-            return '正在下载模型…';
+            return i18n.t('agent.install.model');
         case 'done':
-            return '安装完成';
+            return i18n.t('agent.install.done');
         case 'failed':
             return progress.error;
     }
@@ -371,7 +375,7 @@ function restoreMessages(raw: unknown[]): Message[] {
                     skills: Array.isArray(t.skills) ? t.skills.filter((x): x is string => typeof x === 'string') : [],
                     subagents: Array.isArray(t.subagents) ? t.subagents : [],
                     tools: tools.map(tool =>
-                        tool.result === undefined ? { ...tool, result: '已中断', isError: true } : tool,
+                        tool.result === undefined ? { ...tool, result: i18n.t('agent.interrupted'), isError: true } : tool,
                     ),
                     startedAt: typeof t.startedAt === 'number' ? t.startedAt : undefined,
                     finishedAt: typeof t.finishedAt === 'number' ? t.finishedAt : undefined,
@@ -431,6 +435,7 @@ export default function AgentChatPanel({
     connections = NO_CONNECTIONS,
     onSaveConnection,
 }: Props) {
+    const { t } = useTranslation();
     const workspace = useMemo(() => workspaceProp ?? getWorkspacePath(), [workspaceProp]);
     const [setup, setSetup] = useState<SetupState>({ phase: 'checking' });
     const [connected, setConnected] = useState(false);
@@ -717,7 +722,7 @@ export default function AgentChatPanel({
     /** Run the agent on this conversation's session. Returns why it could not. */
     async function ensureStarted(conversationId: string): Promise<ChatError | null> {
         if (connectedRef.current && startedConversationRef.current === conversationId) return null;
-        if (!workspace) return { message: '请先打开一个工作区。', needsSettings: false };
+        if (!workspace) return { message: t('agent.error.noWorkspace'), needsSettings: false };
         // Set before starting: the new session's events can arrive before the
         // start call returns, and the old one's after.
         startedConversationRef.current = conversationId;
@@ -933,7 +938,7 @@ export default function AgentChatPanel({
                 connectedRef.current = false;
                 startedConversationRef.current = null;
                 if (busyRef.current) {
-                    setError({ message: 'Agent 进程意外退出，请重新发送。', needsSettings: false });
+                    setError({ message: t('agent.error.exited'), needsSettings: false });
                 }
                 setBusy(false);
                 break;
@@ -949,7 +954,7 @@ export default function AgentChatPanel({
                 else if (event.truncated) {
                     setError({
                         message:
-                            '模型这次的输出超过了单次长度上限，被截断了，任务没有完成。可以发送「继续」让它接着做；内容很大时，可以让它先建出可运行的骨架，再分步补充节点。',
+                            t('agent.error.truncated'),
                         needsSettings: false,
                         fromModel: true,
                     });
@@ -1092,7 +1097,7 @@ export default function AgentChatPanel({
                             className="agent-ui-request-btn"
                             onClick={() => void submitUiDialog('cancel')}
                         >
-                            取消
+                            {t('common.cancel')}
                         </button>
                     </>
                 ) : (
@@ -1102,7 +1107,7 @@ export default function AgentChatPanel({
                             className="agent-ui-request-btn"
                             onClick={() => void submitUiDialog('cancel')}
                         >
-                            {uiDialog.method === 'confirm' ? '拒绝' : '取消'}
+                            {uiDialog.method === 'confirm' ? t('agent.dialog.deny') : t('common.cancel')}
                         </button>
                         <button
                             type="button"
@@ -1110,7 +1115,7 @@ export default function AgentChatPanel({
                             onClick={() => void submitUiDialog('confirm')}
                             autoFocus={uiDialog.method === 'confirm'}
                         >
-                            {uiDialog.method === 'confirm' ? '允许' : '提交'}
+                            {uiDialog.method === 'confirm' ? t('agent.dialog.allow') : t('agent.dialog.submit')}
                         </button>
                     </>
                 )}
@@ -1141,14 +1146,14 @@ export default function AgentChatPanel({
                     <div className="chat-panel-title">
                         <Bot size={14} aria-hidden="true" />
                         <span>Agent</span>
-                        {ready && connected ? <span className="chat-panel-tag">已连接</span> : null}
+                        {ready && connected ? <span className="chat-panel-tag">{t('agent.connected')}</span> : null}
                         {ready && !headerOnly ? (
                             <button
                                 type="button"
                                 className="chat-panel-head-btn"
                                 onClick={toggleSidebar}
-                                title={sidebarShown ? '隐藏历史对话' : '显示历史对话'}
-                                aria-label={sidebarShown ? '隐藏历史对话' : '显示历史对话'}
+                                title={sidebarShown ? t('chat.history.hideSidebar') : t('chat.history.showSidebar')}
+                                aria-label={sidebarShown ? t('chat.history.hideSidebar') : t('chat.history.showSidebar')}
                                 aria-pressed={sidebarShown}
                             >
                                 {sidebarShown ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
@@ -1158,20 +1163,20 @@ export default function AgentChatPanel({
                     {busy ? (
                         <div className="chat-panel-meta">
                             <span className="chat-panel-meta-pill chat-panel-meta-pill-live">
-                                Agent 正在处理
+                                {t('agent.busy')}
                                 <ProcessingDots />
                             </span>
                         </div>
                     ) : null}
                 </div>
                 <div className="chat-panel-head-actions">
-                    <span className="chat-panel-drag-hint">拖动 / 吸附</span>
+                    <span className="chat-panel-drag-hint">{t('panel.dragHint')}</span>
                     <button
                         type="button"
                         className="chat-panel-head-btn"
                         onClick={toggleCollapsed}
-                        title={layout.collapsed ? '还原 Agent' : '最小化 Agent'}
-                        aria-label={layout.collapsed ? '还原 Agent' : '最小化 Agent'}
+                        title={layout.collapsed ? t('panel.restore', { name: 'Agent' }) : t('panel.minimize', { name: 'Agent' })}
+                        aria-label={layout.collapsed ? t('panel.restore', { name: 'Agent' }) : t('panel.minimize', { name: 'Agent' })}
                     >
                         {layout.collapsed ? (
                             docked ? <ChevronUp size={14} /> : <ChevronDown size={14} />
@@ -1183,8 +1188,8 @@ export default function AgentChatPanel({
                         type="button"
                         className="chat-panel-head-btn"
                         onClick={toggleMaximized}
-                        title={layout.maximized ? '还原 Agent 窗口大小' : '最大化 Agent'}
-                        aria-label={layout.maximized ? '还原 Agent 窗口大小' : '最大化 Agent'}
+                        title={layout.maximized ? t('panel.restoreSize', { name: 'Agent' }) : t('panel.maximize', { name: 'Agent' })}
+                        aria-label={layout.maximized ? t('panel.restoreSize', { name: 'Agent' }) : t('panel.maximize', { name: 'Agent' })}
                         aria-pressed={layout.maximized}
                     >
                         {layout.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
@@ -1193,8 +1198,8 @@ export default function AgentChatPanel({
                         type="button"
                         className="chat-panel-close"
                         onClick={onClose}
-                        title="关闭"
-                        aria-label="关闭"
+                        title={t('common.close')}
+                        aria-label={t('common.close')}
                     >
                         <X size={14} />
                     </button>
@@ -1203,10 +1208,10 @@ export default function AgentChatPanel({
 
             {headerOnly ? (
                 <div className="chat-panel-collapsed-bar">
-                    <span>Agent 已最小化</span>
+                    <span>{t('panel.minimized', { name: 'Agent' })}</span>
                     {busy ? (
                         <span className="chat-panel-collapsed-pill">
-                            正在处理
+                            {t('agent.working')}
                             <ProcessingDots />
                         </span>
                     ) : null}
@@ -1214,7 +1219,7 @@ export default function AgentChatPanel({
             ) : setup.phase === 'checking' ? (
                 <div className="chat-panel-state">
                     <Loader2 size={18} className="spin" />
-                    <span>正在检查 Agent 运行环境…</span>
+                    <span>{t('agent.setup.checking')}</span>
                 </div>
             ) : setup.phase === 'not-installed' || setup.phase === 'install-failed' ? (
                 <div className="chat-panel-setup">
@@ -1222,18 +1227,18 @@ export default function AgentChatPanel({
                         <Bot size={20} />
                     </div>
                     <div className="chat-panel-setup-title">
-                        {setup.phase === 'install-failed' ? '安装失败' : '安装 Agent'}
+                        {setup.phase === 'install-failed' ? t('agent.setup.failedTitle') : t('agent.setup.title')}
                     </div>
                     <div className="chat-panel-setup-body">
                         {setup.phase === 'install-failed'
                             ? setup.message
-                            : '首次使用需要下载 Node.js 运行时和 Agent（约 75 MB 下载，解压后约 350 MB），安装在 Otter ETL agent 自己的数据目录中。'}
+                            : t('agent.setup.body')}
                     </div>
                     <button type="button" className="chat-panel-setup-cta" onClick={() => void handleInstall()}>
-                        <Download size={14} /> {setup.phase === 'install-failed' ? '重新安装' : '安装'}
+                        <Download size={14} /> {setup.phase === 'install-failed' ? t('agent.setup.reinstall') : t('agent.setup.install')}
                     </button>
                     <div className="chat-panel-setup-foot">
-                        Agent 使用「设置 → AI assistant」中的 External OpenAI 模型。
+                        {t('agent.setup.foot')}
                     </div>
                 </div>
             ) : setup.phase === 'installing' ? (
@@ -1267,9 +1272,9 @@ export default function AgentChatPanel({
                             {messages.length === 0 ? (
                                 <div className="chat-panel-empty">
                                     <Workflow size={26} className="chat-panel-empty-icon" />
-                                    <div className="chat-panel-empty-title">让 Agent 处理 pipeline</div>
+                                    <div className="chat-panel-empty-title">{t('agent.empty.title')}</div>
                                     <div className="chat-panel-empty-hint">
-                                        描述需求即可：创建、检查、运行或排查 pipeline。在输入框的「数据源」里选好源数据库和目标数据库，连接信息会随消息一起发给 Agent。
+                                        {t('agent.empty.hint')}
                                     </div>
                                 </div>
                             ) : (
@@ -1278,7 +1283,7 @@ export default function AgentChatPanel({
                                         <div key={index} className="chat-bubble chat-bubble-user">
                                             <div className="chat-bubble-head">
                                                 <div className="chat-bubble-head-main">
-                                                    <span>你</span>
+                                                    <span>{t('agent.you')}</span>
                                                 </div>
                                             </div>
                                             <div className="chat-bubble-body">
@@ -1303,14 +1308,18 @@ export default function AgentChatPanel({
                                         </span>
                                         <div className="chat-status-copy">
                                             <div className="chat-status-label">
-                                                {error.fromModel ? '模型调用失败' : error.needsSettings ? '未配置模型' : '出错了'}
+                                                {error.fromModel
+                                                    ? t('agent.errorTitle.model')
+                                                    : error.needsSettings
+                                                      ? t('agent.errorTitle.noModel')
+                                                      : t('agent.errorTitle.generic')}
                                             </div>
                                             <div className="chat-status-detail agent-pre">{error.message}</div>
                                         </div>
                                     </div>
                                     {error.needsSettings && onOpenSettings ? (
                                         <button type="button" className="chat-status-action" onClick={onOpenSettings}>
-                                            打开设置
+                                            {t('agent.openSettings')}
                                         </button>
                                     ) : null}
                                 </div>
@@ -1329,7 +1338,7 @@ export default function AgentChatPanel({
                                     <div className="chat-panel-live-banner" aria-live="polite">
                                         <span className="chat-panel-live-dot" />
                                         <span>
-                                            Agent 正在处理
+                                            {t('agent.busy')}
                                             <ProcessingDots />
                                         </span>
                                     </div>
@@ -1347,9 +1356,7 @@ export default function AgentChatPanel({
                                     }}
                                     rows={1}
                                     disabled={busy}
-                                    placeholder={
-                                        '描述你想让 Agent 完成的 pipeline 工作…'
-                                    }
+                                    placeholder={t('agent.placeholder')}
                                     onKeyDown={event => {
                                         if (event.key === 'Enter' && !event.shiftKey) {
                                             event.preventDefault();
@@ -1367,10 +1374,10 @@ export default function AgentChatPanel({
                                         onClick={() => setSourceMenuOpen(o => !o)}
                                         aria-haspopup="menu"
                                         aria-expanded={sourceMenuOpen}
-                                        title="选择或新建数据库连接"
+                                        title={t('agent.ds.buttonTitle')}
                                     >
                                         <Database size={12} />
-                                        数据源
+                                        {t('agent.ds.button')}
                                         {sourceMenuOpen ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
                                     </button>
                                     <div className="agent-ds-chips">
@@ -1386,8 +1393,8 @@ export default function AgentChatPanel({
                                             type="button"
                                             className="chat-panel-send"
                                             onClick={() => void agentAbort()}
-                                            title="停止"
-                                            aria-label="停止"
+                                            title={t('agent.stop')}
+                                            aria-label={t('agent.stop')}
                                         >
                                             <Square size={11} fill="currentColor" />
                                         </button>
@@ -1396,8 +1403,8 @@ export default function AgentChatPanel({
                                             type="submit"
                                             className="chat-panel-send"
                                             disabled={!draft.trim()}
-                                            title="发送 (Enter)"
-                                            aria-label="发送"
+                                            title={t('chat.sendTooltip')}
+                                            aria-label={t('chat.sendAria')}
                                         >
                                             <ArrowUp size={15} strokeWidth={2.4} />
                                         </button>
@@ -1430,7 +1437,7 @@ export default function AgentChatPanel({
                     connections={connectionsOfKind(connections, connectionKindOf(sourceDialog) ?? '')}
                     workspacePath={workspace}
                     onSave={async (id, name, payload) => {
-                        if (!onSaveConnection) throw new Error('这里无法保存连接');
+                        if (!onSaveConnection) throw new Error(t('agent.error.cannotSaveConnection'));
                         return onSaveConnection(id, name, payload);
                     }}
                     onUse={id => {
@@ -1476,7 +1483,7 @@ export default function AgentChatPanel({
     );
 }
 
-/** Three dots that pulse in turn after "正在处理", so a long run looks alive. */
+/** Three dots that pulse in turn after the "working" label, so a long run looks alive. */
 function ProcessingDots() {
     return (
         <span className="agent-processing-dots" aria-hidden="true">
@@ -1496,6 +1503,7 @@ function AssistantBubble({
     live: boolean;
     onOpenPipeline?: (pipelineId: string) => void;
 }) {
+    const { t } = useTranslation();
     const hasStatus = turn.tools.length > 0 || turn.subagents.length > 0 || turn.skills.length > 0;
     return (
         <div className="chat-bubble chat-bubble-assistant">
@@ -1505,12 +1513,12 @@ function AssistantBubble({
                     <span>Agent</span>
                 </div>
                 <span className={`chat-bubble-phase ${live ? 'chat-bubble-phase-live' : ''}`}>
-                    {live ? '处理中' : '已完成'}
+                    {live ? t('agent.run.live') : t('agent.run.done')}
                 </span>
             </div>
             {turn.thinking ? (
                 <details className="agent-thinking">
-                    <summary>思考过程</summary>
+                    <summary>{t('agent.run.thinking')}</summary>
                     <div className="agent-pre">{turn.thinking}</div>
                 </details>
             ) : null}
@@ -1524,7 +1532,7 @@ function AssistantBubble({
             ) : null}
             {hasStatus ? (
                 <div className="chat-bubble-status" aria-live="polite">
-                    <div className="chat-status-heading">{live ? '执行进度' : '本轮执行记录'}</div>
+                    <div className="chat-status-heading">{live ? t('agent.run.progress') : t('agent.run.log')}</div>
                     {turn.skills.map(skill => (
                         <div key={`skill-${skill}`} className="chat-status-card chat-status-info">
                             <div className="chat-status-main">
@@ -1532,7 +1540,7 @@ function AssistantBubble({
                                     <Sparkles size={12} />
                                 </span>
                                 <div className="chat-status-copy">
-                                    <div className="chat-status-label">使用技能 {skill}</div>
+                                    <div className="chat-status-label">{t('agent.run.skill', { name: skill })}</div>
                                 </div>
                             </div>
                         </div>
@@ -1562,12 +1570,12 @@ function AssistantBubble({
                                         )}
                                     </span>
                                     <div className="chat-status-copy">
-                                        {tool.pipelineId ? <div className="chat-status-result-badge">结果</div> : null}
+                                        {tool.pipelineId ? <div className="chat-status-result-badge">{t('agent.run.result')}</div> : null}
                                         <div className="chat-status-label">
-                                            {subagent ? `子 Agent · ${subagent.task}` : humanizeTool(tool.name)}
+                                            {subagent ? t('agent.run.subagent', { task: subagent.task }) : humanizeTool(tool.name)}
                                         </div>
                                         <details className="chat-status-detail agent-tool-detail">
-                                            <summary>{tone === 'running' ? '参数' : '详情'}</summary>
+                                            <summary>{tone === 'running' ? t('agent.run.params') : t('agent.run.details')}</summary>
                                             <pre>{formatJson(tool.result ?? tool.partial ?? tool.args)}</pre>
                                         </details>
                                     </div>
@@ -1578,7 +1586,7 @@ function AssistantBubble({
                                         className="chat-status-action"
                                         onClick={() => onOpenPipeline(tool.pipelineId!)}
                                     >
-                                        打开
+                                        {t('agent.run.open')}
                                     </button>
                                 ) : null}
                             </div>
@@ -1592,33 +1600,17 @@ function AssistantBubble({
                     usage={turn.usage}
                     startedAt={turn.startedAt}
                     finishedAt={turn.finishedAt}
-                    reportedTitle="由模型服务上报的 token 用量"
-                    estimateTitle="模型服务未上报 token 用量，这是按回复长度估算的值"
+                    reportedTitle={t('agent.run.reportedTokens')}
+                    estimateTitle={t('agent.run.estimatedTokens')}
                 />
             ) : null}
         </div>
     );
 }
 
-const TOOL_LABELS: Record<string, string> = {
-    create_pipeline: '创建 pipeline',
-    update_pipeline: '更新 pipeline',
-    validate_pipeline: '校验 pipeline',
-    verify_pipeline: '验证 pipeline',
-    run_pipeline: '运行 pipeline',
-    read_pipeline: '读取 pipeline',
-    list_pipelines: '列出 pipeline',
-    list_components: '列出组件',
-    get_component_schema: '读取组件 schema',
-    check_node_sql: '检查节点 SQL',
-    read_run_logs: '读取运行日志',
-    list_connections: '列出连接',
-    read: '读取文件',
-};
-
 function humanizeTool(name: string): string {
     const short = toolLabel(name);
-    return TOOL_LABELS[short] ?? short;
+    return i18n.t(`agent.tool.${short}`, { defaultValue: short });
 }
 
 function formatJson(value: unknown): string {

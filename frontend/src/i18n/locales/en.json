@@ -168,6 +168,21 @@
       "saved": "Credentials for “{{name}}” saved securely; Duckie will retry.",
       "dismissed": "Credentials for “{{name}}” were not entered.",
       "followUp": "I saved the database credentials for 「{{names}}」 in the secure form. Please run it again."
+    },
+    "stage": {
+      "thinking": "Thinking",
+      "dshConnected": "DSH connected",
+      "callingTool": "Calling tool",
+      "toolDone": "Tool finished",
+      "toolFailed": "Tool call failed",
+      "seeError": "See the error message",
+      "updated": "Pipeline updated",
+      "created": "Pipeline created",
+      "runFailed": "Run failed",
+      "errorReturned": "Error returned",
+      "current": "Current stage: {{label}}",
+      "dshTokens": "Token usage reported by DSH",
+      "acpEstimate": "This ACP session didn't report token usage; this is an estimate from the reply length"
     }
   },
   "properties": {
@@ -570,6 +585,172 @@
           "step3": "Wait for the line that says NOT SET UP."
         }
       }
+    }
+  },
+  "agent": {
+    "error": {
+      "model": "Model call failed: {{raw}}",
+      "quota": "The model service's quota is used up and the request was rejected. Top up, or switch to another model in Settings → AI assistant, then send \"continue\" to finish.\n\n{{raw}}",
+      "apiKey": "The model service rejected the API key. Check it in Settings → AI assistant.\n\n{{raw}}",
+      "rateLimit": "The model service is rate limiting requests. Try again later.\n\n{{raw}}",
+      "llmNotConfigured": "Agent uses the External OpenAI model in Settings → AI assistant, which is not enabled. Choose External OpenAI, fill in the Base URL and model, then try again.",
+      "runtimeIncomplete": "The Agent runtime is incomplete. Close the panel and install it again.",
+      "startFailed": "Agent couldn't start: {{raw}}",
+      "noWorkspace": "Open a workspace first.",
+      "exited": "The Agent process exited unexpectedly. Please send again.",
+      "truncated": "The model's output went over the per-reply length limit and was cut off, so the task isn't finished. Send \"continue\" to let it carry on; for large jobs, ask it to build a runnable skeleton first and add nodes step by step.",
+      "cannotSaveConnection": "Connections can't be saved here"
+    },
+    "install": {
+      "preparing": "Preparing to install…",
+      "downloadingOf": "Downloading Node.js {{received}} / {{total}} MB",
+      "downloading": "Downloading Node.js {{received}} MB",
+      "extracting": "Extracting runtime…",
+      "verifying": "Verifying…",
+      "extension": "Installing extensions ({{index}}/{{total}})",
+      "model": "Downloading model…",
+      "done": "Installed"
+    },
+    "interrupted": "Interrupted",
+    "connected": "Connected",
+    "busy": "Agent is working",
+    "working": "Working",
+    "you": "You",
+    "openSettings": "Open settings",
+    "placeholder": "Describe the pipeline work you want the Agent to do…",
+    "stop": "Stop",
+    "dialog": {
+      "deny": "Deny",
+      "allow": "Allow",
+      "submit": "Submit"
+    },
+    "errorTitle": {
+      "model": "Model call failed",
+      "noModel": "No model configured",
+      "generic": "Something went wrong"
+    },
+    "empty": {
+      "title": "Let the Agent handle your pipelines",
+      "hint": "Just describe what you need: create, check, run or troubleshoot a pipeline. Pick the source and target databases under \"Data sources\" in the input box; their connection details are sent to the Agent with your message."
+    },
+    "setup": {
+      "checking": "Checking the Agent runtime…",
+      "title": "Install Agent",
+      "failedTitle": "Install failed",
+      "body": "First use downloads the Node.js runtime and the Agent (about 75 MB download, about 350 MB unpacked), installed in Otter ETL agent's own data folder.",
+      "install": "Install",
+      "reinstall": "Reinstall",
+      "foot": "Agent uses the External OpenAI model in Settings → AI assistant."
+    },
+    "ds": {
+      "button": "Data sources",
+      "buttonTitle": "Choose or create a database connection",
+      "menuAria": "Choose a data source",
+      "configured": "{{count}} connections configured",
+      "notConfigured": "Not configured — click to create",
+      "dialogTitle": "{{name}} connection",
+      "savedCount": "{{count}} saved connections",
+      "noneYet": "No connection for this database yet — fill it in and save",
+      "connection": "Connection",
+      "newConnection": "+ New connection",
+      "connectionName": "Connection name",
+      "testTitle": "Connect with these settings to make sure they work",
+      "testing": "Testing…",
+      "test": "Test connection",
+      "missing": "Please fill in: {{fields}}",
+      "listSep": ", ",
+      "saving": "Saving…",
+      "saveAndUse": "Save and use",
+      "use": "Use this connection",
+      "roleTitle": "Use this connection as?",
+      "noSourceTitle": "No data source selected",
+      "noSourceBody": "Tell the Agent which database to read from and which to write to, and the pipeline it builds will be more accurate. The connection details go with this message; passwords are never sent.",
+      "sendAnyway": "No thanks, send now",
+      "pick": "Choose data source",
+      "chipTitle": "{{role}}: {{name}}",
+      "editRole": "Change how {{name}} is used",
+      "remove": "Remove {{name}}",
+      "role": {
+        "source": {
+          "title": "Source database",
+          "hint": "Agent reads data from here",
+          "short": "Source"
+        },
+        "target": {
+          "title": "Target database",
+          "hint": "Agent writes results here",
+          "short": "Target"
+        },
+        "both": {
+          "title": "Both",
+          "hint": "Read from here and write back here too",
+          "short": "Source + target"
+        }
+      },
+      "configured_one": "1 connection configured",
+      "savedCount_one": "1 saved connection"
+    },
+    "run": {
+      "live": "Working",
+      "done": "Done",
+      "thinking": "Reasoning",
+      "progress": "Progress",
+      "log": "Run log",
+      "skill": "Using skill {{name}}",
+      "result": "Result",
+      "subagent": "Sub-agent · {{task}}",
+      "params": "Parameters",
+      "details": "Details",
+      "open": "Open",
+      "reportedTokens": "Token usage reported by the model service",
+      "estimatedTokens": "The model service didn't report token usage; this is an estimate from the reply length"
+    },
+    "tool": {
+      "create_pipeline": "Create pipeline",
+      "update_pipeline": "Update pipeline",
+      "validate_pipeline": "Validate pipeline",
+      "verify_pipeline": "Verify pipeline",
+      "run_pipeline": "Run pipeline",
+      "read_pipeline": "Read pipeline",
+      "list_pipelines": "List pipelines",
+      "list_components": "List components",
+      "get_component_schema": "Read component schema",
+      "check_node_sql": "Check node SQL",
+      "read_run_logs": "Read run logs",
+      "list_connections": "List connections",
+      "read": "Read file",
+      "unknown": "Unknown tool"
+    }
+  },
+  "reply": {
+    "copied": "Copied",
+    "copy": "Copy reply",
+    "usage": "Usage {{value}}",
+    "elapsed": "Time {{value}}",
+    "cacheHit": " (cache hit {{count}}, {{pct}}%)",
+    "input": "Input {{count}}",
+    "output": "Output {{count}}",
+    "calls": "{{count}} model calls (each one resends the full context)",
+    "seconds": "{{s}} s",
+    "minutes": "{{m}} min {{s}} s",
+    "calls_one": "1 model call"
+  },
+  "panel": {
+    "dragHint": "Drag / snap",
+    "minimize": "Minimize {{name}}",
+    "restore": "Restore {{name}}",
+    "maximize": "Maximize {{name}}",
+    "restoreSize": "Restore {{name}} window size",
+    "minimized": "{{name}} minimized",
+    "resize": {
+      "top": "Drag to resize the {{name}} panel height (top edge)",
+      "bottom": "Drag to resize the {{name}} panel height (bottom edge)",
+      "left": "Drag to resize the {{name}} panel width (left edge)",
+      "right": "Drag to resize the {{name}} panel width (right edge)",
+      "topLeft": "Drag to resize the {{name}} panel (top-left corner)",
+      "topRight": "Drag to resize the {{name}} panel (top-right corner)",
+      "bottomLeft": "Drag to resize the {{name}} panel (bottom-left corner)",
+      "bottomRight": "Drag to resize the {{name}} panel (bottom-right corner)"
     }
   }
 }

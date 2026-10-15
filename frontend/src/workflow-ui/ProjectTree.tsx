@@ -169,7 +169,7 @@ export default function ProjectTree(props: Props) {
     };
 
     const childrenOf = useMemo(() => {
-        // Connections are managed from the Agent input's 数据源 menu, so the
+        // Connections are managed from the Agent input's Data sources menu, so the
         // tree leaves them out, and with them the built-in Connections folder
         // once nothing else is in it.
         const map = new Map<string, RepoItem[]>();

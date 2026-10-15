@@ -3,6 +3,7 @@
 // corner, minimize, maximize, a collapsible history sidebar, and a layout
 // remembered per panel in localStorage. Moved verbatim out of ChatPanel.
 import { useCallback, useEffect, useRef, useState } from 'react';
+import i18n from '../i18n';
 
 const CHAT_PANEL_WIDTH = 420;
 const CHAT_PANEL_MAX_WIDTH = 620;
@@ -87,25 +88,19 @@ const RESIZE_MODES: ResizeMode[] = [
     'bottom-right',
 ];
 
+const RESIZE_KEY: Record<ResizeMode, string> = {
+    top: 'top',
+    bottom: 'bottom',
+    left: 'left',
+    right: 'right',
+    'top-left': 'topLeft',
+    'top-right': 'topRight',
+    'bottom-left': 'bottomLeft',
+    'bottom-right': 'bottomRight',
+};
+
 function resizeLabel(mode: ResizeMode, name: string): string {
-    switch (mode) {
-        case 'top':
-            return `拖动以调整 ${name} 面板高度（上边缘）`;
-        case 'bottom':
-            return `拖动以调整 ${name} 面板高度（下边缘）`;
-        case 'left':
-            return `拖动以调整 ${name} 面板宽度（左边缘）`;
-        case 'right':
-            return `拖动以调整 ${name} 面板宽度（右边缘）`;
-        case 'top-left':
-            return `拖动以调整 ${name} 面板大小（左上角）`;
-        case 'top-right':
-            return `拖动以调整 ${name} 面板大小（右上角）`;
-        case 'bottom-left':
-            return `拖动以调整 ${name} 面板大小（左下角）`;
-        case 'bottom-right':
-            return `拖动以调整 ${name} 面板大小（右下角）`;
-    }
+    return i18n.t(`panel.resize.${RESIZE_KEY[mode]}`, { name });
 }
 
 

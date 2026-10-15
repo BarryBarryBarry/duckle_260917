@@ -408,7 +408,7 @@ const connectionRefField = (acceptKind?: string): Field => ({
     label: 'Saved connection',
     kind: 'connection-ref',
     accepts: acceptKind ? [acceptKind] : undefined,
-    description: 'Pick a saved connection to supply the fields below. Database connections are created from the 数据源 (data source) menu in the Agent input.',
+    description: 'Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input.',
 });
 
 // #256: transport is a SEPARATE picker from the auth connection. It has to use

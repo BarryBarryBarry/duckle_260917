@@ -160,6 +160,21 @@
       "saved": "已安全儲存連線「{{name}}」的憑據，Duckie 將自動重試。",
       "dismissed": "未輸入連線「{{name}}」的憑據。",
       "followUp": "我已在安全表單中儲存了「{{names}}」的資料庫憑據，請重新執行剛才的操作。"
+    },
+    "stage": {
+      "thinking": "正在思考",
+      "dshConnected": "已連線 DSH",
+      "callingTool": "正在呼叫工具",
+      "toolDone": "工具已完成",
+      "toolFailed": "工具呼叫失敗",
+      "seeError": "請查看錯誤訊息",
+      "updated": "已更新 pipeline",
+      "created": "已建立 pipeline",
+      "runFailed": "執行失敗",
+      "errorReturned": "已回傳錯誤訊息",
+      "current": "目前階段：{{label}}",
+      "dshTokens": "由 DSH 回報的 token 用量",
+      "acpEstimate": "目前 ACP 工作階段未回報 token 用量，這是按回覆長度估算的值"
     }
   },
   "properties": {
@@ -467,6 +482,169 @@
           "step3": "等到輸出 NOT SET UP 這一行。"
         }
       }
+    }
+  },
+  "agent": {
+    "error": {
+      "model": "模型呼叫失敗：{{raw}}",
+      "quota": "模型服務的額度已用完，請求被拒絕。請儲值，或在「設定 → AI assistant」中換一個模型後，傳送「繼續」接著完成。\n\n{{raw}}",
+      "apiKey": "模型服務拒絕了 API Key，請在「設定 → AI assistant」中檢查。\n\n{{raw}}",
+      "rateLimit": "模型服務限流了，請稍後再試。\n\n{{raw}}",
+      "llmNotConfigured": "Agent 使用「設定 → AI assistant」中的 External OpenAI 模型，目前未啟用。請選擇 External OpenAI，並填寫 Base URL 和模型後重試。",
+      "runtimeIncomplete": "Agent 執行環境不完整，請關閉面板後重新安裝。",
+      "startFailed": "Agent 無法啟動：{{raw}}",
+      "noWorkspace": "請先開啟一個工作區。",
+      "exited": "Agent 程序意外結束，請重新傳送。",
+      "truncated": "模型這次的輸出超過了單次長度上限，被截斷了，任務沒有完成。可以傳送「繼續」讓它接著做；內容很大時，可以讓它先建出可執行的骨架，再分步補充節點。",
+      "cannotSaveConnection": "這裡無法儲存連線"
+    },
+    "install": {
+      "preparing": "準備安裝…",
+      "downloadingOf": "正在下載 Node.js {{received}} / {{total}} MB",
+      "downloading": "正在下載 Node.js {{received}} MB",
+      "extracting": "正在解壓縮執行環境…",
+      "verifying": "正在校驗…",
+      "extension": "正在安裝擴充 ({{index}}/{{total}})",
+      "model": "正在下載模型…",
+      "done": "安裝完成"
+    },
+    "interrupted": "已中斷",
+    "connected": "已連線",
+    "busy": "Agent 正在處理",
+    "working": "正在處理",
+    "you": "你",
+    "openSettings": "開啟設定",
+    "placeholder": "描述你想讓 Agent 完成的 pipeline 工作…",
+    "stop": "停止",
+    "dialog": {
+      "deny": "拒絕",
+      "allow": "允許",
+      "submit": "提交"
+    },
+    "errorTitle": {
+      "model": "模型呼叫失敗",
+      "noModel": "未設定模型",
+      "generic": "發生錯誤"
+    },
+    "empty": {
+      "title": "讓 Agent 處理 pipeline",
+      "hint": "描述需求即可：建立、檢查、執行或排查 pipeline。在輸入框的「資料來源」裡選好來源資料庫和目標資料庫，連線資訊會隨訊息一起傳給 Agent。"
+    },
+    "setup": {
+      "checking": "正在檢查 Agent 執行環境…",
+      "title": "安裝 Agent",
+      "failedTitle": "安裝失敗",
+      "body": "首次使用需要下載 Node.js 執行環境和 Agent（約 75 MB 下載，解壓縮後約 350 MB），安裝在 Otter ETL agent 自己的資料目錄中。",
+      "install": "安裝",
+      "reinstall": "重新安裝",
+      "foot": "Agent 使用「設定 → AI assistant」中的 External OpenAI 模型。"
+    },
+    "ds": {
+      "button": "資料來源",
+      "buttonTitle": "選擇或新增資料庫連線",
+      "menuAria": "選擇資料來源",
+      "configured": "已設定 {{count}} 個連線",
+      "notConfigured": "未設定，點擊新增",
+      "dialogTitle": "{{name}} 連線",
+      "savedCount": "已儲存 {{count}} 個連線",
+      "noneYet": "還沒有這種資料庫的連線，填寫後儲存",
+      "connection": "連線",
+      "newConnection": "+ 新增連線",
+      "connectionName": "連線名稱",
+      "testTitle": "用這些設定連線資料庫，確認能連上",
+      "testing": "測試中…",
+      "test": "測試連線",
+      "missing": "請填寫：{{fields}}",
+      "listSep": "、",
+      "saving": "儲存中…",
+      "saveAndUse": "儲存並使用",
+      "use": "使用此連線",
+      "roleTitle": "這個連線用作？",
+      "noSourceTitle": "還沒有選擇資料來源",
+      "noSourceBody": "告訴 Agent 從哪個資料庫讀取、寫入哪個資料庫，它產生的 pipeline 會更準確。連線資訊會隨這則訊息一起傳給它，密碼不會傳送。",
+      "sendAnyway": "不需要，直接傳送",
+      "pick": "選擇資料來源",
+      "chipTitle": "{{role}}：{{name}}",
+      "editRole": "修改 {{name}} 的用途",
+      "remove": "移除 {{name}}",
+      "role": {
+        "source": {
+          "title": "來源資料庫",
+          "hint": "Agent 從這裡讀取資料",
+          "short": "來源"
+        },
+        "target": {
+          "title": "目標資料庫",
+          "hint": "Agent 把結果寫到這裡",
+          "short": "目標"
+        },
+        "both": {
+          "title": "兩者都是",
+          "hint": "既從這裡讀取，也寫回這裡",
+          "short": "來源 + 目標"
+        }
+      }
+    },
+    "run": {
+      "live": "處理中",
+      "done": "已完成",
+      "thinking": "思考過程",
+      "progress": "執行進度",
+      "log": "本輪執行記錄",
+      "skill": "使用技能 {{name}}",
+      "result": "結果",
+      "subagent": "子 Agent · {{task}}",
+      "params": "參數",
+      "details": "詳情",
+      "open": "開啟",
+      "reportedTokens": "由模型服務回報的 token 用量",
+      "estimatedTokens": "模型服務未回報 token 用量，這是按回覆長度估算的值"
+    },
+    "tool": {
+      "create_pipeline": "建立 pipeline",
+      "update_pipeline": "更新 pipeline",
+      "validate_pipeline": "校驗 pipeline",
+      "verify_pipeline": "驗證 pipeline",
+      "run_pipeline": "執行 pipeline",
+      "read_pipeline": "讀取 pipeline",
+      "list_pipelines": "列出 pipeline",
+      "list_components": "列出元件",
+      "get_component_schema": "讀取元件 schema",
+      "check_node_sql": "檢查節點 SQL",
+      "read_run_logs": "讀取執行日誌",
+      "list_connections": "列出連線",
+      "read": "讀取檔案",
+      "unknown": "未知工具"
+    }
+  },
+  "reply": {
+    "copied": "已複製",
+    "copy": "複製回覆內容",
+    "usage": "用量 {{value}}",
+    "elapsed": "用時 {{value}}",
+    "cacheHit": "（快取命中 {{count}}，{{pct}}%）",
+    "input": "輸入 {{count}}",
+    "output": "輸出 {{count}}",
+    "calls": "模型呼叫 {{count}} 次（每次都會重新傳送完整上下文）",
+    "seconds": "{{s}} 秒",
+    "minutes": "{{m}} 分 {{s}} 秒"
+  },
+  "panel": {
+    "dragHint": "拖曳 / 吸附",
+    "minimize": "最小化 {{name}}",
+    "restore": "還原 {{name}}",
+    "maximize": "最大化 {{name}}",
+    "restoreSize": "還原 {{name}} 視窗大小",
+    "minimized": "{{name}} 已最小化",
+    "resize": {
+      "top": "拖曳以調整 {{name}} 面板高度（上邊緣）",
+      "bottom": "拖曳以調整 {{name}} 面板高度（下邊緣）",
+      "left": "拖曳以調整 {{name}} 面板寬度（左邊緣）",
+      "right": "拖曳以調整 {{name}} 面板寬度（右邊緣）",
+      "topLeft": "拖曳以調整 {{name}} 面板大小（左上角）",
+      "topRight": "拖曳以調整 {{name}} 面板大小（右上角）",
+      "bottomLeft": "拖曳以調整 {{name}} 面板大小（左下角）",
+      "bottomRight": "拖曳以調整 {{name}} 面板大小（右下角）"
     }
   }
 }

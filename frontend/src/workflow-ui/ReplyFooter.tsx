@@ -2,6 +2,8 @@
 // and the time it finished. Shared by the Duckie and Pi Agent chat panels.
 import { useCallback, useEffect, useState } from 'react';
 import { Check, Clock, Copy, Gauge } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 
 export type ReplyUsage = {
     input?: number;
@@ -30,6 +32,7 @@ export default function ReplyFooter({
     /** Tooltip for the length-based estimate used when it reported none. */
     estimateTitle: string;
 }) {
+    const { t } = useTranslation();
     const [copied, setCopied] = useState(false);
 
     useEffect(() => {
@@ -57,8 +60,8 @@ export default function ReplyFooter({
                 type="button"
                 className={`chat-bubble-footer-btn ${copied ? 'chat-bubble-footer-btn-done' : ''}`}
                 onClick={() => void copy()}
-                title={copied ? '已复制' : '复制回复内容'}
-                aria-label={copied ? '已复制' : '复制回复内容'}
+                title={copied ? t('reply.copied') : t('reply.copy')}
+                aria-label={copied ? t('reply.copied') : t('reply.copy')}
             >
                 {copied ? <Check size={13} /> : <Copy size={13} />}
             </button>
@@ -66,13 +69,13 @@ export default function ReplyFooter({
                 {tokens ? (
                     <span className="chat-bubble-metric" title={tokens.title}>
                         <Gauge size={12} aria-hidden="true" />
-                        用量 {tokens.label}
+                        {t('reply.usage', { value: tokens.label })}
                     </span>
                 ) : null}
                 {elapsed ? (
                     <span className="chat-bubble-metric">
                         <Clock size={12} aria-hidden="true" />
-                        用时 {elapsed}
+                        {t('reply.elapsed', { value: elapsed })}
                     </span>
                 ) : null}
                 {finishedAt ? <span className="chat-bubble-metric">{finishedAt}</span> : null}
@@ -94,12 +97,15 @@ function formatTokenUsage(
         const parts: string[] = [];
         if (usage?.input != null) {
             const cached = usage.cacheRead != null && usage.input > 0
-                ? `（缓存命中 ${formatTokenCount(usage.cacheRead)}，${((usage.cacheRead / usage.input) * 100).toFixed(1)}%）`
+                ? i18n.t('reply.cacheHit', {
+                      count: formatTokenCount(usage.cacheRead),
+                      pct: ((usage.cacheRead / usage.input) * 100).toFixed(1),
+                  })
                 : '';
-            parts.push(`输入 ${formatTokenCount(usage.input)}${cached}`);
+            parts.push(i18n.t('reply.input', { count: formatTokenCount(usage.input) }) + cached);
         }
-        if (usage?.output != null) parts.push(`输出 ${formatTokenCount(usage.output)}`);
-        if (usage?.calls != null) parts.push(`模型调用 ${usage.calls} 次（每次都会重新发送完整上下文）`);
+        if (usage?.output != null) parts.push(i18n.t('reply.output', { count: formatTokenCount(usage.output) }));
+        if (usage?.calls != null) parts.push(i18n.t('reply.calls', { count: usage.calls }));
         return {
             label: `${formatTokenCount(reported)} tok`,
             title: parts.length ? parts.join(' · ') : reportedTitle,
@@ -127,10 +133,10 @@ function formatTokenCount(value: number): string {
 function formatElapsed(startedAt?: number, finishedAt?: number): string | null {
     if (startedAt == null || finishedAt == null || finishedAt < startedAt) return null;
     const seconds = Math.round((finishedAt - startedAt) / 1000);
-    if (seconds < 60) return `${seconds} 秒`;
+    if (seconds < 60) return i18n.t('reply.seconds', { s: seconds });
     const minutes = Math.floor(seconds / 60);
     const rest = seconds % 60;
-    return `${minutes} 分 ${String(rest).padStart(2, '0')} 秒`;
+    return i18n.t('reply.minutes', { m: minutes, s: String(rest).padStart(2, '0') });
 }
 
 function formatClock(timestamp: number): string {

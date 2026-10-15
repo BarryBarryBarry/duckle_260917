@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
+import i18n from '../i18n';
 import {
     AlertCircle,
     CheckCircle2,
@@ -287,7 +288,7 @@ export default function ChatPanel({
                         key: 'thinking',
                         kind: 'thinking',
                         tone: 'running',
-                        label: '正在思考',
+                        label: t('chat.stage.thinking'),
                     },
                 ],
             },
@@ -316,7 +317,7 @@ export default function ChatPanel({
                         key: 'route',
                         kind: 'route',
                         tone: 'info',
-                        label: '已连接 DSH',
+                        label: t('chat.stage.dshConnected'),
                         detail: `${ev.provider}/${ev.model}`,
                     }),
                 }));
@@ -339,7 +340,7 @@ export default function ChatPanel({
                         key: `tool:${ev.id}`,
                         kind: 'tool',
                         tone: 'running',
-                        label: '正在调用工具',
+                        label: t('chat.stage.callingTool'),
                         detail: humanizeToolName(ev.name),
                     }),
                 }));
@@ -354,8 +355,8 @@ export default function ChatPanel({
                             key: `tool:${ev.id}`,
                             kind: 'tool',
                             tone: ev.ok ? 'done' : 'error',
-                            label: ev.ok ? '工具已完成' : '工具调用失败',
-                            detail: ev.ok ? humanizeToolName(toolName) : humanizeToolName(toolName) || '请查看错误信息',
+                            label: ev.ok ? t('chat.stage.toolDone') : t('chat.stage.toolFailed'),
+                            detail: ev.ok ? humanizeToolName(toolName) : humanizeToolName(toolName) || t('chat.stage.seeError'),
                         },
                     ),
                 }));
@@ -415,7 +416,7 @@ export default function ChatPanel({
                         key: `pipeline:${ev.id}`,
                         kind: 'pipeline',
                         tone: 'done',
-                        label: ev.action === 'updated' ? '已更新 pipeline' : '已创建 pipeline',
+                        label: ev.action === 'updated' ? t('chat.stage.updated') : t('chat.stage.created'),
                         detail: ev.id,
                         pipelineId: ev.id,
                     }),
@@ -436,8 +437,8 @@ export default function ChatPanel({
                                 key: 'error',
                                 kind: 'error',
                                 tone: 'error',
-                                label: '执行失败',
-                                detail: '已返回错误信息',
+                                label: t('chat.stage.runFailed'),
+                                detail: t('chat.stage.errorReturned'),
                             }),
                         };
                     }
@@ -758,7 +759,7 @@ export default function ChatPanel({
                             ) : null}
                             {activeStatus ? (
                                 <span className="chat-panel-meta-pill chat-panel-meta-pill-live">
-                                    当前阶段：{activeStatus.label}
+                                    {t('chat.stage.current', { label: activeStatus.label })}
                                     {activeStatus.detail ? ` · ${activeStatus.detail}` : ''}
                                 </span>
                             ) : null}
@@ -766,13 +767,13 @@ export default function ChatPanel({
                     ) : null}
                 </div>
                 <div className="chat-panel-head-actions">
-                    <span className="chat-panel-drag-hint">拖动 / 吸附</span>
+                    <span className="chat-panel-drag-hint">{t('panel.dragHint')}</span>
                     <button
                         type="button"
                         className="chat-panel-head-btn"
                         onClick={toggleCollapsed}
-                        title={currentLayout.collapsed ? '还原 Duckie' : '最小化 Duckie'}
-                        aria-label={currentLayout.collapsed ? '还原 Duckie' : '最小化 Duckie'}
+                        title={currentLayout.collapsed ? t('panel.restore', { name: 'Duckie' }) : t('panel.minimize', { name: 'Duckie' })}
+                        aria-label={currentLayout.collapsed ? t('panel.restore', { name: 'Duckie' }) : t('panel.minimize', { name: 'Duckie' })}
                     >
                         {currentLayout.collapsed ? <ChevronDown size={14} /> : <Minus size={14} />}
                     </button>
@@ -780,8 +781,8 @@ export default function ChatPanel({
                         type="button"
                         className="chat-panel-head-btn"
                         onClick={toggleMaximized}
-                        title={currentLayout.maximized ? '还原 Duckie 窗口大小' : '最大化 Duckie'}
-                        aria-label={currentLayout.maximized ? '还原 Duckie 窗口大小' : '最大化 Duckie'}
+                        title={currentLayout.maximized ? t('panel.restoreSize', { name: 'Duckie' }) : t('panel.maximize', { name: 'Duckie' })}
+                        aria-label={currentLayout.maximized ? t('panel.restoreSize', { name: 'Duckie' }) : t('panel.maximize', { name: 'Duckie' })}
                         aria-pressed={currentLayout.maximized}
                     >
                         {currentLayout.maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
@@ -800,10 +801,10 @@ export default function ChatPanel({
 
             {currentLayout.collapsed ? (
                 <div className="chat-panel-collapsed-bar">
-                    <span>Duckie 已最小化</span>
+                    <span>{t('panel.minimized', { name: 'Duckie' })}</span>
                     {activeStatus ? (
                         <span className="chat-panel-collapsed-pill">
-                            当前阶段：{activeStatus.label}
+                            {t('chat.stage.current', { label: activeStatus.label })}
                         </span>
                     ) : dshRoute ? (
                         <span className="chat-panel-collapsed-pill">
@@ -996,13 +997,13 @@ export default function ChatPanel({
                                                 {m.role === 'assistant' ? (
                                                     <Sparkles size={12} aria-hidden="true" />
                                                 ) : null}
-                                                <span>{m.role === 'assistant' ? 'Duckie' : '你'}</span>
+                                                <span>{m.role === 'assistant' ? 'Duckie' : t('agent.you')}</span>
                                             </div>
                                             {m.role === 'assistant' ? (
                                                 <span
                                                     className={`chat-bubble-phase ${m.streaming ? 'chat-bubble-phase-live' : ''}`}
                                                 >
-                                                    {m.streaming ? '处理中' : '已完成'}
+                                                    {m.streaming ? t('agent.run.live') : t('agent.run.done')}
                                                 </span>
                                             ) : null}
                                         </div>
@@ -1017,7 +1018,7 @@ export default function ChatPanel({
                                         {m.role === 'assistant' && m.statusItems?.length ? (
                                             <div className="chat-bubble-status" aria-live="polite">
                                                 <div className="chat-status-heading">
-                                                    {m.streaming ? '执行进度' : '本轮执行记录'}
+                                                    {m.streaming ? t('agent.run.progress') : t('agent.run.log')}
                                                 </div>
                                                 {m.statusItems.map(item => (
                                                     <div
@@ -1034,7 +1035,7 @@ export default function ChatPanel({
                                                             </span>
                                                             <div className="chat-status-copy">
                                                                 {item.kind === 'pipeline' ? (
-                                                                    <div className="chat-status-result-badge">结果</div>
+                                                                    <div className="chat-status-result-badge">{t('agent.run.result')}</div>
                                                                 ) : null}
                                                                 <div className="chat-status-label">{item.label}</div>
                                                                 {item.detail ? (
@@ -1048,7 +1049,7 @@ export default function ChatPanel({
                                                                 className="chat-status-action"
                                                                 onClick={() => onPersistedPipeline(item.pipelineId!)}
                                                             >
-                                                                打开
+                                                                {t('agent.run.open')}
                                                             </button>
                                                         ) : null}
                                                     </div>
@@ -1095,7 +1096,7 @@ export default function ChatPanel({
                                 <div className="chat-panel-live-banner" aria-live="polite">
                                     <span className="chat-panel-live-dot" />
                                     <span>
-                                        当前阶段：{activeStatus.label}
+                                        {t('chat.stage.current', { label: activeStatus.label })}
                                         {activeStatus.detail ? ` · ${activeStatus.detail}` : ''}
                                     </span>
                                 </div>
@@ -1398,22 +1399,8 @@ function renderInlineCode(text: string) {
 }
 
 function humanizeToolName(name: string): string {
-    switch (name) {
-        case 'create_pipeline':
-            return '创建 pipeline';
-        case 'update_pipeline':
-            return '更新 pipeline';
-        case 'validate_pipeline':
-            return '校验 pipeline';
-        case 'run_pipeline':
-            return '运行 pipeline';
-        case 'list_components':
-            return '列出组件';
-        case 'get_component_schema':
-            return '读取组件 schema';
-        default:
-            return name || '未知工具';
-    }
+    if (!name) return i18n.t('agent.tool.unknown');
+    return i18n.t(`agent.tool.${name}`, { defaultValue: name });
 }
 
 function StatusIcon({ item }: { item: StatusItem }) {
@@ -1426,14 +1413,15 @@ function StatusIcon({ item }: { item: StatusItem }) {
 }
 
 function MessageFooter({ message }: { message: Bubble }) {
+    const { t } = useTranslation();
     return (
         <ReplyFooter
             text={message.content}
             usage={message.usage}
             startedAt={message.startedAt}
             finishedAt={message.finishedAt}
-            reportedTitle="由 DSH 上报的 token 用量"
-            estimateTitle="当前 ACP 会话未上报 token 用量，这是按回复长度估算的值"
+            reportedTitle={t('chat.stage.dshTokens')}
+            estimateTitle={t('chat.stage.acpEstimate')}
         />
     );
 }

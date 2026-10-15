@@ -2377,7 +2377,7 @@ export default function App() {
      *  store as soon as the message goes), then shown in the editor's pickers. */
     const handleAgentSaveConnection = useCallback(
         async (id: string | null, name: string, payload: Record<string, unknown>): Promise<string> => {
-            if (!workspacePathState) throw new Error('请先打开一个工作区');
+            if (!workspacePathState) throw new Error(t('agent.error.noWorkspace'));
             const cid = id ?? `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
             await saveStoredConnection(workspacePathState, cid, name, payload);
             const item: RepoItem = {
@@ -2390,7 +2390,7 @@ export default function App() {
             setRepo(r => (r.some(i => i.id === cid) ? r.map(i => (i.id === cid ? item : i)) : [...r, item]));
             return cid;
         },
-        [workspacePathState],
+        [workspacePathState, t],
     );
     const handleSaveContext = useCallback(
         (name: string, payload: ContextPayload) => upsertRepoItem('context', name, payload),
