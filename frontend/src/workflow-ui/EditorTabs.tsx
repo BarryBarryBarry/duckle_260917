@@ -16,6 +16,7 @@ import type { EngineId } from './EngineSelector';
 import type { DuckleNodeData } from '../pipeline-types';
 import type { ComponentDef } from './palette-data';
 import type { ConnectionType } from '../canvas/connection-types';
+import type { LayoutDirection } from '../canvas/layout';
 import type { RunResult } from '../tauri-bridge';
 
 type TabId = 'canvas' | 'plan' | 'run' | 'history';
@@ -48,6 +49,7 @@ type Props = {
     nodeAutodetectAvailable: (nodeId: string) => boolean;
     /** Bumped after an auto-layout so the canvas fits the new arrangement. */
     fitRequest?: number;
+    layoutDirection?: LayoutDirection;
 };
 
 export default function EditorTabs({
@@ -73,6 +75,7 @@ export default function EditorTabs({
     onEdgeEdit,
     nodeAutodetectAvailable,
     fitRequest,
+    layoutDirection,
 }: Props) {
     const { t } = useTranslation();
     const [active, setActive] = useState<TabId>('canvas');
@@ -126,6 +129,7 @@ export default function EditorTabs({
                         onEdgeEdit={onEdgeEdit}
                         nodeAutodetectAvailable={nodeAutodetectAvailable}
                         fitRequest={fitRequest}
+                        layoutDirection={layoutDirection}
                     />
                 </div>
                 <div className={'tab-panel' + (active === 'plan' ? ' tab-panel-active' : '')}>

@@ -3,6 +3,7 @@ import {
     ReactFlow,
     ReactFlowProvider,
     Background,
+    ControlButton,
     Controls,
     MiniMap,
     useNodesInitialized,
@@ -15,6 +16,7 @@ import {
     type OnSelectionChangeParams,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { useTranslation } from 'react-i18next';
 import {
     Check,
     ClipboardCopy,
@@ -24,6 +26,8 @@ import {
     LayoutGrid,
     Maximize2,
     MousePointer2,
+    MoveDown,
+    MoveRight,
     Package,
     Pencil,
     Play,
@@ -45,8 +49,15 @@ import type { ComponentDef } from '../workflow-ui/palette-data';
 import { useContextMenu, type MenuItem } from '../workflow-ui/ContextMenu';
 import { getManifest } from '../workflow-ui/fields/component-manifests';
 import { useTheme } from '../theme';
-import { NODE_WIDTH, nodeSequence, nodesOverlap } from './layout';
+import {
+    DEFAULT_LAYOUT_DIRECTION,
+    NODE_WIDTH,
+    nodeSequence,
+    nodesOverlap,
+    type LayoutDirection,
+} from './layout';
 import { NodeSequenceContext } from './node-sequence-context';
+import { LayoutDirectionContext } from './layout-direction-context';
 
 const ICON_SIZE = 14;
 // Cards closer than this read as piled up, and opening the pipeline lays it out.
@@ -86,6 +97,7 @@ export type PaneAction =
     | 'paste'
     | 'select-all'
     | 'auto-layout'
+    | 'toggle-layout-direction'
     | 'fit-view'
     | 'undo'
     | 'redo'
@@ -110,6 +122,8 @@ type Props = {
     pipelineId?: string | null;
     /** Bumped after an auto-layout so the canvas fits the new arrangement. */
     fitRequest?: number;
+    /** Which way the pipeline flows: handles and the layout button follow it. */
+    layoutDirection?: LayoutDirection;
 };
 
 function CanvasInner({
@@ -129,7 +143,9 @@ function CanvasInner({
     nodeAutodetectAvailable,
     pipelineId,
     fitRequest,
+    layoutDirection = DEFAULT_LAYOUT_DIRECTION,
 }: Props) {
+    const { t } = useTranslation();
     const { screenToFlowPosition, setViewport, fitView, getInternalNode, getViewport } = useReactFlow();
     const { theme } = useTheme();
 
@@ -227,7 +243,12 @@ function CanvasInner({
         };
     }, [pipelineId, hasNodes, nodesInitialized, getInternalNode, restoreViewport]);
 
-    const sequence = useMemo(() => nodeSequence(nodes, edges), [nodes, edges]);
+    const sequence = useMemo(
+        () => nodeSequence(nodes, edges, layoutDirection),
+        [nodes, edges, layoutDirection],
+    );
+    const directionToggleLabel =
+        layoutDirection === 'TB' ? t('header.layoutLeftToRight') : t('header.layoutTopToBottom');
 
     // Ctrl/Cmd+0, as the canvas menu advertises: fit the whole pipeline.
     useEffect(() => {
@@ -626,34 +647,44 @@ function CanvasInner({
             onDrop={handleDrop}
             onMouseMove={onMouseMove}
         >
-            <NodeSequenceContext.Provider value={sequence}>
-                <ReactFlow
-                    nodes={nodes}
-                    edges={edges}
-                    onNodesChange={onNodesChange}
-                    onEdgesChange={onEdgesChange}
-                    onConnect={handleConnect}
-                    onConnectStart={handleConnectStart}
-                    onSelectionChange={onSelectionChange}
-                    onNodeContextMenu={handleNodeContextMenu}
-                    onEdgeContextMenu={handleEdgeContextMenu}
-                    onEdgeDoubleClick={(_, edge) => onEdgeEdit(edge.id)}
-                    onPaneContextMenu={handlePaneContextMenu}
-                    nodeTypes={nodeTypes}
-                    edgeTypes={edgeTypes}
-                    defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
-                    deleteKeyCode={DELETE_KEYS}
-                    proOptions={PRO_OPTIONS}
-                    onMoveEnd={handleMoveEnd}
-                    // Lower than React Flow's 0.5 so a long pipeline fits on screen whole.
-                    minZoom={0.2}
-                    colorMode={theme}
-                >
-                    <Background gap={16} />
-                    {showMinimap ? <MiniMap pannable zoomable /> : null}
-                    <Controls />
-                </ReactFlow>
-            </NodeSequenceContext.Provider>
+            <LayoutDirectionContext.Provider value={layoutDirection}>
+                <NodeSequenceContext.Provider value={sequence}>
+                    <ReactFlow
+                        nodes={nodes}
+                        edges={edges}
+                        onNodesChange={onNodesChange}
+                        onEdgesChange={onEdgesChange}
+                        onConnect={handleConnect}
+                        onConnectStart={handleConnectStart}
+                        onSelectionChange={onSelectionChange}
+                        onNodeContextMenu={handleNodeContextMenu}
+                        onEdgeContextMenu={handleEdgeContextMenu}
+                        onEdgeDoubleClick={(_, edge) => onEdgeEdit(edge.id)}
+                        onPaneContextMenu={handlePaneContextMenu}
+                        nodeTypes={nodeTypes}
+                        edgeTypes={edgeTypes}
+                        defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+                        deleteKeyCode={DELETE_KEYS}
+                        proOptions={PRO_OPTIONS}
+                        onMoveEnd={handleMoveEnd}
+                        // Lower than React Flow's 0.5 so a long pipeline fits on screen whole.
+                        minZoom={0.2}
+                        colorMode={theme}
+                    >
+                        <Background gap={16} />
+                        {showMinimap ? <MiniMap pannable zoomable /> : null}
+                        <Controls>
+                            <ControlButton
+                                onClick={() => onPaneAction('toggle-layout-direction')}
+                                title={directionToggleLabel}
+                                aria-label={directionToggleLabel}
+                            >
+                                {layoutDirection === 'TB' ? <MoveRight /> : <MoveDown />}
+                            </ControlButton>
+                        </Controls>
+                    </ReactFlow>
+                </NodeSequenceContext.Provider>
+            </LayoutDirectionContext.Provider>
             {menu.element}
             {pickerPos ? (
                 <ConnectionTypePicker

@@ -17,6 +17,7 @@ import type { PortDef } from '../../workflow-ui/fields/types';
 import { resolveOutputSchema } from '../../schema-resolve';
 import { useRunStatus } from '../run-status-context';
 import { useNodeSequence } from '../node-sequence-context';
+import { useLayoutDirection } from '../layout-direction-context';
 import { deriveNodeSubtitle } from '../../node-subtitle';
 import ComponentIcon from '../../workflow-ui/ComponentIcon';
 import type { NodeKind } from '../../workflow-ui/palette-data';
@@ -64,6 +65,14 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
         }
     }, [effectiveOutputs.length, id, data.componentId, updateNodeInternals]);
 
+    // Flipping the flow direction moves every handle to another edge of the
+    // card, so React Flow must re-measure them or edges keep the old anchors.
+    const direction = useLayoutDirection();
+    const vertical = direction === 'TB';
+    useEffect(() => {
+        updateNodeInternals(id);
+    }, [vertical, id, updateNodeInternals]);
+
     const portCount = Math.max(inputs.length, effectiveOutputs.length);
 
     const effectiveSchema = useMemo(
@@ -91,6 +100,7 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
     const classes =
         'node node-' + kind +
         (selected ? ' is-selected' : '') +
+        (vertical ? ' is-vertical' : '') +
         (data.disabled ? ' is-disabled' : '') +
         (runStatus ? ' is-run-' + runStatus.status : '');
 
@@ -147,13 +157,27 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
             {portCount > 0 ? (
                 <div className="node-ports">
                     <div className="node-ports-col node-ports-inputs">
-                        {inputs.map(port => (
-                            <PortRow key={port.id} port={port} side="input" />
+                        {inputs.map((port, i) => (
+                            <PortRow
+                                key={port.id}
+                                port={port}
+                                side="input"
+                                vertical={vertical}
+                                index={i}
+                                count={inputs.length}
+                            />
                         ))}
                     </div>
                     <div className="node-ports-col node-ports-outputs">
-                        {effectiveOutputs.map(port => (
-                            <PortRow key={port.id} port={port} side="output" />
+                        {effectiveOutputs.map((port, i) => (
+                            <PortRow
+                                key={port.id}
+                                port={port}
+                                side="output"
+                                vertical={vertical}
+                                index={i}
+                                count={effectiveOutputs.length}
+                            />
                         ))}
                     </div>
                 </div>
@@ -185,9 +209,24 @@ function RunStatusBadge({ status }: { status: 'running' | 'ok' | 'error' }) {
     );
 }
 
-function PortRow({ port, side }: { port: PortDef; side: 'input' | 'output' }) {
+type PortRowProps = {
+    port: PortDef;
+    side: 'input' | 'output';
+    /** Top-to-bottom flow: inputs sit on the card's top edge, outputs on its bottom. */
+    vertical: boolean;
+    index: number;
+    count: number;
+};
+
+function PortRow({ port, side, vertical, index, count }: PortRowProps) {
     const meta = metaFor(port.type);
     const isInput = side === 'input';
+    const handleStyle = {
+        background: meta.color,
+        borderColor: 'var(--bg-1)',
+        // Spread a side's handles evenly along the edge.
+        ...(vertical ? { left: `${((index + 1) / (count + 1)) * 100}%` } : null),
+    };
 
     return (
         <div
@@ -203,10 +242,10 @@ function PortRow({ port, side }: { port: PortDef; side: 'input' | 'output' }) {
             {isInput ? (
                 <Handle
                     type="target"
-                    position={Position.Left}
+                    position={vertical ? Position.Top : Position.Left}
                     id={port.id}
                     className="node-port-handle"
-                    style={{ background: meta.color, borderColor: 'var(--bg-1)' }}
+                    style={handleStyle}
                 />
             ) : null}
             {isInput ? (
@@ -231,10 +270,10 @@ function PortRow({ port, side }: { port: PortDef; side: 'input' | 'output' }) {
             {!isInput ? (
                 <Handle
                     type="source"
-                    position={Position.Right}
+                    position={vertical ? Position.Bottom : Position.Right}
                     id={port.id}
                     className="node-port-handle"
-                    style={{ background: meta.color, borderColor: 'var(--bg-1)' }}
+                    style={handleStyle}
                 />
             ) : null}
         </div>

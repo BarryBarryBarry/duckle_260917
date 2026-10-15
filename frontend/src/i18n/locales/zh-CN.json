@@ -44,6 +44,8 @@
     "validate": "验证",
     "validateTooltip": "验证管道",
     "autoLayout": "自动布局",
+    "layoutTopToBottom": "改为从上往下排列",
+    "layoutLeftToRight": "改为从左往右排列",
     "more": "更多",
     "moreTooltip": "更多操作",
     "copySql": "复制SQL",

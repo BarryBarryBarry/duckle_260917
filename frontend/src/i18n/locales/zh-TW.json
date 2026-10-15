@@ -43,6 +43,8 @@
     "validate": "驗證",
     "validateTooltip": "驗證管線",
     "autoLayout": "自動佈局",
+    "layoutTopToBottom": "改為由上往下排列",
+    "layoutLeftToRight": "改為由左往右排列",
     "more": "更多",
     "moreTooltip": "更多操作",
     "copySql": "復制SQL",

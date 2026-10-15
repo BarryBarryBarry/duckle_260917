@@ -12,7 +12,12 @@
 // useUndoRedo.ts only feeds it snapshots and applies what it returns.
 import type { Node, Edge } from '@xyflow/react';
 
-export type CanvasSnapshot = { nodes: Node<Record<string, unknown>>[]; edges: Edge[] };
+export type CanvasSnapshot = {
+    nodes: Node<Record<string, unknown>>[];
+    edges: Edge[];
+    /** Canvas flow direction ('LR' or 'TB'); absent means left-to-right. */
+    layoutDirection?: string;
+};
 
 /** Run `fn` after `ms`; the returned function cancels it. */
 export type Timer = (fn: () => void, ms: number) => () => void;
@@ -46,7 +51,7 @@ function meaningfulKey(s: CanvasSnapshot): string {
         targetHandle: e.targetHandle ?? null,
         data: e.data,
     }));
-    return JSON.stringify({ nodes, edges });
+    return JSON.stringify({ nodes, edges, layoutDirection: s.layoutDirection ?? 'LR' });
 }
 
 type Stack = { past: CanvasSnapshot[]; future: CanvasSnapshot[] };

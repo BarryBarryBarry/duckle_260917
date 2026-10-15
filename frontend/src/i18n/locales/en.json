@@ -49,6 +49,8 @@
     "validate": "Validate",
     "validateTooltip": "Validate pipeline",
     "autoLayout": "Auto-layout",
+    "layoutTopToBottom": "Lay out top to bottom",
+    "layoutLeftToRight": "Lay out left to right",
     "more": "More",
     "moreTooltip": "More actions",
     "copySql": "Copy SQL",

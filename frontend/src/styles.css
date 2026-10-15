@@ -1099,6 +1099,38 @@ textarea:focus-visible {
     transform: translate(50%, -50%) scale(1.3);
 }
 
+/* Top-to-bottom flow: handles leave their port rows for the card's top
+   (inputs) and bottom (outputs) edges; DuckleNode spreads them along it. */
+.node.is-vertical {
+    position: relative;
+}
+
+.node.is-vertical .node-port {
+    position: static;
+}
+
+.node.is-vertical .node-port .react-flow__handle-top {
+    top: 0;
+    bottom: auto;
+    right: auto;
+    transform: translate(-50%, -50%);
+}
+
+.node.is-vertical .node-port .react-flow__handle-bottom {
+    top: auto;
+    bottom: 0;
+    right: auto;
+    transform: translate(-50%, 50%);
+}
+
+.node.is-vertical .node-port .react-flow__handle-top:hover {
+    transform: translate(-50%, -50%) scale(1.3);
+}
+
+.node.is-vertical .node-port .react-flow__handle-bottom:hover {
+    transform: translate(-50%, 50%) scale(1.3);
+}
+
 .node-disabled-badge {
     display: inline-block;
     margin-top: 4px;

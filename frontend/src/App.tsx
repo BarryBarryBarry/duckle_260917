@@ -59,7 +59,11 @@ import HomeLauncher from './workflow-ui/HomeLauncher';
 import { copyText, saveTextFile } from './tauri-io';
 import { writeClipboard, readClipboard, instantiateClipboard } from './clipboard';
 import { RunStatusContext } from './canvas/run-status-context';
-import { layoutByDependency } from './canvas/layout';
+import {
+    layoutByDependency,
+    normalizeLayoutDirection,
+    type LayoutDirection,
+} from './canvas/layout';
 import { validatePipeline } from './validation';
 import { resolveForRun, discoverParams, builtinVars, buildContextVars, pipelineRunFields } from './run-resolve';
 import type { ParamSpec } from './run-resolve';
@@ -141,6 +145,8 @@ type RuntimeState = 'connecting' | 'ready' | 'offline';
 type PipelineState = {
     nodes: Node<DuckleNodeData>[];
     edges: Edge[];
+    /** Canvas flow direction, saved with the pipeline; absent means left-to-right. */
+    layoutDirection?: LayoutDirection;
 };
 
 const SAMPLE_NODES: Node<DuckleNodeData>[] = [
@@ -554,6 +560,7 @@ export default function App() {
     const activePipeline = pipelineData[activeJobId] ?? EMPTY_PIPELINE;
     const nodes = activePipeline.nodes;
     const edges = activePipeline.edges;
+    const layoutDirection = normalizeLayoutDirection(activePipeline.layoutDirection);
 
     // Web edition: no folder picker - the server tells us which workspace it
     // serves, so we adopt and load it.
@@ -1819,10 +1826,22 @@ export default function App() {
     }, [importFromText]);
 
     const handleAutoLayout = useCallback(() => {
-        setNodes(ns => layoutByDependency(ns, edges));
+        setNodes(ns => layoutByDependency(ns, edges, layoutDirection));
         markDirty();
         setLayoutFitRequest(n => n + 1);
-    }, [setNodes, edges, markDirty]);
+    }, [setNodes, edges, layoutDirection, markDirty]);
+
+    // Flip between left-to-right and top-to-bottom and lay the pipeline out
+    // the new way, as one edit so Undo flips it back.
+    const handleToggleLayoutDirection = useCallback(() => {
+        updateActive(s => {
+            const next: LayoutDirection =
+                normalizeLayoutDirection(s.layoutDirection) === 'TB' ? 'LR' : 'TB';
+            return { ...s, layoutDirection: next, nodes: layoutByDependency(s.nodes, s.edges, next) };
+        });
+        markDirty();
+        setLayoutFitRequest(n => n + 1);
+    }, [updateActive, markDirty]);
 
     const handleDropComponent = useCallback(
         (component: ComponentDef, position: DropPosition) => {
@@ -2040,6 +2059,9 @@ export default function App() {
                 case 'auto-layout':
                     handleAutoLayout();
                     break;
+                case 'toggle-layout-direction':
+                    handleToggleLayoutDirection();
+                    break;
                 case 'select-all':
                     setNodes(ns => ns.map(n => ({ ...n, selected: true })));
                     break;
@@ -2057,7 +2079,16 @@ export default function App() {
                     break;
             }
         },
-        [handleAutoLayout, setNodes, undo, redo, handlePaste, handleBuildPipeline, activeJobId],
+        [
+            handleAutoLayout,
+            handleToggleLayoutDirection,
+            setNodes,
+            undo,
+            redo,
+            handlePaste,
+            handleBuildPipeline,
+            activeJobId,
+        ],
     );
 
     // Repository handlers ---------------------------------------------------
@@ -2813,6 +2844,7 @@ export default function App() {
                         onEdgeEdit={handleEdgeEdit}
                         nodeAutodetectAvailable={nodeAutodetectAvailable}
                         fitRequest={layoutFitRequest}
+                        layoutDirection={layoutDirection}
                     />
                 </section>
                 <PropertiesPanel
