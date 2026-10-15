@@ -31,6 +31,7 @@ import {
     agentConversationsList,
     agentConversationUpdateMeta,
     agentInstall,
+    agentListSkills,
     agentSendPrompt,
     agentStart,
     agentStop,
@@ -39,12 +40,14 @@ import {
     type AgentContext,
     type AgentEvent,
     type AgentEventEnvelope,
+    type AgentSkill,
     type DuckieConversationSummary,
     type InstallProgress,
 } from '../tauri-bridge';
 import type { RepoItem } from '../repo-types';
 import { getWorkspacePath } from '../workspace';
 import ConversationSidebar from './ConversationSidebar';
+import { SkillCommandMenu, looksLikeSkillCommand, matchSkills, skillCommand, slashQuery } from './AgentSkillMenu';
 import ReplyFooter, { type ReplyUsage } from './ReplyFooter';
 import { syncComposerHeight, useInputRecall } from './composer';
 import { useFloatingPanel } from './floating-panel';
@@ -455,6 +458,12 @@ export default function AgentChatPanel({
      *  the message goes out once they have. */
     const pendingSendRef = useRef(false);
     const sourceButtonRef = useRef<HTMLButtonElement | null>(null);
+    /** The workspace's skills, re-read while the input holds a `/command`. */
+    const [skills, setSkills] = useState<AgentSkill[] | null>(null);
+    const [skillActive, setSkillActive] = useState(0);
+    /** Escape closes the skill menu until the input stops being a `/command`. */
+    const [skillMenuDismissed, setSkillMenuDismissed] = useState(false);
+    const composerRef = useRef<HTMLDivElement | null>(null);
     const [error, setError] = useState<ChatError | null>(null);
     const [uiDialog, setUiDialog] = useState<UiDialog | null>(null);
     const [startNonce, setStartNonce] = useState(0);
@@ -506,6 +515,80 @@ export default function AgentChatPanel({
         setDraft,
         inputRef,
     );
+
+    const skillQuery = busy ? null : slashQuery(draft);
+    const skillMatches = useMemo(
+        () => (skillQuery === null || !skills ? [] : matchSkills(skills, skillQuery)),
+        [skills, skillQuery],
+    );
+    const skillMenuOpen =
+        skillQuery !== null &&
+        skills !== null &&
+        !skillMenuDismissed &&
+        (skillMatches.length > 0 || looksLikeSkillCommand(skillQuery));
+    const skillsDir = workspace
+        ? [workspace.replace(/[\\/]+$/, ''), '.duckle', 'skills'].join(workspace.includes('\\') ? '\\' : '/')
+        : '.duckle/skills';
+
+    useEffect(() => setSkills(null), [workspace]);
+
+    // Read from disk on every keystroke of a `/command`, so a skill added or
+    // edited while the app runs is offered at once.
+    useEffect(() => {
+        if (skillQuery === null || !workspace) return;
+        let cancelled = false;
+        const timer = window.setTimeout(() => {
+            void agentListSkills(workspace).then(list => {
+                if (!cancelled) setSkills(list);
+            });
+        }, 80);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [skillQuery, workspace]);
+
+    useEffect(() => {
+        setSkillActive(0);
+        if (skillQuery === null) setSkillMenuDismissed(false);
+    }, [skillQuery]);
+
+    const pickSkill = (skill: AgentSkill) => {
+        const next = `${skillCommand(skill)} `;
+        resetRecall();
+        setDraft(next);
+        requestAnimationFrame(() => {
+            const el = inputRef.current;
+            if (!el) return;
+            el.focus();
+            el.setSelectionRange(next.length, next.length);
+        });
+    };
+
+    /** The skill menu's keys; true when the key was handled. */
+    const handleSkillKey = (event: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
+        if (!skillMenuOpen) return false;
+        const count = skillMatches.length;
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            event.stopPropagation();
+            setSkillMenuDismissed(true);
+            return true;
+        }
+        if (count === 0) return false;
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            const step = event.key === 'ArrowDown' ? 1 : -1;
+            setSkillActive(i => (i + step + count) % count);
+            return true;
+        }
+        if ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab') {
+            event.preventDefault();
+            pickSkill(skillMatches[Math.min(skillActive, count - 1)]);
+            return true;
+        }
+        return false;
+    };
 
     // Also on resize: the composer's own size limits change with the panel's.
     useEffect(() => {
@@ -1343,7 +1426,7 @@ export default function AgentChatPanel({
                                         </span>
                                     </div>
                                 ) : null)}
-                            <div className="chat-panel-input-row agent-composer">
+                            <div ref={composerRef} className="chat-panel-input-row agent-composer">
                                 <textarea
                                     ref={inputRef}
                                     className="chat-panel-input"
@@ -1358,6 +1441,7 @@ export default function AgentChatPanel({
                                     disabled={busy}
                                     placeholder={t('agent.placeholder')}
                                     onKeyDown={event => {
+                                        if (handleSkillKey(event)) return;
                                         if (event.key === 'Enter' && !event.shiftKey) {
                                             event.preventDefault();
                                             void handleSend();
@@ -1366,6 +1450,17 @@ export default function AgentChatPanel({
                                         handleRecallKey(event);
                                     }}
                                 />
+                                {skillMenuOpen ? (
+                                    <SkillCommandMenu
+                                        anchor={composerRef.current}
+                                        items={skillMatches}
+                                        total={skills?.length ?? 0}
+                                        active={skillActive}
+                                        skillsDir={skillsDir}
+                                        onPick={pickSkill}
+                                        onHover={setSkillActive}
+                                    />
+                                ) : null}
                                 <div className="agent-composer-toolbar">
                                     <button
                                         ref={sourceButtonRef}

@@ -688,6 +688,11 @@
       "list_connections": "列出连接",
       "read": "读取文件",
       "unknown": "未知工具"
+    },
+    "skills": {
+      "menuAria": "Skill",
+      "empty": "还没有 skill。在 {{path}}/<名称>/SKILL.md 新建一个",
+      "noMatch": "没有匹配的 skill"
     }
   },
   "reply": {

@@ -722,6 +722,11 @@
       "list_connections": "List connections",
       "read": "Read file",
       "unknown": "Unknown tool"
+    },
+    "skills": {
+      "menuAria": "Skills",
+      "empty": "No skills yet. Add one as {{path}}/<name>/SKILL.md",
+      "noMatch": "No matching skill"
     }
   },
   "reply": {

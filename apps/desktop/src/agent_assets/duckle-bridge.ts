@@ -14,7 +14,8 @@
 //     know yet. A subagent has no UI, so it gets the read-only tools only.
 //   * Paths, for Pi's `read` and for the MCP tools' path arguments, must stay
 //     inside the workspace, outside its .duckle (keys, settings with the API
-//     key) and .git folders. `read` may also open Duckle's skills. The checked
+//     key) and .git folders. `read` may also open Duckle's skills and the
+//     workspace's own, in .duckle/skills. The checked
 //     absolute path replaces the argument, so what runs is what was checked.
 //   * Any other tool is refused.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -263,6 +264,12 @@ function checkPath(raw: string, cwd: string, forRead: boolean): PathCheck {
 	const resolved = canonical(path.resolve(cwd, p));
 	const workspace = canonical(process.env.DUCKLE_AGENT_WORKSPACE || cwd);
 	if (isInside(resolved, workspace)) {
+		// The workspace's own skills live in .duckle/skills; `read` may open them,
+		// and nothing else in .duckle. `resolved` is the real path, so a link in
+		// there pointing at a key file is judged by where it lands.
+		if (forRead && isInside(resolved, canonical(path.join(workspace, ".duckle", "skills")))) {
+			return { ok: true, resolved };
+		}
 		const hidden = PROTECTED_DIRS.find((dir) => isInside(resolved, canonical(path.join(workspace, dir))));
 		if (!hidden) return { ok: true, resolved };
 		return {

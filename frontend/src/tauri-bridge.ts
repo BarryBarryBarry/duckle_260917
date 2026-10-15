@@ -837,6 +837,26 @@ export async function agentListConnections(workspace: string): Promise<AgentConn
     }
 }
 
+/** A skill in the workspace's `.duckle/skills/<folder>/SKILL.md`. */
+export type AgentSkill = {
+    /** What follows `/skill:`. */
+    name: string;
+    description: string | null;
+    /** The skill's SKILL.md. */
+    path: string;
+};
+
+/** The workspace's skills, read from disk on every call. */
+export async function agentListSkills(workspace: string): Promise<AgentSkill[]> {
+    if (!isTauri()) return [];
+    try {
+        return await invoke<AgentSkill[]>('agent_list_skills', { workspace });
+    } catch (err) {
+        console.warn('agentListSkills failed', err);
+        return [];
+    }
+}
+
 /** Whether the free dbt engine (dbt Fusion, or dbt-core fallback) is provisioned. */
 export async function dbtStatus(): Promise<boolean> {
     if (!isTauri()) return false;

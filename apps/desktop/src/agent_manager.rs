@@ -70,6 +70,9 @@ impl AgentBackend for PiBackend {
     ) -> Result<(), String> {
         self.stop()?;
         let runtime = Arc::new(Mutex::new(RuntimeState::default()));
+        let skills_dir = crate::agent_skills::skills_dir(&config.workspace);
+        std::fs::create_dir_all(&skills_dir)
+            .map_err(|e| format!("create {}: {e}", skills_dir.display()))?;
         let mut cmd = Command::new(&config.node_bin);
         cmd.arg(&config.pi_cli_js)
             .args([
@@ -84,6 +87,10 @@ impl AgentBackend for PiBackend {
                 // A workspace's own .pi settings, extensions or MCP servers
                 // must not widen the tools the bridge allows.
                 "--no-approve",
+                // The workspace's own skills, so the model can pick one by its
+                // description. `/skill:<name>` is expanded before Pi sees it.
+                "--skill",
+                skills_dir.to_string_lossy().as_ref(),
             ])
             .current_dir(&config.workspace)
             .stdin(Stdio::piped())
@@ -157,10 +164,11 @@ impl AgentBackend for PiBackend {
             let running = state.running;
             (id, running)
         };
+        let prompt = crate::agent_skills::expand_skill_command(Path::new(&ctx.workspace), prompt);
         let mut payload = json!({
             "id": format!("prompt-{}", req_id.0),
             "type": "prompt",
-            "message": build_prompt_message(ctx, prompt),
+            "message": build_prompt_message(ctx, &prompt),
         });
         if req_id.1 {
             payload["streamingBehavior"] = json!("followUp");
@@ -318,6 +326,10 @@ pub fn agent_ui_reply_sync(request_id: String, reply: UiReply) -> Result<(), Str
 pub fn list_connections_sync(workspace: &str) -> Result<Vec<ConnectionContext>, String> {
     let saved = duckle_secrets::store::list_or_legacy(Path::new(workspace))?;
     Ok(saved.into_iter().map(|c| connection_context(&c.id, &c.name, &c.payload)).collect())
+}
+
+pub fn list_skills_sync(workspace: &str) -> Result<Vec<crate::agent_skills::SkillInfo>, String> {
+    crate::agent_skills::list_skills(Path::new(workspace))
 }
 
 /// What the agent is told about a connection: never its secrets.
@@ -648,9 +660,12 @@ fn history_message_from_pi(message: &JsonValue) -> Option<AgentHistoryMessage> {
     if trimmed.is_empty() {
         return None;
     }
+    let collapsed = (role == "user")
+        .then(|| crate::agent_skills::collapse_skill_block(trimmed))
+        .flatten();
     Some(AgentHistoryMessage {
         role: role.to_string(),
-        text: trimmed.to_string(),
+        text: collapsed.unwrap_or_else(|| trimmed.to_string()),
     })
 }
 
@@ -1372,6 +1387,12 @@ mod agent_e2e {
                 "mcp__duckle__list_pipelines",
                 json!({ "directory": pipelines }),
             )
+        } else if user.contains("SKILL_BODY_MARK") {
+            text_reply("SKILL_EXPANDED")
+        } else if user.contains("read skill ref") {
+            tool_reply("read", json!({ "path": ".duckle/skills/demo/references/notes.md" }))
+        } else if user.contains("read skill link") {
+            tool_reply("read", json!({ "path": ".duckle/skills/demo/leak.json" }))
         } else if user.contains("delegate a write") {
             tool_reply(
                 SUBAGENT_TOOL,
@@ -1655,6 +1676,32 @@ mod agent_e2e {
             err && out.contains(".duckle folder") && !out.contains("sk-hidden"),
             "{out}"
         );
+        // The workspace's skills may be read, and a link out of them may not.
+        let skill = ws.join(".duckle/skills/demo");
+        std::fs::create_dir_all(skill.join("references")).unwrap();
+        std::fs::write(skill.join("references/notes.md"), "SKILL_REF_NOTE").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(ws.join(".duckle/settings.json"), skill.join("leak.json")).unwrap();
+            let (out, err) = tool_end(&mut backend, &events, &ctx, "please read skill link", "read");
+            assert!(err && !out.contains("sk-hidden"), "{out}");
+        }
+        let (out, err) = tool_end(&mut backend, &events, &ctx, "please read skill ref", "read");
+        assert!(!err && out.contains("SKILL_REF_NOTE"), "{out}");
+        // `/skill:<name>` reaches the model expanded, though the message starts
+        // with the context block and the skill was added after Pi started.
+        std::fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: demo\ndescription: A demo skill.\n---\nSKILL_BODY_MARK\n",
+        )
+        .unwrap();
+        events.clear();
+        backend.send_prompt("/skill:demo go", &ctx).unwrap();
+        events.wait_for(
+            "skill reply",
+            |e| matches!(e, AgentEvent::TextDelta { delta } if delta.contains("SKILL_EXPANDED")),
+        );
+        events.wait_for("settled", |e| matches!(e, AgentEvent::Settled));
         let (out, err) = tool_end(
             &mut backend,
             &events,
@@ -1736,6 +1783,10 @@ mod agent_e2e {
         assert!(messages
             .iter()
             .any(|m| m.role == "assistant" && m.text.contains("PARENT_DONE")));
+        assert!(
+            messages.iter().any(|m| m.role == "user" && m.text == "/skill:demo go"),
+            "a skill message is restored as its command: {messages:#?}"
+        );
         backend.stop().unwrap();
     }
 }

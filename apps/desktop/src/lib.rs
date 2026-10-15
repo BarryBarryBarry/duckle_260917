@@ -22,6 +22,7 @@ use tracing_subscriber::EnvFilter;
 mod agent_backend;
 mod agent_bridge;
 mod agent_manager;
+mod agent_skills;
 mod app_settings;
 mod ci_status;
 mod dbt_engine;
@@ -278,6 +279,7 @@ pub fn run() {
             agent_stop,
             agent_ui_reply,
             agent_list_connections,
+            agent_list_skills,
             llama_models,
             llama_default_model,
             dbt_status,
@@ -1488,6 +1490,16 @@ fn agent_list_connections(
         return Ok(Vec::new());
     }
     agent_manager::list_connections_sync(&workspace)
+}
+
+/// The workspace's skills (`.duckle/skills/<name>/SKILL.md`), read from disk on
+/// every call so the Agent input's `/skill:` menu is always current.
+#[tauri::command]
+fn agent_list_skills(workspace: String) -> Result<Vec<agent_skills::SkillInfo>, String> {
+    if workspace.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    agent_manager::list_skills_sync(&workspace)
 }
 
 /// Whether a free dbt engine (Apache dbt-core + dbt-duckdb, provisioned via uv)

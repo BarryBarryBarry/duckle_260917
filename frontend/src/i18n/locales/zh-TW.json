@@ -617,6 +617,11 @@
       "list_connections": "列出連線",
       "read": "讀取檔案",
       "unknown": "未知工具"
+    },
+    "skills": {
+      "menuAria": "Skill",
+      "empty": "還沒有 skill。在 {{path}}/<名稱>/SKILL.md 新增一個",
+      "noMatch": "沒有符合的 skill"
     }
   },
   "reply": {

@@ -580,6 +580,11 @@
       "list_connections": "接続を一覧",
       "read": "ファイルを読み取り",
       "unknown": "不明なツール"
+    },
+    "skills": {
+      "menuAria": "スキル",
+      "empty": "スキルはまだありません。{{path}}/<名前>/SKILL.md に追加してください",
+      "noMatch": "一致するスキルはありません"
     }
   },
   "reply": {
