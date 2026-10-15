@@ -21,6 +21,7 @@
     "fs:allow-write-text-file",
     "fs:allow-mkdir",
     "fs:allow-exists",
+    "fs:allow-remove",
     {
       "identifier": "fs:scope",
       "allow": [{ "path": "**" }]

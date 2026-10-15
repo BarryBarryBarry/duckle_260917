@@ -468,7 +468,16 @@ async fn autodetect_schema(
         None => {}
     }
     let inspection = match engine() {
-        Ok(eng) => match eng.inspect(&format, options.clone()) {
+        // Off the async runtime, as connection_test is: the engine blocks, and a
+        // reader that drives a runtime of its own (SQL Server's) panics on a
+        // thread that is already driving this one (#375).
+        Ok(eng) => match tokio::task::spawn_blocking({
+            let (format, options) = (format.clone(), options.clone());
+            move || eng.inspect(&format, options)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+        {
             Ok(insp) => insp,
             Err(e) => {
                 tracing::warn!(
@@ -2993,6 +3002,51 @@ mod tests {
         // With no workspace to resolve it from, the reason is said.
         let err = compile_pipeline(pipeline, None).unwrap_err();
         assert!(err.contains("saved connection"), "{err}");
+    }
+
+    /// #375: Autodetect on a SQL Server source failed every time, whatever the
+    /// table, with "the SQL Server driver panicked running a catalog query". The
+    /// command is async and called the engine on the async runtime; the SQL
+    /// Server reader blocks on a runtime of its own, and tokio panics when a
+    /// thread that is already driving one tries. Nothing listens on the port,
+    /// so the answer has to be the connection failing: the reader really ran.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn autodetect_runs_a_sqlserver_source_off_the_async_runtime() {
+        let Some(bin) = std::env::var_os("DUCKLE_DUCKDB_BIN") else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN to a duckdb CLI to run");
+            return;
+        };
+        let _ = DUCKDB_BIN.set(PathBuf::from(bin));
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let options = serde_json::json!({
+            "host": "127.0.0.1", "port": port, "user": "etl", "password": "p",
+            "database": "sales", "tableName": "orders", "encrypt": false
+        });
+        let err = autodetect_schema("sqlserver".into(), options, None).await.unwrap_err();
+        assert!(!err.contains("panicked"), "{err}");
+        assert!(err.contains("connect"), "the reader tried the server: {err}");
+    }
+
+    /// #371: deleting a pipeline, dive or dashboard in the desktop app left its
+    /// file on disk, and a pipeline file is registered again when the workspace
+    /// opens, so a deleted pipeline came back under its id. The editor deletes
+    /// through the fs plugin, but the window was never granted `remove`: the
+    /// plugin refused and the editor only logged it. The web edition deletes.
+    /// Resolved by Tauri's own ACL code from the plugin permission sets
+    /// tauri-build wrote for this build, and checked the way a call is checked.
+    #[test]
+    fn the_main_window_is_allowed_to_remove_files() {
+        use tauri::utils::acl::{capability::Capability, manifest::Manifest, resolved::Resolved};
+        let read = |p: &str| std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(p)).unwrap();
+        let acl: std::collections::BTreeMap<String, Manifest> =
+            serde_json::from_str(&read("gen/schemas/acl-manifests.json")).unwrap();
+        let cap: Capability = serde_json::from_str(&read("capabilities/default.json")).unwrap();
+        let caps = [(cap.identifier.clone(), cap)].into();
+        let resolved = Resolved::resolve(&acl, caps, tauri::utils::platform::Target::current()).unwrap();
+        let authority = tauri::runtime_authority!(acl, resolved);
+        let local = tauri::ipc::Origin::Local;
+        assert!(authority.resolve_access("plugin:fs|write_text_file", "main", "main", &local).is_some());
+        assert!(authority.resolve_access("plugin:fs|remove", "main", "main", &local).is_some());
     }
 
     /// #361: on a Wayland session with no X server the window never opened -

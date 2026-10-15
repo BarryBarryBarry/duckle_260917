@@ -58,7 +58,7 @@ sha2 = "0.11"
 # codes. Same versions as duckle-runner, so no new crates enter the lockfile.
 argon2 = "0.6"
 getrandom = "0.4"
-zip = "8"
+zip = "9"
 # tar + gzip for the llama.cpp archives on Linux/macOS - they ship
 # as .tar.gz where Windows ships as .zip.
 tar = "0.4"
