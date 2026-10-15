@@ -506,6 +506,10 @@ export default function App() {
         loadPersisted<boolean>('showHomeOnStartup', true),
     );
     const [showHome, setShowHome] = useState(false);
+    // The desktop signs in first, on a page laid out like Home, so the editor
+    // it opens into goes straight to the canvas. Elsewhere Home opens at start
+    // when the user has asked for it.
+    const homeAtStartup = showHomeOnStartup && !isInTauri();
     // Open it once, after the startup gates have cleared, so Home is never
     // stacked behind the engine or workspace dialogs.
     const homeShownRef = useRef(false);
@@ -519,19 +523,19 @@ export default function App() {
         // made the first minute confusing. TOUR_FINISHED_EVENT below opens it afterwards.
         if (!tourAlreadySeen()) return;
         homeShownRef.current = true;
-        if (showHomeOnStartup) setShowHome(true);
-    }, [showEngineSetup, showWorkspacePicker, workspacePathState, showHomeOnStartup]);
+        if (homeAtStartup) setShowHome(true);
+    }, [showEngineSetup, showWorkspacePicker, workspacePathState, homeAtStartup]);
 
     // The tour has finished (or been skipped): now Home may open, once.
     useEffect(() => {
         const afterTour = () => {
             if (homeShownRef.current) return;
             homeShownRef.current = true;
-            if (showHomeOnStartup) setShowHome(true);
+            if (homeAtStartup) setShowHome(true);
         };
         window.addEventListener(TOUR_FINISHED_EVENT, afterTour);
         return () => window.removeEventListener(TOUR_FINISHED_EVENT, afterTour);
-    }, [showHomeOnStartup]);
+    }, [homeAtStartup]);
 
     const handleToggleShowHomeOnStartup = useCallback((next: boolean) => {
         setShowHomeOnStartup(next);
@@ -2707,7 +2711,7 @@ export default function App() {
                 onClose={() => setShowHome(false)}
                 workspaceName={workspacePathState?.split(/[\\/]/).filter(Boolean).pop() ?? null}
                 showOnStartup={showHomeOnStartup}
-                onToggleShowOnStartup={handleToggleShowHomeOnStartup}
+                onToggleShowOnStartup={isInTauri() ? undefined : handleToggleShowHomeOnStartup}
                 actions={{
                     activePipelineId: activeJobId,
                     // Closing Home is what reveals the canvas underneath.

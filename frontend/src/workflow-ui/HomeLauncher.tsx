@@ -337,13 +337,69 @@ export function buildModules(a: LauncherActions): LauncherModule[] {
     return mods;
 }
 
+/** The three group cards Home opens on. */
+export function HomeGroupCards({
+    modules,
+    onPick,
+    className,
+}: {
+    modules: LauncherModule[];
+    onPick: (group: ModuleGroup) => void;
+    className?: string;
+}) {
+    const { t } = useTranslation();
+    return (
+        <div className={'home-launcher-groups' + (className ? ' ' + className : '')}>
+            {GROUP_ORDER.map(group => {
+                const card = GROUP_CARD[group];
+                const GroupIcon = card.icon;
+                const inGroup = modules.filter(m => m.group === group);
+                const ready = inGroup.filter(m => m.status === 'ready').length;
+                const content = (
+                    <>
+                        <span className="home-group-rule" aria-hidden="true" />
+                        <span className="home-group-top">
+                            <GroupIcon size={15} />
+                            <span className="home-group-name">{t(`launcher.group.${group}`, GROUP_LABEL[group])}</span>
+                        </span>
+                        <span className="home-group-blurb">{card.blurb}</span>
+                        <span className="home-group-foot">
+                            {/* The bar is the readiness number drawn, not decoration:
+                                Govern reading a third full is the enterprise gap. */}
+                            <span className="home-group-meter" aria-hidden="true">
+                                <span
+                                    className="home-group-meter-fill"
+                                    style={{ width: `${Math.round((ready / Math.max(inGroup.length, 1)) * 100)}%` }}
+                                />
+                            </span>
+                            <span className="home-group-count">
+                                {t('launcher.groupCount', '{{ready}} of {{total}} ready', {
+                                    ready,
+                                    total: inGroup.length,
+                                })}
+                            </span>
+                        </span>
+                    </>
+                );
+                return (
+                    <button key={group} type="button" className="home-group-tile" onClick={() => onPick(group)}>
+                        {content}
+                    </button>
+                );
+            })}
+        </div>
+    );
+}
+
 type Props = {
     open: boolean;
     onClose: () => void;
     actions: LauncherActions;
     workspaceName: string | null;
     showOnStartup: boolean;
-    onToggleShowOnStartup: (next: boolean) => void;
+    /** Absent where Home never opens on its own (the desktop, which signs in
+     *  first), so the option is not offered. */
+    onToggleShowOnStartup?: (next: boolean) => void;
 };
 
 export default function HomeLauncher({
@@ -408,49 +464,7 @@ export default function HomeLauncher({
 
                 <div className="home-launcher-body">
                     {!openGroup ? (
-                        <div className="home-launcher-groups">
-                            {GROUP_ORDER.map(group => {
-                                const card = GROUP_CARD[group];
-                                const GroupIcon = card.icon;
-                                const inGroup = modules.filter(m => m.group === group);
-                                const ready = inGroup.filter(m => m.status === 'ready').length;
-                                return (
-                                    <button
-                                        key={group}
-                                        type="button"
-                                        className="home-group-tile"
-                                        onClick={() => setOpenGroup(group)}
-                                    >
-                                        <span className="home-group-rule" aria-hidden="true" />
-                                        <span className="home-group-top">
-                                            <GroupIcon size={15} />
-                                            <span className="home-group-name">
-                                                {t(`launcher.group.${group}`, GROUP_LABEL[group])}
-                                            </span>
-                                        </span>
-                                        <span className="home-group-blurb">{card.blurb}</span>
-                                        <span className="home-group-foot">
-                                            {/* The bar is the readiness number drawn, not decoration:
-                                                Govern reading a third full is the enterprise gap. */}
-                                            <span className="home-group-meter" aria-hidden="true">
-                                                <span
-                                                    className="home-group-meter-fill"
-                                                    style={{
-                                                        width: `${Math.round((ready / Math.max(inGroup.length, 1)) * 100)}%`,
-                                                    }}
-                                                />
-                                            </span>
-                                            <span className="home-group-count">
-                                                {t('launcher.groupCount', '{{ready}} of {{total}} ready', {
-                                                    ready,
-                                                    total: inGroup.length,
-                                                })}
-                                            </span>
-                                        </span>
-                                    </button>
-                                );
-                            })}
-                        </div>
+                        <HomeGroupCards modules={modules} onPick={setOpenGroup} />
                     ) : (
                         <section className="home-launcher-group">
                             <button
@@ -512,14 +526,18 @@ export default function HomeLauncher({
                 </div>
 
                 <footer className="home-launcher-foot">
-                    <label className="home-launcher-startup">
-                        <input
-                            type="checkbox"
-                            checked={showOnStartup}
-                            onChange={e => onToggleShowOnStartup(e.target.checked)}
-                        />
-                        {t('launcher.showOnStartup', 'Show this when Otter ETL agent opens')}
-                    </label>
+                    {onToggleShowOnStartup ? (
+                        <label className="home-launcher-startup">
+                            <input
+                                type="checkbox"
+                                checked={showOnStartup}
+                                onChange={e => onToggleShowOnStartup(e.target.checked)}
+                            />
+                            {t('launcher.showOnStartup', 'Show this when Otter ETL agent opens')}
+                        </label>
+                    ) : (
+                        <span />
+                    )}
                     <span className="home-launcher-count">
                         {t('launcher.readyCount', '{{n}} available now', { n: readyCount })}
                     </span>

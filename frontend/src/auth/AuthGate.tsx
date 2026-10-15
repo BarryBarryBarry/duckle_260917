@@ -13,10 +13,13 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { Check, Copy, Loader2, Lock } from 'lucide-react';
+import { Bot, Check, Copy, Eye, EyeOff, Loader2, Lock, ShieldCheck, Timer, Workflow } from 'lucide-react';
 import { DuckleLogo } from '../workflow-ui/DuckleLogo';
+import { buildModules, type ModuleGroup } from '../workflow-ui/HomeLauncher';
 import WindowControls from '../workflow-ui/WindowControls';
 import WindowResizeHandles from '../workflow-ui/WindowResizeHandles';
+import { DUCKIE_ENABLED } from '../features';
+import { getWorkspacePath } from '../workspace';
 import { isTauri } from '../tauri-dialog';
 import { copyText } from '../tauri-io';
 import { loadPersisted, savePersisted } from '../persistence';
@@ -194,21 +197,151 @@ function DesktopGate({ children }: { children: ReactNode }) {
 }
 
 /** Full-window backdrop with the window's own drag strip and buttons, since
- *  the app window is frameless and the editor's top bar is not mounted yet. */
-function AuthScreen({ children, wide = false }: { children: ReactNode; wide?: boolean }) {
-    return (
-        <div className="auth-screen">
-            <WindowResizeHandles />
-            <div className="auth-drag" data-tauri-drag-region>
-                <div className="auth-drag-spacer" data-tauri-drag-region />
-                <WindowControls />
-            </div>
-            <div className={'acct-modal auth-card' + (wide ? ' auth-card-wide' : '')}>
+ *  the app window is frameless and the editor's top bar is not mounted yet.
+ *  `home` is the signed-out landing page: what the app does on the left, the
+ *  way in on the right, with the brand in the top bar instead of the card. */
+function AuthScreen({ children, wide = false, home = false }: { children: ReactNode; wide?: boolean; home?: boolean }) {
+    const card = (
+        <div className={'acct-modal auth-card' + (wide ? ' auth-card-wide' : '')}>
+            {home ? null : (
                 <div className="auth-brand">
                     <DuckleLogo size={28} />
                     <span>Otter ETL agent</span>
                 </div>
-                {children}
+            )}
+            {children}
+        </div>
+    );
+    return (
+        <div className={'auth-screen' + (home ? ' auth-home' : '')}>
+            <WindowResizeHandles />
+            <div className="auth-drag" data-tauri-drag-region>
+                {home ? (
+                    <div className="auth-topbar-brand" data-tauri-drag-region>
+                        <DuckleLogo size={26} />
+                        <span className="auth-topbar-name">Otter ETL agent</span>
+                        <span className="auth-topbar-by">by SlothFlowLabs</span>
+                    </div>
+                ) : null}
+                <div className="auth-drag-spacer" data-tauri-drag-region />
+                <WindowControls />
+            </div>
+            {home ? <LandingFrame>{card}</LandingFrame> : card}
+        </div>
+    );
+}
+
+/** What Home shows before anyone is signed in: the same groups and counts the
+ *  editor's Home has on this desktop, for looking at, not opening. */
+function signedOutModules() {
+    const none = () => {};
+    return buildModules({
+        openDesigner: none,
+        importJob: none,
+        openDuckie: DUCKIE_ENABLED ? none : undefined,
+        openMcp: none,
+        openRuns: none,
+        openSchedules: none,
+        openPlans: none,
+        openBuild: none,
+        openLineage: none,
+        openTrust: none,
+        openCatalog: none,
+        openDataQuality: none,
+        openGit: none,
+        openSettings: none,
+        activePipelineId: '',
+    });
+}
+
+type GroupFigure = { group: ModuleGroup; ready: number; total: number };
+
+/** The signed-out landing page: a headline and a picture of the product on
+ *  the left, the sign-in card on the right. */
+function LandingFrame({ children }: { children: ReactNode }) {
+    const { t } = useTranslation();
+    const modules = signedOutModules();
+    const groups: GroupFigure[] = (['build', 'operate', 'govern'] as const).map(group => {
+        const inGroup = modules.filter(m => m.group === group);
+        return { group, ready: inGroup.filter(m => m.status === 'ready').length, total: inGroup.length };
+    });
+    const workspaceName = getWorkspacePath()?.split(/[\\/]/).filter(Boolean).pop() ?? null;
+    return (
+        <div className="auth-landing">
+            <div className="auth-landing-bg" aria-hidden="true" />
+            <main className="auth-landing-main">
+                <section className="auth-hero">
+                    <span className="auth-hero-badge">{t('auth.hero.badge')}</span>
+                    <h1 className="auth-hero-title">{t('auth.hero.title')}</h1>
+                    <p className="auth-hero-sub">{t('auth.hero.sub')}</p>
+                    <HeroArt groups={groups} />
+                </section>
+                <div className="auth-landing-card">{children}</div>
+            </main>
+            <footer className="auth-landing-foot">
+                {workspaceName ? (
+                    <span>{t('launcher.subtitleWs', 'Workspace: {{name}}', { name: workspaceName })}</span>
+                ) : null}
+                <span>© 2026 SlothFlowLabs · Otter ETL agent</span>
+            </footer>
+        </div>
+    );
+}
+
+const GROUP_ICON: Record<ModuleGroup, typeof Workflow> = { build: Workflow, operate: Timer, govern: ShieldCheck };
+
+/** The product, drawn: a pipeline on a canvas, with what the app holds - its
+ *  three areas and the Agent - floating around it. Decorative; every word in
+ *  it is also said elsewhere on the page. */
+function HeroArt({ groups }: { groups: GroupFigure[] }) {
+    const { t } = useTranslation();
+    const nodes = [
+        { kind: 'source', name: 'MySQL', sub: 'orders' },
+        { kind: 'transform', name: 'Filter', sub: "status = 'paid'" },
+        { kind: 'sink', name: 'PostgreSQL', sub: 'new_order' },
+    ] as const;
+    return (
+        <div className="auth-hero-art" aria-hidden="true">
+            <div className="auth-hero-glow" />
+            <div className="auth-hero-canvas">
+                <div className="auth-hero-canvas-bar">
+                    <i />
+                    <i />
+                    <i />
+                </div>
+                <svg className="auth-hero-links" viewBox="0 0 100 60" preserveAspectRatio="none">
+                    <path d="M29 30 C 33 30, 33 30, 37 30" />
+                    <path d="M63 30 C 67 30, 67 30, 71 30" />
+                </svg>
+                <div className="auth-hero-nodes">
+                    {nodes.map((n, i) => (
+                        <div key={n.name} className={`auth-hero-node is-${n.kind}`} style={{ animationDelay: `${i * 0.6}s` }}>
+                            <span className="auth-hero-node-kind">{t(`node.${n.kind}`)}</span>
+                            <span className="auth-hero-node-name">
+                                <span className="auth-hero-node-seq">{i + 1}</span>
+                                {n.name}
+                            </span>
+                            <span className="auth-hero-node-sub">{n.sub}</span>
+                        </div>
+                    ))}
+                </div>
+            </div>
+            {groups.map(g => {
+                const Icon = GROUP_ICON[g.group];
+                return (
+                    <div key={g.group} className={`auth-hero-chip is-${g.group}`}>
+                        <Icon size={13} />
+                        <span className="auth-hero-chip-name">{t(`auth.hero.group.${g.group}`)}</span>
+                        <span className="auth-hero-chip-count">
+                            {g.ready}/{g.total}
+                        </span>
+                    </div>
+                );
+            })}
+            <div className="auth-hero-chip is-agent">
+                <Bot size={13} />
+                <span>{t('auth.hero.agent')}</span>
+                <Check size={12} className="auth-hero-chip-ok" />
             </div>
         </div>
     );
@@ -343,6 +476,7 @@ function SignInScreen({ storePath, onSignedIn }: { storePath: string; onSignedIn
         const saved = loadPersisted<number>(REMEMBER_KEY, 0);
         return (REMEMBER_DAYS as readonly number[]).includes(saved);
     });
+    const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
 
@@ -374,31 +508,55 @@ function SignInScreen({ storePath, onSignedIn }: { storePath: string; onSignedIn
     };
 
     return (
-        <AuthScreen>
-            <h3>{t('auth.signInTitle')}</h3>
-            <p className="acct-modal-sub">{t('auth.signInSub')}</p>
-            <form className="acct-form" onSubmit={submit}>
-                <label className="acct-label">
-                    {t('auth.username')}
+        <AuthScreen home>
+            <div className="auth-signin-head">
+                <h3>{t('auth.signInTitle')}</h3>
+                <p className="acct-modal-sub">{t('auth.signInSub')}</p>
+            </div>
+            <form className="acct-form auth-signin-form" onSubmit={submit}>
+                <input
+                    className="auth-input"
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    placeholder={t('auth.username')}
+                    aria-label={t('auth.username')}
+                    autoFocus={!username}
+                    autoComplete="username"
+                    spellCheck={false}
+                />
+                <div className="auth-input-wrap">
                     <input
-                        value={username}
-                        onChange={e => setUsername(e.target.value)}
-                        autoFocus={!username}
-                        autoComplete="username"
+                        className="auth-input"
+                        type={showPassword ? 'text' : 'password'}
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        placeholder={t('auth.password')}
+                        aria-label={t('auth.password')}
+                        autoFocus={!!username}
+                        autoComplete="current-password"
+                        spellCheck={false}
                     />
-                </label>
-                <PasswordField label={t('auth.password')} value={password} onChange={setPassword} autoFocus={!!username} />
-                <label className="auth-check">
-                    <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
-                    {t('auth.remember')}
-                </label>
-                {remember ? (
-                    <label className="acct-label">
-                        {t('auth.rememberFor')}
+                    <button
+                        type="button"
+                        className="auth-input-eye"
+                        onClick={() => setShowPassword(v => !v)}
+                        aria-label={showPassword ? t('auth.hidePassword') : t('auth.showPassword')}
+                        title={showPassword ? t('auth.hidePassword') : t('auth.showPassword')}
+                    >
+                        {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                </div>
+                <div className="auth-signin-row">
+                    <label className="auth-check">
+                        <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} />
+                        {t('auth.remember')}
+                    </label>
+                    {remember ? (
                         <select
-                            className="auth-select"
+                            className="auth-select auth-select-inline"
                             value={rememberDays}
                             onChange={e => setRememberDays(Number(e.target.value) as RememberDays)}
+                            aria-label={t('auth.rememberFor')}
                         >
                             {REMEMBER_DAYS.map(d => (
                                 <option key={d} value={d}>
@@ -406,17 +564,19 @@ function SignInScreen({ storePath, onSignedIn }: { storePath: string; onSignedIn
                                 </option>
                             ))}
                         </select>
-                    </label>
-                ) : null}
-                {error ? <p className="auth-error" role="alert">{error}</p> : null}
-                <div className="auth-actions-split">
-                    <button type="button" className="acct-link" onClick={() => setMode('forgot')}>
+                    ) : null}
+                    <button type="button" className="acct-link auth-forgot" onClick={() => setMode('forgot')}>
                         {t('auth.forgot')}
                     </button>
-                    <button type="submit" className="acct-btn acct-btn-primary" disabled={busy || !username.trim() || !password}>
-                        {busy ? t('auth.working') : t('auth.signIn')}
-                    </button>
                 </div>
+                {error ? <p className="auth-error" role="alert">{error}</p> : null}
+                <button
+                    type="submit"
+                    className="acct-btn acct-btn-primary auth-submit"
+                    disabled={busy || !username.trim() || !password}
+                >
+                    {busy ? t('auth.working') : t('auth.signIn')}
+                </button>
             </form>
         </AuthScreen>
     );
@@ -443,7 +603,7 @@ function ForgotPasswordScreen({
 
     if (nextCode) {
         return (
-            <AuthScreen>
+            <AuthScreen home>
                 <p className="auth-success">{t('auth.recoverDone')}</p>
                 <RecoveryCodePanel code={nextCode} onContinue={onBack} />
             </AuthScreen>
@@ -466,42 +626,62 @@ function ForgotPasswordScreen({
     };
 
     return (
-        <AuthScreen wide>
-            <h3>{t('auth.forgotTitle')}</h3>
-            <section className="auth-section">
-                <h4>{t('auth.recoverWithCode')}</h4>
-                <form className="acct-form" onSubmit={submit}>
-                    <label className="acct-label">
-                        {t('auth.username')}
-                        <input value={username} onChange={e => setUsername(e.target.value)} autoComplete="username" />
-                    </label>
-                    <label className="acct-label">
-                        {t('auth.recoveryCode')}
-                        <input
-                            value={code}
-                            onChange={e => setCode(e.target.value)}
-                            placeholder="XXXXX-XXXXX-XXXXX-XXXXX"
-                            spellCheck={false}
-                            autoComplete="off"
-                            autoFocus
-                        />
-                    </label>
-                    <PasswordField label={t('auth.newPassword')} value={password} onChange={setPassword} autoComplete="new-password" />
-                    <PasswordField label={t('auth.confirmPassword')} value={confirm} onChange={setConfirm} autoComplete="new-password" />
-                    {error ? <p className="auth-error" role="alert">{error}</p> : null}
-                    <div className="acct-form-actions">
-                        <button
-                            type="submit"
-                            className="acct-btn acct-btn-primary"
-                            disabled={busy || !username.trim() || !code.trim()}
-                        >
-                            {busy ? t('auth.working') : t('auth.resetPassword')}
-                        </button>
-                    </div>
-                </form>
-            </section>
-            <section className="auth-section">
-                <h4>{t('auth.manualResetTitle')}</h4>
+        <AuthScreen home>
+            <div className="auth-signin-head">
+                <h3>{t('auth.forgotTitle')}</h3>
+                <p className="acct-modal-sub">{t('auth.recoverWithCode')}</p>
+            </div>
+            <form className="acct-form auth-signin-form" onSubmit={submit}>
+                <input
+                    className="auth-input"
+                    value={username}
+                    onChange={e => setUsername(e.target.value)}
+                    placeholder={t('auth.username')}
+                    aria-label={t('auth.username')}
+                    autoComplete="username"
+                    spellCheck={false}
+                />
+                <input
+                    className="auth-input auth-input-code"
+                    value={code}
+                    onChange={e => setCode(e.target.value)}
+                    placeholder={`${t('auth.recoveryCode')}  XXXXX-XXXXX-XXXXX-XXXXX`}
+                    aria-label={t('auth.recoveryCode')}
+                    spellCheck={false}
+                    autoComplete="off"
+                    autoFocus
+                />
+                <input
+                    className="auth-input"
+                    type="password"
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder={t('auth.newPassword')}
+                    aria-label={t('auth.newPassword')}
+                    autoComplete="new-password"
+                    spellCheck={false}
+                />
+                <input
+                    className="auth-input"
+                    type="password"
+                    value={confirm}
+                    onChange={e => setConfirm(e.target.value)}
+                    placeholder={t('auth.confirmPassword')}
+                    aria-label={t('auth.confirmPassword')}
+                    autoComplete="new-password"
+                    spellCheck={false}
+                />
+                {error ? <p className="auth-error" role="alert">{error}</p> : null}
+                <button
+                    type="submit"
+                    className="acct-btn acct-btn-primary auth-submit"
+                    disabled={busy || !username.trim() || !code.trim()}
+                >
+                    {busy ? t('auth.working') : t('auth.resetPassword')}
+                </button>
+            </form>
+            <details className="auth-manual">
+                <summary>{t('auth.manualResetTitle')}</summary>
                 <p className="acct-modal-sub">{t('auth.manualResetSub')}</p>
                 <div className="auth-code-row">
                     <code className="auth-path">{storePath}</code>
@@ -514,8 +694,8 @@ function ForgotPasswordScreen({
                         {copied ? <Check size={14} /> : <Copy size={14} />}
                     </button>
                 </div>
-            </section>
-            <button type="button" className="acct-link" onClick={onBack}>
+            </details>
+            <button type="button" className="acct-link auth-back" onClick={onBack}>
                 {t('auth.backToSignIn')}
             </button>
         </AuthScreen>

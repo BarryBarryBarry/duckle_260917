@@ -301,7 +301,20 @@
       "hash_failed": "パスワードを処理できませんでした。",
       "rng_failed": "安全な乱数を生成できませんでした。"
     },
-    "user": "一般ユーザー"
+    "user": "一般ユーザー",
+    "hero": {
+      "badge": "ローカルファースト · AI 搭載",
+      "title": "Agent にデータパイプラインを組ませよう",
+      "sub": "パイプラインの設計・実行・スケジュール・ガバナンスを、このコンピューターで",
+      "agent": "Agent が 3 つのノードを作成",
+      "group": {
+        "build": "構築",
+        "operate": "運用",
+        "govern": "ガバナンス"
+      }
+    },
+    "showPassword": "パスワードを表示",
+    "hidePassword": "パスワードを隠す"
   },
   "firstRun": {
     "workspace": {

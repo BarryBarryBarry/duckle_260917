@@ -407,7 +407,20 @@
       "hash_failed": "无法处理该密码。",
       "rng_failed": "无法生成安全随机数。"
     },
-    "user": "普通用户"
+    "user": "普通用户",
+    "hero": {
+      "badge": "本地优先 · AI 驱动",
+      "title": "让 Agent 帮你搭建数据管道",
+      "sub": "设计、运行、调度与治理 pipeline，都在这台电脑上完成",
+      "agent": "Agent 已生成 3 个节点",
+      "group": {
+        "build": "构建",
+        "operate": "运行",
+        "govern": "治理"
+      }
+    },
+    "showPassword": "显示密码",
+    "hidePassword": "隐藏密码"
   },
   "firstRun": {
     "workspace": {
