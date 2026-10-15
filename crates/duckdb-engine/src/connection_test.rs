@@ -67,6 +67,17 @@ fn probe(kind: &str) -> Option<Probe> {
             list: "SELECT TABLE_SCHEMA + '.' + TABLE_NAME AS name FROM INFORMATION_SCHEMA.TABLES",
             ping: "SELECT 1 AS ok",
         }),
+        // Oracle folds an unquoted alias to upper case, hence "name". The
+        // schemas Oracle itself maintains (SYS, SYSTEM, ...) are left out, as the
+        // server's catalog schemas are for the attached databases.
+        "oracle" => Some(Probe::Tables {
+            component: "src.oracle",
+            list: "SELECT OWNER || '.' || TABLE_NAME AS \"name\" FROM ALL_TABLES WHERE OWNER NOT IN \
+                   (SELECT USERNAME FROM ALL_USERS WHERE ORACLE_MAINTAINED = 'Y') UNION ALL \
+                   SELECT OWNER || '.' || VIEW_NAME AS \"name\" FROM ALL_VIEWS WHERE OWNER NOT IN \
+                   (SELECT USERNAME FROM ALL_USERS WHERE ORACLE_MAINTAINED = 'Y')",
+            ping: "SELECT 1 AS \"ok\" FROM DUAL",
+        }),
         "s3" => Some(Probe::Bucket),
         "rest" => Some(Probe::Http),
         _ => None,
@@ -320,6 +331,23 @@ mod tests {
         let r = engine.test_connection(&json!({ "kind": "rest", "authType": "bearer", "authToken": "t0ken" }));
         assert!(!r.ok);
         assert!(r.message.contains("URL"), "{}", r.message);
+    }
+
+    /// An Oracle connection is tested through `src.oracle`, so the node's
+    /// required fields come from the connection's host / database / username.
+    #[test]
+    fn an_oracle_connection_is_probed_through_its_source_node() {
+        let Some(Probe::Tables { component, ping, .. }) = probe("oracle") else {
+            panic!("oracle has a probe");
+        };
+        assert_eq!(component, "src.oracle");
+        assert!(ping.contains("DUAL"), "{ping}");
+        let props = duckle_secrets::connection_node_props(
+            component,
+            &json!({ "kind": "oracle", "host": "db", "port": 1521, "database": "XE", "username": "u" }),
+        )
+        .unwrap();
+        assert_eq!((props["connect"].as_str(), props["user"].as_str()), (Some("db:1521/XE"), Some("u")));
     }
 
     #[test]

@@ -6007,6 +6007,15 @@
             "label": "Oracle connection",
             "fields": [
               {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "oracle"
+                ],
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the 数据源 (data source) menu in the Agent input."
+              },
+              {
                 "key": "connect",
                 "label": "Easy Connect string",
                 "kind": "text",
@@ -33967,6 +33976,15 @@
           {
             "label": "Oracle connection",
             "fields": [
+              {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "oracle"
+                ],
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the 数据源 (data source) menu in the Agent input."
+              },
               {
                 "key": "connect",
                 "label": "Easy Connect string",

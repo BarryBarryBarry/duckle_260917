@@ -787,7 +787,43 @@ fn merge_generic_connection(
             map.insert("user".into(), JsonValue::String(u.into()));
         }
     }
+    // Oracle nodes read the login as `user` and the server as one Easy Connect
+    // string, `connect`; the connection stores `username` and either host / port
+    // / database (the service name) or a `connect` string kept verbatim, for a
+    // TNS alias or a full descriptor that has no host field to split into.
+    if matches!(component_id, "src.oracle" | "snk.oracle") {
+        if let Some(u) = conn_str(conn, "username") {
+            map.insert("user".into(), JsonValue::String(u.into()));
+        }
+        if let Some(c) = oracle_connect(conn) {
+            map.insert("connect".into(), JsonValue::String(c));
+        }
+    }
     Ok(())
+}
+
+/// The Easy Connect string (`host[:port][/service]`) an Oracle connection names.
+/// Host / port / database win over a stored `connect`, so an edit made in the
+/// Connections editor, which shows those fields, is the one a run uses.
+fn oracle_connect(conn: &JsonValue) -> Option<String> {
+    let Some(host) = conn_str(conn, "host").map(str::trim).filter(|h| !h.is_empty()) else {
+        return conn_str(conn, "connect").map(|c| c.trim().to_string());
+    };
+    let mut out = host.to_string();
+    let port = match conn.get("port") {
+        Some(JsonValue::Number(n)) => Some(n.to_string()),
+        Some(JsonValue::String(s)) if !s.trim().is_empty() => Some(s.trim().to_string()),
+        _ => None,
+    };
+    if let Some(p) = port {
+        out.push(':');
+        out.push_str(&p);
+    }
+    if let Some(db) = conn_str(conn, "database").map(str::trim).filter(|d| !d.is_empty()) {
+        out.push('/');
+        out.push_str(db);
+    }
+    Some(out)
 }
 
 /// Resolve saved-connection references on every node in a pipeline document, in
@@ -1434,6 +1470,46 @@ mod tests {
             assert_eq!(p["host"], "db.local", "{component}");
             assert_eq!(p["database"], "sales", "{component}");
         }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// Oracle nodes read `connect` and `user`; a saved connection stores host /
+    /// port / database and `username`, or a verbatim `connect` string.
+    #[test]
+    fn an_oracle_connection_supplies_the_connect_string_and_user_its_nodes_read() {
+        let ws = temp_ws("oracle");
+        write_connection(
+            &ws,
+            "ora",
+            r#"{"kind":"oracle","host":"db.local","port":1521,"database":"ORCLPDB1","username":"etl","password":"p"}"#,
+        );
+        write_connection(
+            &ws,
+            "tns",
+            r#"{"kind":"oracle","connect":"(DESCRIPTION=(ADDRESS=(HOST=h)(PORT=1)))","username":"etl"}"#,
+        );
+        write_connection(&ws, "noport", r#"{"kind":"oracle","host":"db.local","port":"","database":"XE"}"#);
+        for component in ["src.oracle", "snk.oracle"] {
+            let mut node = sf_node(component, serde_json::json!({"connectionRef": "ora", "connect": "stale:1/X"}));
+            resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap();
+            let p = node.data.properties.unwrap();
+            assert_eq!(p["connect"], "db.local:1521/ORCLPDB1", "{component}: {p}");
+            assert_eq!(p["user"], "etl", "{component}");
+            assert_eq!(p["password"], "p", "{component}");
+
+            let mut node = sf_node(component, serde_json::json!({"connectionRef": "tns"}));
+            resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap();
+            let p = node.data.properties.unwrap();
+            assert_eq!(p["connect"], "(DESCRIPTION=(ADDRESS=(HOST=h)(PORT=1)))", "{component}");
+
+            let mut node = sf_node(component, serde_json::json!({"connectionRef": "noport"}));
+            resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap();
+            assert_eq!(node.data.properties.unwrap()["connect"], "db.local/XE", "{component}");
+        }
+        // Only Oracle nodes get the Oracle-shaped fields.
+        let mut props = serde_json::json!({ "connectionRef": "ora" });
+        resolve_connection_ref_props(&ws, "src.postgres", &mut props).unwrap();
+        assert!(props.get("connect").is_none() && props.get("user").is_none(), "{props}");
         let _ = std::fs::remove_dir_all(&ws);
     }
 

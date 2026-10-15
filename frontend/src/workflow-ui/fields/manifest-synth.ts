@@ -3684,6 +3684,7 @@ function synthDbSource(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Oracle connection',
                 fields: [
+                    connectionRefField(connectionKindFor(comp.id)),
                     { key: 'connect', label: 'Easy Connect string', kind: 'text', required: true, placeholder: 'host:1521/SERVICE' },
                     { key: 'user', label: 'User', kind: 'text', required: true },
                     { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
@@ -3904,6 +3905,7 @@ function synthDbSink(comp: ComponentDef): ComponentManifest {
             {
                 label: 'Oracle connection',
                 fields: [
+                    connectionRefField(connectionKindFor(comp.id)),
                     { key: 'connect', label: 'Easy Connect string', kind: 'text', required: true, placeholder: 'host:1521/SERVICE' },
                     { key: 'user', label: 'User', kind: 'text', required: true },
                     { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },

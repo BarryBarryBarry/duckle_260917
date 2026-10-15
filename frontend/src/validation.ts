@@ -131,6 +131,9 @@ export function validatePipeline(
             // SQL Server / Synapse call the login `user`; the connection stores
             // `username` and the merge maps it across (#363).
             'user',
+            // Oracle nodes read the server as one Easy Connect string, which the
+            // merge builds from the connection's host / port / database.
+            'connect',
         ]);
         const ref = props['connectionRef'];
         const hasConnection = typeof ref === 'string' && ref !== '';

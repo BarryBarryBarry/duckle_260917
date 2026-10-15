@@ -10,6 +10,7 @@ import FieldRenderer from './fields/FieldRenderer';
 import { FieldContext } from './fields/FieldContext';
 import { getManifest } from './fields/component-manifests';
 import { connectionKindFor } from './fields/manifest-synth';
+import { oracleConnectOf, parseOracleConnect } from './fields/oracle-connect';
 import type { Field } from './fields/types';
 import { PALETTE, type ComponentDef } from './palette-data';
 import { testConnection, type ConnectionTestResult } from '../tauri-bridge';
@@ -21,16 +22,16 @@ export type PickedSource = { id: string; role: SourceRole };
 
 export const ROLE_LABEL: Record<SourceRole, string> = { source: '源', target: '目标', both: '源 + 目标' };
 
-/** The palette's Sources → Databases group, so the menu lists exactly what
- *  the component panel does. */
+/** The databases of the palette's Sources → Databases group whose connection
+ *  this menu can configure; the others are left out rather than shown disabled. */
 export function databaseSources(): ComponentDef[] {
     const group = PALETTE.flatMap(c => c.groups).find(g => g.id === 'src.databases');
-    return (group?.components ?? []).filter(c => c.availability === 'available');
+    return (group?.components ?? []).filter(c => c.availability === 'available' && connectionKindOf(c) !== null);
 }
 
 /** Saved-connection kinds whose fields the run time merges onto a node end to
- *  end. The other databases are listed, but not yet offered. */
-const SUPPORTED_KINDS = new Set(['mysql', 'mariadb', 'postgres', 'sqlserver']);
+ *  end. */
+const SUPPORTED_KINDS = new Set(['mysql', 'mariadb', 'postgres', 'sqlserver', 'oracle']);
 
 /** The saved-connection kind a database component uses, or null when this
  *  menu cannot configure it yet. */
@@ -57,7 +58,8 @@ function connectionFields(componentId: string): Field[] {
 function valuesFromPayload(fields: Field[], payload: Record<string, unknown> | undefined): Record<string, unknown> {
     const out: Record<string, unknown> = {};
     for (const f of fields) {
-        const v = payload?.[payloadKey(f.key)];
+        // Oracle's Easy Connect string is stored split into host / port / database.
+        const v = f.key === 'connect' ? oracleConnectOf(payload) : payload?.[payloadKey(f.key)];
         if (v !== undefined && v !== null && v !== '') out[f.key] = v;
         else if (f.defaultValue !== undefined) out[f.key] = f.defaultValue;
     }
@@ -68,14 +70,21 @@ function payloadFromValues(kind: string, fields: Field[], values: Record<string,
     const out: Record<string, unknown> = { kind };
     for (const f of fields) {
         const v = values[f.key];
-        if (v !== undefined && v !== null && v !== '') out[payloadKey(f.key)] = v;
+        if (v === undefined || v === null || v === '') continue;
+        if (f.key === 'connect') {
+            // Split, so the Connections editor shows the same connection; a
+            // string that does not split (a descriptor, an alias) is kept whole.
+            Object.assign(out, parseOracleConnect(String(v)) ?? { connect: String(v).trim() });
+            continue;
+        }
+        out[payloadKey(f.key)] = v;
     }
     return out;
 }
 
 function connectionLabel(c: RepoItem): string {
-    const p = (c.payload ?? {}) as { host?: string; database?: string };
-    const target = [p.host, p.database].filter(Boolean).join('/');
+    const p = (c.payload ?? {}) as { host?: string; database?: string; connect?: string };
+    const target = [p.host, p.database].filter(Boolean).join('/') || p.connect;
     return target ? `${c.name} (${target})` : c.name;
 }
 
@@ -139,15 +148,13 @@ export function DataSourceMenu({
                             type="button"
                             role="menuitem"
                             className="agent-ds-item"
-                            disabled={!kind}
                             onClick={() => onPick(def)}
-                            title={kind ? undefined : '暂不支持在这里配置这种数据库的连接'}
                         >
                             <ComponentIcon componentId={def.id} kind="source" size={15} className="agent-ds-item-icon" />
                             <span className="agent-ds-item-text">
                                 <span className="agent-ds-item-name">{def.label}</span>
                                 <span className="agent-ds-item-sub">
-                                    {!kind ? '暂不支持' : count > 0 ? `已配置 ${count} 个连接` : '未配置，点击新建'}
+                                    {count > 0 ? `已配置 ${count} 个连接` : '未配置，点击新建'}
                                 </span>
                             </span>
                             {kind && pickedKinds.has(kind) ? <Check size={14} className="agent-ds-item-check" /> : null}
@@ -223,7 +230,7 @@ export function ConnectionDialog({
     };
     const payload = payloadFromValues(kind, fields, values);
     const missing = fields.filter(f => f.required && (values[f.key] === undefined || values[f.key] === ''));
-    const defaultName = `${def.label}${values.database ? ' · ' + String(values.database) : ''}`;
+    const defaultName = `${def.label}${payload.database ? ' · ' + String(payload.database) : ''}`;
     const needsSave = !current || dirty || (name.trim() !== '' && name.trim() !== current.name);
     const canSubmit = missing.length === 0 && !saving;
 

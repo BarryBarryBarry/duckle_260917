@@ -1,5 +1,6 @@
 import { useContext } from 'react';
 import { FieldContext } from './FieldContext';
+import { oracleConnectOf } from './oracle-connect';
 
 /**
  * What a saved connection will supply for `fieldKey` at run time, for display only.
@@ -22,6 +23,8 @@ export function useConnectionSupplied(fieldKey: string): string | undefined {
 
     const item = repoItems.find(i => i.type === 'connection' && i.id === ref);
     const payload = item?.payload as Record<string, unknown> | undefined;
+    // Oracle's Easy Connect string is joined from host / port / database.
+    if (fieldKey === 'connect') return oracleConnectOf(payload);
     // SQL Server / Synapse call the login `user`; the connection stores it as
     // `username`, which the run-time merge maps across (#363).
     const v = payload?.[fieldKey] ?? (fieldKey === 'user' ? payload?.['username'] : undefined);
