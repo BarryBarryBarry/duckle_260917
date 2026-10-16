@@ -622,6 +622,12 @@
       "menuAria": "Skill",
       "empty": "還沒有 skill。在 {{path}}/<名稱>/SKILL.md 新增一個",
       "noMatch": "沒有符合的 skill"
+    },
+    "attach": {
+      "button": "新增附件",
+      "remove": "移除",
+      "failed": "附件新增失敗：{{message}}",
+      "defaultPrompt": "請閱讀附件。"
     }
   },
   "reply": {

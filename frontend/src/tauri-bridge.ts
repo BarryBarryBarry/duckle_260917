@@ -743,6 +743,17 @@ export type AgentContext = {
     /** The databases picked for this message, each with its role. */
     connections?: AgentConnectionContext[];
     selectedAssets: unknown[];
+    /** Files attached to this message, as copied by agentAttachFiles. */
+    attachments?: AgentAttachment[];
+};
+
+/** A file attached in the Agent input, copied into the workspace for the agent. */
+export type AgentAttachment = {
+    /** The file name as the user picked it. */
+    name: string;
+    /** The copy the agent reads. */
+    path: string;
+    size: number;
 };
 
 export type AgentHistoryMessage = {
@@ -835,6 +846,24 @@ export async function agentListConnections(workspace: string): Promise<AgentConn
         console.warn('agentListConnections failed', err);
         return [];
     }
+}
+
+/** Ask the user for files to attach; their paths, or [] when cancelled. */
+export async function pickAgentAttachments(): Promise<string[]> {
+    if (!isTauri()) return [];
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const picked = await open({ multiple: true, directory: false });
+    if (!picked) return [];
+    return Array.isArray(picked) ? picked : [picked];
+}
+
+/** Copy the picked files into the conversation's attachment folder. */
+export async function agentAttachFiles(
+    workspace: string,
+    conversationId: string,
+    paths: string[],
+): Promise<AgentAttachment[]> {
+    return await invoke<AgentAttachment[]>('agent_attach_files', { workspace, conversationId, paths });
 }
 
 /** A skill in the workspace's `.duckle/skills/<folder>/SKILL.md`. */

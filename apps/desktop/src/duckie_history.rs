@@ -320,6 +320,7 @@ pub fn agent_conversation_delete(
 ) -> Result<Vec<ConversationSummary>, String> {
     let ws = workspace_path(&workspace)?;
     delete(&ws, Store::PiAgent, &id)?;
+    crate::agent_attachments::remove_conversation(&ws, &id)?;
     list(&ws, Store::PiAgent)
 }
 

@@ -727,6 +727,12 @@
       "menuAria": "Skills",
       "empty": "No skills yet. Add one as {{path}}/<name>/SKILL.md",
       "noMatch": "No matching skill"
+    },
+    "attach": {
+      "button": "Attach files",
+      "remove": "Remove",
+      "failed": "Could not attach the files: {{message}}",
+      "defaultPrompt": "Please read the attached files."
     }
   },
   "reply": {

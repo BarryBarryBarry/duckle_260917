@@ -19,6 +19,7 @@ use tauri::ipc::Channel;
 use tauri::Manager;
 use tracing_subscriber::EnvFilter;
 
+mod agent_attachments;
 mod agent_backend;
 mod agent_bridge;
 mod agent_manager;
@@ -280,6 +281,7 @@ pub fn run() {
             agent_ui_reply,
             agent_list_connections,
             agent_list_skills,
+            agent_attach_files,
             llama_models,
             llama_default_model,
             dbt_status,
@@ -1490,6 +1492,24 @@ fn agent_list_connections(
         return Ok(Vec::new());
     }
     agent_manager::list_connections_sync(&workspace)
+}
+
+/// Copy files the user attached in the Agent input into the conversation's
+/// attachment folder, where the agent can read them.
+#[tauri::command]
+async fn agent_attach_files(
+    workspace: String,
+    conversation_id: String,
+    paths: Vec<String>,
+) -> Result<Vec<agent_attachments::Attachment>, String> {
+    if workspace.trim().is_empty() {
+        return Err("Open or create a workspace first".into());
+    }
+    tokio::task::spawn_blocking(move || {
+        agent_attachments::attach_files(std::path::Path::new(workspace.trim()), &conversation_id, &paths)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The workspace's skills (`.duckle/skills/<name>/SKILL.md`), read from disk on

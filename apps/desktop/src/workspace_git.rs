@@ -487,6 +487,8 @@ const GITIGNORE_SAFETY: &[&str] = &[
     "console.db-shm",
     // Duckie chat transcripts: private, and can quote data the user pasted in.
     "duckie/",
+    // Files attached in the Agent input: the user's data, copied for the agent.
+    "pi-agent/attachments/",
 ];
 
 /// Ensure `<workspace>/.duckle/.gitignore` excludes everything in [`GITIGNORE_SAFETY`].

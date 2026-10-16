@@ -539,6 +539,7 @@ fn build_prompt_message(ctx: &ContextPayload, prompt: &str) -> String {
             "connection": ctx.connection,
             "connections": ctx.connections,
             "selectedAssets": ctx.selected_assets,
+            "attachments": ctx.attachments,
         }))
         .unwrap_or_else(|_| "{}".to_string()),
         prompt
@@ -1086,6 +1087,7 @@ mod tests {
             connection: None,
             connections: Vec::new(),
             selected_assets: vec![json!({ "type": "table", "name": "orders" })],
+            attachments: Vec::new(),
         };
         let message = build_prompt_message(&ctx, "build it\nplease");
         assert!(message.starts_with("[Duckle Context]\n{"));
@@ -1120,6 +1122,26 @@ mod tests {
         // A context from before roles existed still reads.
         let old: ContextPayload = serde_json::from_value(json!({ "workspace": "/ws", "connection": null, "selectedAssets": [] })).unwrap();
         assert!(old.connections.is_empty());
+        assert!(old.attachments.is_empty());
+    }
+
+    #[test]
+    fn attachments_reach_the_agent_in_the_context_block() {
+        let ctx: ContextPayload = serde_json::from_value(json!({
+            "workspace": "/ws",
+            "connection": null,
+            "attachments": [{ "name": "orders.csv", "path": "/ws/.duckle/pi-agent/attachments/c1/orders.csv", "size": 16 }]
+        }))
+        .unwrap();
+        let message = build_prompt_message(&ctx, "/skill:review check it");
+        let (block, prompt) = message
+            .strip_prefix(CONTEXT_OPEN)
+            .and_then(|rest| rest.split_once(CONTEXT_CLOSE))
+            .unwrap();
+        let sent: JsonValue = serde_json::from_str(block).unwrap();
+        assert_eq!(sent["attachments"][0]["name"], "orders.csv");
+        assert_eq!(sent["attachments"][0]["path"], "/ws/.duckle/pi-agent/attachments/c1/orders.csv");
+        assert_eq!(prompt, "/skill:review check it");
     }
 
     #[test]
@@ -1389,6 +1411,10 @@ mod agent_e2e {
             )
         } else if user.contains("SKILL_BODY_MARK") {
             text_reply("SKILL_EXPANDED")
+        } else if user.contains("read attachment") {
+            tool_reply("read", json!({ "path": ".duckle/pi-agent/attachments/c-e2e-1/orders.csv" }))
+        } else if user.contains("read transcript") {
+            tool_reply("read", json!({ "path": ".duckle/pi-agent/conversations/c-e2e-1.json" }))
         } else if user.contains("read skill ref") {
             tool_reply("read", json!({ "path": ".duckle/skills/demo/references/notes.md" }))
         } else if user.contains("read skill link") {
@@ -1585,6 +1611,7 @@ mod agent_e2e {
             connection: None,
             connections: Vec::new(),
             selected_assets: vec![],
+            attachments: Vec::new(),
         };
 
         let mut backend = PiBackend::new();
@@ -1688,6 +1715,21 @@ mod agent_e2e {
         }
         let (out, err) = tool_end(&mut backend, &events, &ctx, "please read skill ref", "read");
         assert!(!err && out.contains("SKILL_REF_NOTE"), "{out}");
+        // An attached file may be read; the rest of the agent's folder may not.
+        let src = ws.join("notes.txt");
+        let attached = crate::agent_attachments::attach_files(
+            &ws,
+            "c-e2e-1",
+            &[src.to_string_lossy().into_owned()],
+        )
+        .unwrap();
+        std::fs::rename(&attached[0].path, ws.join(".duckle/pi-agent/attachments/c-e2e-1/orders.csv")).unwrap();
+        std::fs::create_dir_all(ws.join(".duckle/pi-agent/conversations")).unwrap();
+        std::fs::write(ws.join(".duckle/pi-agent/conversations/c-e2e-1.json"), "TRANSCRIPT_TEXT").unwrap();
+        let (out, err) = tool_end(&mut backend, &events, &ctx, "please read attachment", "read");
+        assert!(!err && out.contains("INSIDE_NOTE"), "{out}");
+        let (out, err) = tool_end(&mut backend, &events, &ctx, "please read transcript", "read");
+        assert!(err && !out.contains("TRANSCRIPT_TEXT"), "{out}");
         // `/skill:<name>` reaches the model expanded, though the message starts
         // with the context block and the skill was added after Pi started.
         std::fs::write(

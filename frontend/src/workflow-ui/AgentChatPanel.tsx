@@ -14,7 +14,9 @@ import {
     Maximize2,
     Minimize2,
     Minus,
+    Paperclip,
     PanelLeftClose,
+    Plus,
     PanelLeftOpen,
     Sparkles,
     Square,
@@ -24,6 +26,7 @@ import {
 } from 'lucide-react';
 import {
     agentAbort,
+    agentAttachFiles,
     agentCheckInstalled,
     agentConversationDelete,
     agentConversationGet,
@@ -36,6 +39,8 @@ import {
     agentStart,
     agentStop,
     agentUiReply,
+    pickAgentAttachments,
+    type AgentAttachment,
     type AgentConnectionContext,
     type AgentContext,
     type AgentEvent,
@@ -179,7 +184,7 @@ function startError(raw: string): ChatError {
 }
 
 type Message =
-    | { kind: 'user'; text: string }
+    | { kind: 'user'; text: string; attachments?: AgentAttachment[] }
     | { kind: 'assistant'; turn: AssistantTurn };
 
 type UiDialog = {
@@ -311,8 +316,18 @@ function newConversationId(): string {
     return `c-${Date.now().toString(36)}-${rand}`;
 }
 
+function formatBytes(n: number): string {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const fileName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
 function deriveConversationTitle(messages: Message[]): string {
-    const first = messages.find((m): m is Extract<Message, { kind: 'user' }> => m.kind === 'user')?.text ?? '';
+    const firstMessage = messages.find((m): m is Extract<Message, { kind: 'user' }> => m.kind === 'user');
+    // A message of attachments alone is titled by their names.
+    const first = firstMessage?.text || (firstMessage?.attachments ?? []).map(a => a.name).join(', ');
     const flat = first.replace(/\s+/g, ' ').trim();
     const chars = Array.from(flat);
     return chars.length > TITLE_MAX_CHARS ? `${chars.slice(0, TITLE_MAX_CHARS).join('')}…` : flat;
@@ -370,7 +385,13 @@ function restoreMessages(raw: unknown[]): Message[] {
         if (!item || typeof item !== 'object') continue;
         const m = item as Record<string, unknown>;
         if (m.kind === 'user' && typeof m.text === 'string') {
-            out.push({ kind: 'user', text: m.text });
+            const attachments = Array.isArray(m.attachments)
+                ? m.attachments.filter(
+                      (a): a is AgentAttachment =>
+                          !!a && typeof a.name === 'string' && typeof a.path === 'string' && typeof a.size === 'number',
+                  )
+                : [];
+            out.push(attachments.length ? { kind: 'user', text: m.text, attachments } : { kind: 'user', text: m.text });
         } else if (m.kind === 'assistant' && m.turn && typeof m.turn === 'object') {
             const t = m.turn as Partial<AssistantTurn>;
             const tools = Array.isArray(t.tools) ? t.tools : [];
@@ -464,6 +485,9 @@ export default function AgentChatPanel({
      *  the message goes out once they have. */
     const pendingSendRef = useRef(false);
     const sourceButtonRef = useRef<HTMLButtonElement | null>(null);
+    /** Files picked for the next message, by path; copied when it is sent. */
+    const [pendingFiles, setPendingFiles] = useState<string[]>([]);
+    const [attaching, setAttaching] = useState(false);
     /** The workspace's skills, re-read while the input holds a `/command`. */
     const [skills, setSkills] = useState<AgentSkill[] | null>(null);
     const [skillActive, setSkillActive] = useState(0);
@@ -1115,7 +1139,8 @@ export default function AgentChatPanel({
     /** `noSourceOk`: the user has just said this message needs no database. */
     async function handleSend(noSourceOk = false) {
         const trimmed = draft.trim();
-        if (!trimmed || !workspace || busy) return;
+        const files = pendingFiles;
+        if ((!trimmed && files.length === 0) || !workspace || busy || attaching) return;
         const conversationId = activeId ?? newConversationId();
         if (noSourceOk) noSourceOkRef.current.add(conversationId);
         // Ask once per conversation; picking a database or saying "none" both
@@ -1128,14 +1153,33 @@ export default function AgentChatPanel({
             const item = connections.find(c => c.id === p.id);
             return item ? [connectionContext(item, p.role)] : [];
         });
+        let attachments: AgentAttachment[] = [];
+        if (files.length > 0) {
+            setAttaching(true);
+            try {
+                attachments = await agentAttachFiles(workspace, conversationId, files);
+            } catch (err) {
+                setError({ message: t('agent.attach.failed', { message: String(err) }), needsSettings: false });
+                return;
+            } finally {
+                setAttaching(false);
+            }
+        }
         const context: AgentContext = {
             workspace,
             connection: null,
             connections: picks,
             selectedAssets: [],
+            attachments,
         };
+        // A message of attachments alone still asks the agent something.
+        const prompt = trimmed || t('agent.attach.defaultPrompt');
         if (!activeId) setActiveId(conversationId);
-        setMessages(prev => [...prev, { kind: 'user', text: trimmed }]);
+        setMessages(prev => [
+            ...prev,
+            attachments.length ? { kind: 'user', text: trimmed, attachments } : { kind: 'user', text: trimmed },
+        ]);
+        setPendingFiles([]);
         resetRecall();
         currentTurnIdRef.current = null;
         turnStartedAtRef.current = Date.now();
@@ -1149,11 +1193,21 @@ export default function AgentChatPanel({
             return;
         }
         try {
-            await agentSendPrompt(trimmed, context);
+            await agentSendPrompt(prompt, context);
         } catch (err) {
             setBusy(false);
             setError({ message: String(err), needsSettings: false });
         }
+    }
+
+    async function handleAttach() {
+        try {
+            const paths = await pickAgentAttachments();
+            if (paths.length) setPendingFiles(prev => [...prev, ...paths.filter(p => !prev.includes(p))]);
+        } catch (err) {
+            setError({ message: t('agent.attach.failed', { message: String(err) }), needsSettings: false });
+        }
+        inputRef.current?.focus();
     }
 
     // Shown in the composer area, above the input, so the user answers without
@@ -1406,7 +1460,20 @@ export default function AgentChatPanel({
                                                 </div>
                                             </div>
                                             <div className="chat-bubble-body">
-                                                <div className="chat-bubble-content agent-pre">{message.text}</div>
+                                                {message.attachments?.length ? (
+                                                    <div className="agent-attach-list">
+                                                        {message.attachments.map(a => (
+                                                            <span key={a.path} className="agent-attach-chip" title={a.path}>
+                                                                <Paperclip size={11} aria-hidden="true" />
+                                                                <span className="agent-attach-name">{a.name}</span>
+                                                                <span className="agent-attach-size">{formatBytes(a.size)}</span>
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                ) : null}
+                                                {message.text ? (
+                                                    <div className="chat-bubble-content agent-pre">{message.text}</div>
+                                                ) : null}
                                             </div>
                                         </div>
                                     ) : (
@@ -1463,6 +1530,26 @@ export default function AgentChatPanel({
                                     </div>
                                 ) : null)}
                             <div ref={composerRef} className="chat-panel-input-row agent-composer">
+                                {pendingFiles.length ? (
+                                    <div className="agent-attach-list agent-attach-pending">
+                                        {pendingFiles.map(path => (
+                                            <span key={path} className="agent-attach-chip" title={path}>
+                                                <Paperclip size={11} aria-hidden="true" />
+                                                <span className="agent-attach-name">{fileName(path)}</span>
+                                                <button
+                                                    type="button"
+                                                    className="agent-attach-remove"
+                                                    onClick={() => setPendingFiles(prev => prev.filter(p => p !== path))}
+                                                    disabled={attaching}
+                                                    title={t('agent.attach.remove')}
+                                                    aria-label={t('agent.attach.remove')}
+                                                >
+                                                    <X size={11} />
+                                                </button>
+                                            </span>
+                                        ))}
+                                    </div>
+                                ) : null}
                                 <textarea
                                     ref={inputRef}
                                     className="chat-panel-input"
@@ -1499,6 +1586,16 @@ export default function AgentChatPanel({
                                 ) : null}
                                 <div className="agent-composer-toolbar">
                                     <button
+                                        type="button"
+                                        className="agent-attach-button"
+                                        onClick={() => void handleAttach()}
+                                        disabled={busy || attaching}
+                                        title={t('agent.attach.button')}
+                                        aria-label={t('agent.attach.button')}
+                                    >
+                                        <Plus size={14} />
+                                    </button>
+                                    <button
                                         ref={sourceButtonRef}
                                         type="button"
                                         className={`agent-ds-button${sourceMenuOpen ? ' agent-ds-button-open' : ''}`}
@@ -1533,7 +1630,7 @@ export default function AgentChatPanel({
                                         <button
                                             type="submit"
                                             className="chat-panel-send"
-                                            disabled={!draft.trim()}
+                                            disabled={(!draft.trim() && pendingFiles.length === 0) || attaching}
                                             title={t('chat.sendTooltip')}
                                             aria-label={t('chat.sendAria')}
                                         >

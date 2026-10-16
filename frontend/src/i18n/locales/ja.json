@@ -585,6 +585,12 @@
       "menuAria": "スキル",
       "empty": "スキルはまだありません。{{path}}/<名前>/SKILL.md に追加してください",
       "noMatch": "一致するスキルはありません"
+    },
+    "attach": {
+      "button": "ファイルを添付",
+      "remove": "削除",
+      "failed": "ファイルを添付できませんでした：{{message}}",
+      "defaultPrompt": "添付ファイルを読んでください。"
     }
   },
   "reply": {

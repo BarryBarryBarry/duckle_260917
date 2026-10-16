@@ -46,6 +46,9 @@ pub struct ContextPayload {
     pub connections: Vec<ConnectionContext>,
     #[serde(default)]
     pub selected_assets: Vec<serde_json::Value>,
+    /// Files the user attached to this message, copied into the workspace.
+    #[serde(default)]
+    pub attachments: Vec<crate::agent_attachments::Attachment>,
 }
 
 #[derive(Debug, Clone, Serialize)]
