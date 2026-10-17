@@ -372,6 +372,7 @@ const CONNECTION_KIND_FOR: Record<string, string> = {
     // Synapse is the same TDS connection under another name.
     'src.synapse': 'sqlserver', 'snk.synapse': 'sqlserver',
     'src.oracle': 'oracle', 'snk.oracle': 'oracle',
+    'src.hana': 'hana', 'snk.hana': 'hana',
     'src.clickhouse': 'clickhouse', 'snk.clickhouse': 'clickhouse',
     'src.mongodb': 'mongodb', 'snk.mongodb': 'mongodb',
     'src.redis': 'redis', 'snk.redis': 'redis',
@@ -440,6 +441,9 @@ const DB_PORTS: Record<string, number> = {
     'src.oracle': 1521,
     'snk.oracle': 1521,
     'src.db2': 50000,
+    // HANA Cloud's SQL endpoint; on-premise is 3<instance>15 (e.g. 30015).
+    'src.hana': 443,
+    'snk.hana': 443,
     'src.clickhouse': 8123,
     'snk.clickhouse': 8123,
     'src.cockroach': 26257,
@@ -3678,7 +3682,39 @@ function synthNewConnector(comp: ComponentDef): ComponentManifest | null {
     return null;
 }
 
+// SAP HANA's connection section, shared by src.hana and snk.hana. The host may
+// carry its port (as the HANA Cloud console shows the SQL endpoint); that port
+// wins over the Port field.
+const hanaConnectionFields = (componentId: string): Field[] => [
+    connectionRefField(connectionKindFor(componentId)),
+    { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'xxxx.hana.trial-us10.hanacloud.ondemand.com' },
+    { key: 'port', label: 'Port', kind: 'integer', defaultValue: DB_PORTS[componentId],
+      description: '443 for SAP HANA Cloud. On-premise: 3<instance>15 for a tenant database (e.g. 30015), or 3<instance>13 for the system database together with the Tenant database field.' },
+    { key: 'user', label: 'User', kind: 'text', required: true, placeholder: 'DBADMIN' },
+    { key: 'password', label: 'Password', kind: 'text', placeholder: '••••••••' },
+    { key: 'database', label: 'Tenant database (optional)', kind: 'text', placeholder: 'HXE',
+      description: 'Only for a multi-tenant on-premise system reached through its system database port. Leave empty for SAP HANA Cloud.' },
+    { key: 'encrypt', label: 'Encrypt connection (TLS)', kind: 'bool', defaultValue: true,
+      description: 'On by default; SAP HANA Cloud requires it. Turn off only for an on-premise system without TLS.' },
+    { key: 'trustCert', label: 'Trust TLS cert (dev / self-signed)', kind: 'bool', defaultValue: false,
+      description: 'Accept any server certificate. For a development system with a self-signed certificate; leave off for SAP HANA Cloud.' },
+];
+
 function synthDbSource(comp: ComponentDef): ComponentManifest {
+    if (comp.id === 'src.hana') {
+        return base(comp, [
+            { label: 'SAP HANA connection', fields: hanaConnectionFields(comp.id) },
+            {
+                label: 'Query',
+                fields: [
+                    { key: 'schema', label: 'Schema (optional)', kind: 'text', placeholder: 'SALES',
+                      description: 'Defaults to the user\'s current schema. A plain name is read in upper case, as HANA does; put it in double quotes to keep its case.' },
+                    { key: 'tableName', label: 'Table (for SELECT *)', kind: 'text', placeholder: 'ORDERS' },
+                    { key: 'query', label: 'Or custom SQL', kind: 'expression', rows: 4, placeholder: 'SELECT * FROM "SALES"."ORDERS"' },
+                ],
+            },
+        ]);
+    }
     if (comp.id === 'src.oracle') {
         return base(comp, [
             {
@@ -3929,6 +3965,22 @@ function synthDbSink(comp: ComponentDef): ComponentManifest {
                         kind: 'note',
                         description: 'Oracle support is built into Otter ETL agent. Users only need Oracle Instant Client (libclntsh.so / OCI.dll / libclntsh.dylib) on the library path at runtime. If it is missing the executor surfaces a clear loader error.',
                     },
+                ],
+            },
+        ], 'upstream');
+    }
+    if (comp.id === 'snk.hana') {
+        return base(comp, [
+            { label: 'SAP HANA connection', fields: hanaConnectionFields(comp.id) },
+            {
+                label: 'Destination',
+                fields: [
+                    { key: 'schema', label: 'Schema (optional)', kind: 'text', placeholder: 'SALES',
+                      description: 'Defaults to the user\'s current schema.' },
+                    { key: 'tableName', label: 'Table', kind: 'text', required: true, placeholder: 'ORDERS',
+                      description: 'Created as a column table when it does not exist. A plain name is written in upper case, as HANA does; put it in double quotes to keep its case.' },
+                    { key: 'batchSize', label: 'Insert batch size', kind: 'integer', defaultValue: 1000 },
+                    ...upsertModeFields(),
                 ],
             },
         ], 'upstream');

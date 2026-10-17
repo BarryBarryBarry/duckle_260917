@@ -5900,6 +5900,98 @@
     }
 
     #[test]
+    fn hana_names_fold_like_unquoted_hana_identifiers() {
+        assert_eq!(hana_ident("orders"), "\"ORDERS\"");
+        assert_eq!(hana_ident("Sales_2026"), "\"SALES_2026\"");
+        // Quoted keeps its case; anything not a plain name is kept as typed.
+        assert_eq!(hana_ident("\"MixedCase\""), "\"MixedCase\"");
+        assert_eq!(hana_ident("/BIC/AZSALES"), "\"/BIC/AZSALES\"");
+        assert_eq!(hana_ident("sap.cds::Orders"), "\"sap.cds::Orders\"");
+        assert_eq!(hana_ident("a\"b"), "\"a\"\"b\"");
+        assert_eq!(hana_qualified(Some("sales"), "orders"), "\"SALES\".\"ORDERS\"");
+        assert_eq!(hana_qualified(Some(" "), "orders"), "\"ORDERS\"");
+        assert_eq!(hana_name("\"Weird\"\"Name\""), "Weird\"Name");
+    }
+
+    #[test]
+    fn hana_connection_reads_a_pasted_endpoint_and_defaults_to_tls() {
+        use serde_json::json;
+        // The HANA Cloud console shows the SQL endpoint as host:443.
+        let c = hana_conn_from_props(
+            &json!({"host": "abc.hana.trial-us10.hanacloud.ondemand.com:443", "port": 30015, "username": "DBADMIN"}),
+            "src.hana",
+        )
+        .unwrap();
+        assert_eq!((c.host.as_str(), c.port), ("abc.hana.trial-us10.hanacloud.ondemand.com", 443));
+        assert_eq!(c.user, "DBADMIN");
+        assert!(c.encrypt && !c.trust_cert && c.database.is_none());
+
+        let c = hana_conn_from_props(
+            &json!({"host": "hana.local", "port": "30013", "user": "SYSTEM", "database": "HXE", "encrypt": false}),
+            "src.hana",
+        )
+        .unwrap();
+        assert_eq!((c.port, c.database.as_deref(), c.encrypt), (30013, Some("HXE"), false));
+        assert_eq!(hana_conn_from_props(&json!({"host": "h", "user": "u"}), "src.hana").unwrap().port, 443);
+
+        assert!(hana_conn_from_props(&json!({"user": "u"}), "src.hana").unwrap_err().to_string().contains("host"));
+        assert!(hana_conn_from_props(&json!({"host": "h"}), "src.hana").unwrap_err().to_string().contains("user"));
+    }
+
+    #[test]
+    fn hana_source_and_sink_compile_to_their_driver() {
+        let mk = |src: &str, sink: &str| pipeline_from_json(&format!(
+            r#"{{"nodes":[
+                {{"id":"s","position":{{"x":0,"y":0}},"data":{{"label":"S","componentId":"src.hana","properties":{{"host":"h","user":"u"{src}}}}}}},
+                {{"id":"k","position":{{"x":0,"y":0}},"data":{{"label":"K","componentId":"snk.hana","properties":{{"host":"h","user":"u"{sink}}}}}}}
+              ],"edges":[{{"id":"e1","source":"s","target":"k","data":{{"connectionType":"main"}}}}]}}"#));
+        let c = compile(&mk(r#","schema":"sales","tableName":"orders""#, r#","tableName":"orders_copy""#)).unwrap();
+        let Some(RuntimeSpec::HanaSource(s)) = c.stages.iter().find(|s| s.node_id == "s").unwrap().runtime.as_ref() else {
+            panic!("src.hana runs on the driver");
+        };
+        assert_eq!(s.query, "SELECT * FROM \"SALES\".\"ORDERS\"");
+        let Some(RuntimeSpec::HanaSink(k)) = c.stages.iter().find(|s| s.node_id == "k").unwrap().runtime.as_ref() else {
+            panic!("snk.hana runs on the driver");
+        };
+        assert_eq!((k.table.as_str(), k.mode.as_str(), k.batch_size), ("orders_copy", "overwrite", 1000));
+        assert!(k.upsert_keys.is_empty());
+
+        // Custom SQL wins over the table.
+        let c = compile(&mk(r#","tableName":"orders","query":"SELECT 1 AS X FROM DUMMY""#, r#","tableName":"t""#)).unwrap();
+        let Some(RuntimeSpec::HanaSource(s)) = c.stages.iter().find(|s| s.node_id == "s").unwrap().runtime.as_ref() else {
+            panic!()
+        };
+        assert_eq!(s.query, "SELECT 1 AS X FROM DUMMY");
+
+        // Upsert carries its keys and delete flag; without keys it is refused.
+        let c = compile(&mk(
+            r#","tableName":"orders""#,
+            r#","tableName":"t","mode":"upsert","conflictColumns":["id"],"deleteColumn":"_change_type""#,
+        ))
+        .unwrap();
+        let Some(RuntimeSpec::HanaSink(k)) = c.stages.iter().find(|s| s.node_id == "k").unwrap().runtime.as_ref() else {
+            panic!()
+        };
+        assert_eq!(k.upsert_keys, ["id"]);
+        assert_eq!((k.delete_column.as_deref(), k.delete_value.as_str()), (Some("_change_type"), "delete"));
+        let err = compile(&mk(r#","tableName":"orders""#, r#","tableName":"t","mode":"upsert""#)).unwrap_err();
+        assert!(err.to_string().contains("conflictColumns"), "{err}");
+        let err = compile(&mk(r#","tableName":"orders""#, r#","tableName":"t","mode":"merge""#)).unwrap_err();
+        assert!(err.to_string().contains("unknown mode"), "{err}");
+        let err = compile(&mk("", r#","tableName":"t""#)).unwrap_err();
+        assert!(err.to_string().contains("query or tableName"), "{err}");
+    }
+
+    #[test]
+    fn hana_preview_caps_the_query_it_runs() {
+        use serde_json::json;
+        assert_eq!(
+            preview_source_query("hana", &json!({"schema": "sales", "tableName": "orders"}), 50).as_deref(),
+            Some("SELECT * FROM (SELECT * FROM \"SALES\".\"ORDERS\") LIMIT 50")
+        );
+    }
+
+    #[test]
     fn quack_refuses_write_modes_duckdb_cannot_execute() {
         use serde_json::json;
         // A Quack-attached table is a streaming remote scan, not a base table.

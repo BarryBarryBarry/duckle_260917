@@ -4214,6 +4214,91 @@ fn oracle_upsert_merges_and_inserts() {
 }
 
 #[test]
+fn hana_sink_then_source_roundtrip() {
+    let engine = engine_or_skip!();
+    let host = match std::env::var("DUCKLE_HANA_HOST") {
+        Ok(h) if !h.is_empty() => h,
+        _ => {
+            eprintln!("skipping: set DUCKLE_HANA_HOST (and DUCKLE_HANA_USER / DUCKLE_HANA_PASSWORD) to run against a real SAP HANA");
+            return;
+        }
+    };
+    let conn = json!({
+        "host": host,
+        "port": std::env::var("DUCKLE_HANA_PORT").ok().and_then(|p| p.parse::<u16>().ok()).unwrap_or(443),
+        "user": std::env::var("DUCKLE_HANA_USER").unwrap_or_else(|_| "DBADMIN".into()),
+        "password": std::env::var("DUCKLE_HANA_PASSWORD").unwrap_or_default(),
+        "trustCert": std::env::var("DUCKLE_HANA_TRUST_CERT").is_ok(),
+    });
+    let with = |extra: Value| {
+        let mut p = conn.clone();
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        p
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let seed = write_file(
+        tmp.path(),
+        "seed.csv",
+        "id,name,amount,day,ts,flag\n1,alice,12.5,2026-01-02,2026-01-02 03:04:05,true\n2,bob,7.25,2026-02-03,2026-02-03 10:11:12,false\n3,carol,0,2026-03-04,2026-03-04 23:59:59,true\n",
+    );
+    let upd = write_file(tmp.path(), "upd.csv", "id,name\n2,BOB\n4,dave\n");
+    // One table, emptied on each run, so repeated runs leave nothing behind
+    // but it. A plain name is folded to upper case, as HANA does.
+    let table = "duckle_e2e_roundtrip";
+    let write = |path: &str, extra: Value| {
+        doc(
+            json!([
+                node("s", "src.csv", json!({ "path": path, "hasHeader": true })),
+                node("w", "snk.hana", with(extra)),
+            ]),
+            json!([main_edge("e", "s", "w")]),
+        )
+    };
+    let r = engine.execute_pipeline(&write(&seed, json!({ "tableName": table, "mode": "truncate" })));
+    assert_eq!(r.status, "ok", "seed failed: {:?}", r.error);
+    let r = engine.execute_pipeline(&write(
+        &upd,
+        json!({ "tableName": table, "mode": "upsert", "conflictColumns": ["id"] }),
+    ));
+    assert_eq!(r.status, "ok", "upsert failed: {:?}", r.error);
+
+    // The upsert updated id 2 and added id 4.
+    let out = out_path(tmp.path(), "out.csv");
+    let read = |props: Value, path: &str, sink: &str| {
+        doc(
+            json!([
+                node("r", "src.hana", with(props)),
+                node("k", sink, json!({ "path": path, "hasHeader": true })),
+            ]),
+            json!([main_edge("e", "r", "k")]),
+        )
+    };
+    let r = engine.execute_pipeline(&read(
+        json!({ "query": format!("SELECT ID AS \"id\", NAME AS \"name\" FROM {}", table) }),
+        &out,
+        "snk.csv",
+    ));
+    assert_eq!(r.status, "ok", "readback failed: {:?}", r.error);
+    assert_upsert_result(&out);
+
+    // Each column comes back typed as HANA holds it.
+    let parquet = out_path(tmp.path(), "all.parquet");
+    let r = engine.execute_pipeline(&read(json!({ "tableName": table }), &parquet, "snk.parquet"));
+    assert_eq!(r.status, "ok", "table read failed: {:?}", r.error);
+    let from = format!("read_parquet('{}')", parquet);
+    assert_eq!(
+        scalar_string(&format!(
+            "SELECT typeof(ID) || ',' || typeof(AMOUNT) || ',' || typeof(DAY) || ',' || typeof(TS) || ',' || typeof(FLAG) FROM {from} LIMIT 1"
+        )),
+        "BIGINT,DOUBLE,DATE,TIMESTAMP,BOOLEAN"
+    );
+    assert_eq!(
+        scalar_string(&format!("SELECT CAST(TS AS VARCHAR) || ' ' || CAST(FLAG AS VARCHAR) FROM {from} WHERE ID = 1")),
+        "2026-01-02 03:04:05 true"
+    );
+}
+
+#[test]
 fn snowflake_upsert_merges_and_inserts() {
     // Verified against the nnnkkk7/snowflake-emulator (DuckDB-backed) which
     // serves the real /api/v2/statements REST API and supports MERGE.

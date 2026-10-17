@@ -31,7 +31,7 @@ export function databaseSources(): ComponentDef[] {
 
 /** Saved-connection kinds whose fields the run time merges onto a node end to
  *  end. */
-const SUPPORTED_KINDS = new Set(['mysql', 'mariadb', 'postgres', 'sqlserver', 'oracle']);
+const SUPPORTED_KINDS = new Set(['mysql', 'mariadb', 'postgres', 'sqlserver', 'oracle', 'hana']);
 
 /** The saved-connection kind a database component uses, or null when this
  *  menu cannot configure it yet. */

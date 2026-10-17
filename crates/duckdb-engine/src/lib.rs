@@ -97,6 +97,7 @@ pub mod watermark;
 pub mod xsd;
 pub mod xsd_contract;
 mod connectors;
+mod hana;
 mod sharepoint;
 pub use connectors::remote_fingerprint;
 mod run_log;
@@ -2686,6 +2687,8 @@ impl DuckdbEngine {
                     Some(RuntimeSpec::TursoSink(spec)) => self.run_turso_sink(&db_path, spec),
                     Some(RuntimeSpec::Db2Source(spec)) => self.run_db2_source(&db_path, spec),
                     Some(RuntimeSpec::Db2Sink(spec)) => self.run_db2_sink(&db_path, spec),
+                    Some(RuntimeSpec::HanaSource(spec)) => self.run_hana_source(&db_path, spec),
+                    Some(RuntimeSpec::HanaSink(spec)) => self.run_hana_sink(&db_path, spec),
                     Some(RuntimeSpec::AccessSource(spec)) => self.run_access_source(&db_path, spec),
                     Some(RuntimeSpec::AccessSink(spec)) => self.run_access_sink(&db_path, spec),
                     Some(RuntimeSpec::SharePointSource(spec)) => self.run_sharepoint_source(&db_path, spec),

@@ -461,6 +461,8 @@ pub enum RuntimeSpec {
     TursoSink(TursoSinkSpec),
     Db2Source(Db2SourceSpec),
     Db2Sink(Db2SinkSpec),
+    HanaSource(HanaSourceSpec),
+    HanaSink(HanaSinkSpec),
     AccessSource(AccessSourceSpec),
     AccessSink(AccessSinkSpec),
     SharePointSource(SharePointSourceSpec),
@@ -1843,6 +1845,95 @@ fn db2_conn_string(props: &JsonValue) -> Result<String, EngineError> {
     Ok(parts.join(";"))
 }
 
+/// HANA Cloud's SQL endpoint; on-premise systems use 3<instance>15 instead.
+const HANA_DEFAULT_PORT: u16 = 443;
+
+/// The connection a src.hana / snk.hana node describes. A host pasted with its
+/// port (`xyz.hanacloud.ondemand.com:443`, as the HANA Cloud console shows the
+/// SQL endpoint) is split, and that port wins over the form's default.
+pub(crate) fn hana_conn_from_props(
+    props: &JsonValue,
+    component_id: &str,
+) -> Result<HanaConnSpec, EngineError> {
+    let raw_host = string_prop(props, "host")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| EngineError::Config(format!("{}: host required", component_id)))?;
+    let (host, host_port) = match raw_host.rsplit_once(':') {
+        Some((h, p)) if !h.is_empty() && !h.contains(':') && p.parse::<u16>().is_ok_and(|n| n > 0) => {
+            (h.to_string(), p.parse::<u16>().ok())
+        }
+        _ => (raw_host, None),
+    };
+    let prop_port = props
+        .get("port")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())))
+        .filter(|n| *n > 0 && *n < 65536)
+        .map(|n| n as u16);
+    let user = string_prop(props, "user")
+        .or_else(|| string_prop(props, "username"))
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| EngineError::Config(format!("{}: user required", component_id)))?;
+    Ok(HanaConnSpec {
+        host,
+        port: host_port.or(prop_port).unwrap_or(HANA_DEFAULT_PORT),
+        user,
+        password: string_prop(props, "password").unwrap_or_default(),
+        database: string_prop(props, "database").filter(|s| !s.trim().is_empty()),
+        encrypt: props.get("encrypt").and_then(|v| v.as_bool()).unwrap_or(true),
+        trust_cert: props.get("trustCert").and_then(|v| v.as_bool()).unwrap_or(false),
+    })
+}
+
+/// A schema or table name as HANA SQL reads it. A plain name is folded to upper
+/// case, as HANA does with an unquoted identifier, so `orders` and `ORDERS`
+/// name the same table; one written in double quotes keeps its exact case; and
+/// anything else (`/BIC/AZSALES`, `sap.cds::Orders`) is kept as typed.
+pub(crate) fn hana_name(name: &str) -> String {
+    let name = name.trim();
+    match name.strip_prefix('"').and_then(|n| n.strip_suffix('"')) {
+        Some(inner) if !inner.is_empty() => inner.replace("\"\"", "\""),
+        _ => {
+            let plain = name.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '#' | '$'));
+            if plain {
+                name.to_ascii_uppercase()
+            } else {
+                name.to_string()
+            }
+        }
+    }
+}
+
+/// [`hana_name`] as a quoted identifier.
+pub(crate) fn hana_ident(name: &str) -> String {
+    format!("\"{}\"", hana_name(name).replace('"', "\"\""))
+}
+
+/// `"SCHEMA"."TABLE"`, or just the table when no schema is given.
+pub(crate) fn hana_qualified(schema: Option<&str>, table: &str) -> String {
+    match schema.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => format!("{}.{}", hana_ident(s), hana_ident(table)),
+        None => hana_ident(table),
+    }
+}
+
+/// snk.hana's write mode, checked against what the sink does. "merge" is a
+/// DuckDB-target mode, so it is refused rather than run as something else.
+fn hana_write_mode(props: &JsonValue, component_id: &str) -> Result<String, EngineError> {
+    match string_prop(props, "mode").filter(|s| !s.is_empty()) {
+        None => Ok("overwrite".into()),
+        Some(m) => match m.as_str() {
+            "overwrite" | "append" | "truncate" | "upsert" => Ok(m),
+            other => Err(EngineError::Config(format!(
+                "{}: unknown mode {:?} - expected \"overwrite\" or \"append\" (create the \
+                 table when missing, then insert), \"truncate\" (empty it first) or \"upsert\"",
+                component_id, other
+            ))),
+        },
+    }
+}
+
 /// Sanitize a node id into a SQL-identifier-safe alias suffix (#76 per-source
 /// aliases). Non-alphanumeric chars become `_`; the `duckle_src_` prefix the
 /// caller prepends guarantees it never starts with a digit.
@@ -2023,6 +2114,8 @@ fn build_stage(
     let mut turso_sink: Option<TursoSinkSpec> = None;
     let mut db2_source: Option<Db2SourceSpec> = None;
     let mut db2_sink: Option<Db2SinkSpec> = None;
+    let mut hana_source: Option<HanaSourceSpec> = None;
+    let mut hana_sink: Option<HanaSinkSpec> = None;
     let mut access_source: Option<AccessSourceSpec> = None;
     let mut access_sink: Option<AccessSinkSpec> = None;
     let mut sharepoint_source: Option<SharePointSourceSpec> = None;
@@ -3663,6 +3756,29 @@ fn build_stage(
             mode: string_prop(&props, "mode")
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "append".to_string()),
+        });
+        (String::new(), StageKind::Sink, Some(from_view.to_string()))
+    } else if component_id == "snk.hana" {
+        let from_view = inputs.main().ok_or_else(|| missing_input(node, "main"))?;
+        let conn = hana_conn_from_props(&props, component_id)?;
+        let table = string_prop(&props, "tableName")
+            .or_else(|| string_prop(&props, "table"))
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config(format!("{}: tableName required", component_id)))?;
+        hana_sink = Some(HanaSinkSpec {
+            from_view: from_view.to_string(),
+            conn,
+            schema: string_prop(&props, "schema").filter(|s| !s.trim().is_empty()),
+            table,
+            batch_size: props
+                .get("batchSize")
+                .and_then(|v| v.as_u64())
+                .filter(|n| *n > 0)
+                .unwrap_or(1000) as usize,
+            mode: hana_write_mode(&props, component_id)?,
+            upsert_keys: upsert_keys_from(&props, component_id)?,
+            delete_column: delete_column_from(&props),
+            delete_value: delete_value_from(&props),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.access" {
@@ -5973,6 +6089,26 @@ fn build_stage(
                 .unwrap_or(5000) as usize,
         });
         (String::new(), StageKind::View, None)
+    } else if component_id == "src.hana" {
+        let conn = hana_conn_from_props(&props, component_id)?;
+        let query = string_prop(&props, "query")
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                let table = string_prop(&props, "tableName")
+                    .or_else(|| string_prop(&props, "table"))
+                    .filter(|s| !s.trim().is_empty())?;
+                let schema = string_prop(&props, "schema");
+                Some(format!("SELECT * FROM {}", hana_qualified(schema.as_deref(), &table)))
+            })
+            .ok_or_else(|| {
+                EngineError::Config(format!("{}: query or tableName required", component_id))
+            })?;
+        hana_source = Some(HanaSourceSpec {
+            node_id: node.id.clone(),
+            conn,
+            query,
+        });
+        (String::new(), StageKind::View, None)
     } else if component_id == "src.clickhouse" {
         let endpoint = string_prop(&props, "endpoint")
             .filter(|s| !s.is_empty())
@@ -7321,6 +7457,8 @@ fn build_stage(
         .or_else(|| turso_sink.map(RuntimeSpec::TursoSink))
         .or_else(|| db2_source.map(RuntimeSpec::Db2Source))
         .or_else(|| db2_sink.map(RuntimeSpec::Db2Sink))
+        .or_else(|| hana_source.map(RuntimeSpec::HanaSource))
+        .or_else(|| hana_sink.map(RuntimeSpec::HanaSink))
         .or_else(|| access_source.map(RuntimeSpec::AccessSource))
         .or_else(|| access_sink.map(RuntimeSpec::AccessSink))
         .or_else(|| sharepoint_source.map(RuntimeSpec::SharePointSource))

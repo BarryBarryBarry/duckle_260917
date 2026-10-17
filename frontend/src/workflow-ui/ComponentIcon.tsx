@@ -32,8 +32,11 @@ function baseName(componentId: string): string {
 }
 
 /** The brand mark for a component, if one exists (e.g. src.postgres -> PostgreSQL). */
+// Components whose brand is another one's mark (SAP HANA -> SAP).
+const BRAND_ALIASES: Record<string, string> = { hana: 'sap' };
+
 export function brandIconFor(componentId: string): BrandIcon | undefined {
-    const base = baseName(componentId);
+    const base = BRAND_ALIASES[baseName(componentId)] ?? baseName(componentId);
     // Try the full base first (e.g. "excel-online"), then the head before any
     // sub-dot (e.g. "ducklake.changes" -> "ducklake").
     return BRAND_ICONS[base] ?? BRAND_ICONS[base.split('.')[0]];

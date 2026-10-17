@@ -126,6 +126,7 @@ pub(crate) fn preview_source_query(format: &str, props: &JsonValue, n: usize) ->
             Some(s) => format!("\"{}\".\"{}\"", s, table),
             None => format!("\"{}\"", table),
         },
+        "hana" => super::hana_qualified(schema, table),
         _ => match schema {
             Some(s) => format!("{}.{}", s, table),
             None => table.to_string(),

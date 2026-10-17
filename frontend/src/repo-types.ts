@@ -17,6 +17,7 @@ export type ConnectionKind =
     | 'mariadb'
     | 'sqlserver'
     | 'oracle'
+    | 'hana'
     | 'sqlite'
     | 'duckdb'
     | 'snowflake'

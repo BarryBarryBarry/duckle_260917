@@ -69,6 +69,9 @@ tokio = { version = "1", default-features = false, features = ["rt", "rt-multi-t
 # in tokio block_on like mongo. compat feature adapts a tokio
 # TcpStream to the AsyncRead/Write that tiberius wants.
 tiberius = { version = "0.13", default-features = false, features = ["tds73", "rustls", "chrono"] }
+# SAP HANA (on-premise and HANA Cloud) via the pure-Rust hdbconnect driver:
+# no SAP HANA Client to install, TLS through rustls. Synchronous.
+hdbconnect = "0.33"
 tokio-util = { version = "0.7", features = ["compat"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 # Cassandra / ScyllaDB via the pure-Rust scylla driver (also speaks

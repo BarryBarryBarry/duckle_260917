@@ -20048,7 +20048,7 @@ mod mdb_schema_tests {
 /// share a name (e.g. SELECT * over a join) must be keyed uniquely or the
 /// second cell silently overwrites the first (DuckDB also rejects a duplicate
 /// struct key in read_json's columns map). Records the chosen name in `used`.
-fn unique_column_name(raw: &str, used: &mut std::collections::HashSet<String>) -> String {
+pub(crate) fn unique_column_name(raw: &str, used: &mut std::collections::HashSet<String>) -> String {
     let mut name = raw.to_string();
     if used.contains(&name) {
         let mut k = 1usize;
@@ -21227,7 +21227,7 @@ fn resolve_subpipeline_in(reference: &str, root: &std::path::Path) -> String {
 /// is one, where `async_nats` times out the whole handshake at 5s per address by
 /// default (async-nats-0.50.0 `options.rs:104`, armed at `connector.rs:408`), so
 /// a wrapper here would be dead code.
-const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub(crate) const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Run a blocking call on a worker thread and stop waiting for it after
 /// `budget`, reporting `timed_out` instead.
@@ -21241,7 +21241,7 @@ const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// A value that arrives after the budget is dropped on the worker thread, which
 /// is what runs the driver's own cleanup - a connection that turns up late is
 /// closed late rather than left open on the server.
-fn with_deadline<T: Send + 'static>(
+pub(crate) fn with_deadline<T: Send + 'static>(
     budget: std::time::Duration,
     timed_out: impl FnOnce() -> String,
     work: impl FnOnce() -> Result<T, String> + Send + 'static,

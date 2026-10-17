@@ -78,6 +78,15 @@ fn probe(kind: &str) -> Option<Probe> {
                    (SELECT USERNAME FROM ALL_USERS WHERE ORACLE_MAINTAINED = 'Y')",
             ping: "SELECT 1 AS \"ok\" FROM DUAL",
         }),
+        // The tables and views outside SAP HANA's own schemas (SYS, _SYS_*).
+        "hana" => Some(Probe::Tables {
+            component: "src.hana",
+            list: "SELECT SCHEMA_NAME || '.' || TABLE_NAME AS \"name\" FROM SYS.TABLES WHERE IS_SYSTEM_TABLE = 'FALSE' \
+                   AND SCHEMA_NAME <> 'SYS' AND SCHEMA_NAME NOT LIKE '\\_SYS%' ESCAPE '\\' UNION ALL \
+                   SELECT SCHEMA_NAME || '.' || VIEW_NAME AS \"name\" FROM SYS.VIEWS WHERE \
+                   SCHEMA_NAME <> 'SYS' AND SCHEMA_NAME NOT LIKE '\\_SYS%' ESCAPE '\\'",
+            ping: "SELECT 1 AS \"ok\" FROM DUMMY",
+        }),
         "s3" => Some(Probe::Bucket),
         "rest" => Some(Probe::Http),
         _ => None,
@@ -348,6 +357,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!((props["connect"].as_str(), props["user"].as_str()), (Some("db:1521/XE"), Some("u")));
+    }
+
+    /// A HANA connection is tested through `src.hana`, with the login the node
+    /// reads and the connection's TLS choice.
+    #[test]
+    fn a_hana_connection_is_probed_through_its_source_node() {
+        let Some(Probe::Tables { component, ping, list }) = probe("hana") else {
+            panic!("hana has a probe");
+        };
+        assert_eq!(component, "src.hana");
+        assert!(ping.contains("DUMMY"), "{ping}");
+        assert!(list.contains("SYS.TABLES") && list.contains("SYS.VIEWS"), "{list}");
+        let props = duckle_secrets::connection_node_props(
+            component,
+            &json!({ "kind": "hana", "host": "h", "port": 443, "username": "DBADMIN", "encrypt": true }),
+        )
+        .unwrap();
+        assert_eq!((props["user"].as_str(), props["encrypt"].as_bool()), (Some("DBADMIN"), Some(true)));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 417,
+  "componentCount": 419,
   "components": [
     {
       "id": "src.csv",
@@ -6215,6 +6215,130 @@
                 "label": "Fetch batch rows",
                 "kind": "number",
                 "defaultValue": 5000
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "src.hana",
+      "label": "SAP HANA",
+      "kind": "source",
+      "availability": "available",
+      "summary": "Read SAP HANA - on-premise or SAP HANA Cloud - through a pure-Rust driver built in (no SAP HANA Client to install). Host / port / user / password, TLS on by default as HANA Cloud requires (port 443; on-premise 3<instance>15). Whole-table read or custom SQL; each column keeps the type HANA reports.",
+      "ports": {
+        "inputs": [],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "src.hana",
+        "kind": "source",
+        "label": "SAP HANA",
+        "description": "Read SAP HANA - on-premise or SAP HANA Cloud - through a pure-Rust driver built in (no SAP HANA Client to install). Host / port / user / password, TLS on by default as HANA Cloud requires (port 443; on-premise 3<instance>15). Whole-table read or custom SQL; each column keeps the type HANA reports.",
+        "schemaSource": "autodetect",
+        "sections": [
+          {
+            "label": "SAP HANA connection",
+            "fields": [
+              {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "hana"
+                ],
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
+              },
+              {
+                "key": "host",
+                "label": "Host",
+                "kind": "text",
+                "required": true,
+                "placeholder": "xxxx.hana.trial-us10.hanacloud.ondemand.com"
+              },
+              {
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
+                "defaultValue": 443,
+                "description": "443 for SAP HANA Cloud. On-premise: 3<instance>15 for a tenant database (e.g. 30015), or 3<instance>13 for the system database together with the Tenant database field."
+              },
+              {
+                "key": "user",
+                "label": "User",
+                "kind": "text",
+                "required": true,
+                "placeholder": "DBADMIN"
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••",
+                "secret": true
+              },
+              {
+                "key": "database",
+                "label": "Tenant database (optional)",
+                "kind": "text",
+                "placeholder": "HXE",
+                "description": "Only for a multi-tenant on-premise system reached through its system database port. Leave empty for SAP HANA Cloud."
+              },
+              {
+                "key": "encrypt",
+                "label": "Encrypt connection (TLS)",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "On by default; SAP HANA Cloud requires it. Turn off only for an on-premise system without TLS."
+              },
+              {
+                "key": "trustCert",
+                "label": "Trust TLS cert (dev / self-signed)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Accept any server certificate. For a development system with a self-signed certificate; leave off for SAP HANA Cloud."
+              }
+            ]
+          },
+          {
+            "label": "Query",
+            "fields": [
+              {
+                "key": "schema",
+                "label": "Schema (optional)",
+                "kind": "text",
+                "placeholder": "SALES",
+                "description": "Defaults to the user's current schema. A plain name is read in upper case, as HANA does; put it in double quotes to keep its case."
+              },
+              {
+                "key": "tableName",
+                "label": "Table (for SELECT *)",
+                "kind": "text",
+                "placeholder": "ORDERS"
+              },
+              {
+                "key": "query",
+                "label": "Or custom SQL",
+                "kind": "expression",
+                "rows": 4,
+                "placeholder": "SELECT * FROM \"SALES\".\"ORDERS\""
               }
             ]
           }
@@ -34329,6 +34453,176 @@
                     "label": "Overwrite (clear first)"
                   }
                 ]
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": []
+        }
+      }
+    },
+    {
+      "id": "snk.hana",
+      "label": "SAP HANA",
+      "kind": "sink",
+      "availability": "available",
+      "summary": "Write to SAP HANA - on-premise or SAP HANA Cloud - through a pure-Rust driver built in. Creates a missing target as a column table, then inserts in batches through a prepared statement; truncate + insert, or upsert on key columns (UPSERT ... WHERE) with optional delete propagation.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": []
+      },
+      "manifest": {
+        "id": "snk.hana",
+        "kind": "sink",
+        "label": "SAP HANA",
+        "description": "Write to SAP HANA - on-premise or SAP HANA Cloud - through a pure-Rust driver built in. Creates a missing target as a column table, then inserts in batches through a prepared statement; truncate + insert, or upsert on key columns (UPSERT ... WHERE) with optional delete propagation.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "SAP HANA connection",
+            "fields": [
+              {
+                "key": "connectionRef",
+                "label": "Saved connection",
+                "kind": "connection-ref",
+                "accepts": [
+                  "hana"
+                ],
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
+              },
+              {
+                "key": "host",
+                "label": "Host",
+                "kind": "text",
+                "required": true,
+                "placeholder": "xxxx.hana.trial-us10.hanacloud.ondemand.com"
+              },
+              {
+                "key": "port",
+                "label": "Port",
+                "kind": "integer",
+                "defaultValue": 443,
+                "description": "443 for SAP HANA Cloud. On-premise: 3<instance>15 for a tenant database (e.g. 30015), or 3<instance>13 for the system database together with the Tenant database field."
+              },
+              {
+                "key": "user",
+                "label": "User",
+                "kind": "text",
+                "required": true,
+                "placeholder": "DBADMIN"
+              },
+              {
+                "key": "password",
+                "label": "Password",
+                "kind": "text",
+                "placeholder": "••••••••",
+                "secret": true
+              },
+              {
+                "key": "database",
+                "label": "Tenant database (optional)",
+                "kind": "text",
+                "placeholder": "HXE",
+                "description": "Only for a multi-tenant on-premise system reached through its system database port. Leave empty for SAP HANA Cloud."
+              },
+              {
+                "key": "encrypt",
+                "label": "Encrypt connection (TLS)",
+                "kind": "bool",
+                "defaultValue": true,
+                "description": "On by default; SAP HANA Cloud requires it. Turn off only for an on-premise system without TLS."
+              },
+              {
+                "key": "trustCert",
+                "label": "Trust TLS cert (dev / self-signed)",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Accept any server certificate. For a development system with a self-signed certificate; leave off for SAP HANA Cloud."
+              }
+            ]
+          },
+          {
+            "label": "Destination",
+            "fields": [
+              {
+                "key": "schema",
+                "label": "Schema (optional)",
+                "kind": "text",
+                "placeholder": "SALES",
+                "description": "Defaults to the user's current schema."
+              },
+              {
+                "key": "tableName",
+                "label": "Table",
+                "kind": "text",
+                "required": true,
+                "placeholder": "ORDERS",
+                "description": "Created as a column table when it does not exist. A plain name is written in upper case, as HANA does; put it in double quotes to keep its case."
+              },
+              {
+                "key": "batchSize",
+                "label": "Insert batch size",
+                "kind": "integer",
+                "defaultValue": 1000
+              },
+              {
+                "key": "mode",
+                "label": "Write mode",
+                "kind": "select",
+                "defaultValue": "overwrite",
+                "options": [
+                  {
+                    "label": "Overwrite (create / append)",
+                    "value": "overwrite"
+                  },
+                  {
+                    "label": "Append (insert)",
+                    "value": "append"
+                  },
+                  {
+                    "label": "Truncate + insert",
+                    "value": "truncate"
+                  },
+                  {
+                    "label": "Upsert (MERGE on key)",
+                    "value": "upsert"
+                  }
+                ],
+                "description": "Upsert runs a MERGE: update rows that match the conflict columns, insert the rest."
+              },
+              {
+                "key": "conflictColumns",
+                "label": "Conflict columns (upsert key)",
+                "kind": "columns",
+                "description": "Key columns to match on for Upsert / MERGE. Required when Write mode is Upsert."
+              },
+              {
+                "key": "deleteColumn",
+                "label": "Delete flag column (optional)",
+                "kind": "text",
+                "placeholder": "_change_type",
+                "description": "Upsert only: rows whose value in this column equals the Delete value are removed from the target by key instead of upserted. Wire a CDC Diff / DuckLake CDC change-type column here to propagate deletes."
+              },
+              {
+                "key": "deleteValue",
+                "label": "Delete flag value",
+                "kind": "text",
+                "defaultValue": "delete",
+                "description": "The value in the delete flag column that marks a row for deletion (default \"delete\")."
               }
             ]
           }

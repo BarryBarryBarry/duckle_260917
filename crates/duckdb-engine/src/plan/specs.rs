@@ -2432,6 +2432,52 @@ pub struct Db2SinkSpec {
     pub mode: String,
 }
 
+/// Where and how to reach a SAP HANA database (on-premise or HANA Cloud),
+/// shared by src.hana and snk.hana.
+#[derive(Debug, Clone)]
+pub struct HanaConnSpec {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: String,
+    /// Tenant database to reach through the system database's port, for a
+    /// multi-tenant on-premise system. HANA Cloud and a direct tenant port
+    /// leave it empty.
+    pub database: Option<String>,
+    /// TLS. HANA Cloud refuses a connection without it.
+    pub encrypt: bool,
+    /// Accept any server certificate (self-signed dev systems).
+    pub trust_cert: bool,
+}
+
+/// src.hana: SELECT through the pure-Rust hdbconnect driver.
+#[derive(Debug, Clone)]
+pub struct HanaSourceSpec {
+    pub node_id: String,
+    pub conn: HanaConnSpec,
+    pub query: String,
+}
+
+/// snk.hana: create the target as a column table when it is missing, then
+/// write through a prepared statement in batches.
+#[derive(Debug, Clone)]
+pub struct HanaSinkSpec {
+    pub from_view: String,
+    pub conn: HanaConnSpec,
+    /// None writes to the user's current schema.
+    pub schema: Option<String>,
+    pub table: String,
+    pub batch_size: usize,
+    /// "overwrite" / "append" (create when missing, then insert), "truncate"
+    /// (empty the table first) or "upsert" (driven by `upsert_keys`).
+    pub mode: String,
+    /// Non-empty in upsert mode: the key columns an existing row is matched on.
+    pub upsert_keys: Vec<String>,
+    /// Upsert delete propagation (see SnowflakeSinkSpec). None disables it.
+    pub delete_column: Option<String>,
+    pub delete_value: String,
+}
+
 /// src.access: a Microsoft Access database file (.accdb / .mdb). Windows reads
 /// it through the Access ODBC driver; elsewhere, where no such driver exists,
 /// through mdbtools, which reads a table but cannot run a query.

@@ -55,6 +55,13 @@ export const CONNECTION_TYPES: ConnectionType[] = [
         fields: ['host', 'port', 'database', 'username', 'password'],
         defaultPort: 1521,
     },
+    {
+        kind: 'hana',
+        label: 'SAP HANA',
+        fields: ['host', 'port', 'database', 'username', 'password', 'encrypt', 'trustCert'],
+        defaultPort: 443,
+        labels: { database: 'Tenant database (optional; empty for HANA Cloud)' },
+    },
     { kind: 'sqlite', label: 'SQLite', fields: ['database'] },
     { kind: 'duckdb', label: 'DuckDB', fields: ['database'] },
     {

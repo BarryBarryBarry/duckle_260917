@@ -779,10 +779,14 @@ fn merge_generic_connection(
             map.insert("account".into(), JsonValue::String(h.into()));
         }
     }
-    // SQL Server and Synapse nodes name the login `user`, where the connection
-    // stores `username` (#363). Without this the connection's user never
-    // reached the node, and a node that relied on its connection ran as nobody.
-    if matches!(component_id, "src.sqlserver" | "snk.sqlserver" | "src.synapse" | "snk.synapse") {
+    // SQL Server, Synapse and SAP HANA nodes name the login `user`, where the
+    // connection stores `username` (#363). Without this the connection's user
+    // never reached the node, and a node that relied on its connection ran as
+    // nobody - or as a stale inline user.
+    if matches!(
+        component_id,
+        "src.sqlserver" | "snk.sqlserver" | "src.synapse" | "snk.synapse" | "src.hana" | "snk.hana"
+    ) {
         if let Some(u) = conn_str(conn, "username") {
             map.insert("user".into(), JsonValue::String(u.into()));
         }
@@ -1469,6 +1473,29 @@ mod tests {
             assert_eq!(p["user"], "etl", "{component}: {p}");
             assert_eq!(p["host"], "db.local", "{component}");
             assert_eq!(p["database"], "sales", "{component}");
+        }
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
+    /// A HANA connection's fields land on the node, its login as the `user` the
+    /// node reads, replacing a stale inline one, and its TLS choices with it.
+    #[test]
+    fn a_hana_connection_supplies_the_fields_its_nodes_read() {
+        let ws = temp_ws("hana");
+        write_connection(
+            &ws,
+            "trial",
+            r#"{"kind":"hana","host":"abc.hanacloud.ondemand.com","port":443,"username":"DBADMIN","password":"p","encrypt":true,"trustCert":false}"#,
+        );
+        for component in ["src.hana", "snk.hana"] {
+            let mut node = sf_node(component, serde_json::json!({"connectionRef": "trial", "user": "OLD", "tableName": "T"}));
+            resolve_connection_refs(&ws, std::slice::from_mut(&mut node)).unwrap();
+            let p = node.data.properties.unwrap();
+            assert_eq!(p["user"], "DBADMIN", "{component}: {p}");
+            assert_eq!(p["host"], "abc.hanacloud.ondemand.com", "{component}");
+            assert_eq!(p["port"], 443, "{component}");
+            assert_eq!(p["encrypt"], true, "{component}");
+            assert_eq!(p["tableName"], "T", "{component}");
         }
         let _ = std::fs::remove_dir_all(&ws);
     }
