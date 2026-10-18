@@ -1028,6 +1028,7 @@ fn t_create_pipeline(args: &Value) -> Result<Value, String> {
         .unwrap_or_else(|| gen_id("p"));
     obj.insert("id".to_string(), json!(id));
     let mut full = Value::Object(obj);
+    crate::canvas_shape::default_new_to_top_to_bottom(&mut full);
     // The engine runs on componentId alone, but the canvas also needs node
     // types, handles and positions or it draws label boxes it cannot edit.
     crate::canvas_shape::normalize(&mut full);

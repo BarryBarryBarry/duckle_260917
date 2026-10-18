@@ -17,6 +17,34 @@ use crate::catalog;
 // and room for a card with several ports down.
 const X_STEP: f64 = 360.0;
 const Y_STEP: f64 = 200.0;
+// Top-to-bottom: cards side by side in a row, rows a tall card plus a gap apart.
+const TB_X_STEP: f64 = 300.0;
+const TB_Y_STEP: f64 = 240.0;
+
+fn is_top_to_bottom(pipeline: &Map<String, Value>) -> bool {
+    pipeline.get("layoutDirection").and_then(Value::as_str) == Some("TB")
+}
+
+/// A pipeline the agent creates without saying which way it flows, and without
+/// placing any node itself, flows top to bottom: `layoutDirection` is set so
+/// the canvas opens it that way, and `normalize` then lays it out to match. A
+/// pipeline whose nodes already have positions keeps the canvas default (left
+/// to right), so they are not drawn against the wrong ports.
+pub fn default_new_to_top_to_bottom(pipeline: &mut Value) {
+    let Some(obj) = pipeline.as_object_mut() else {
+        return;
+    };
+    if obj.get("layoutDirection").and_then(Value::as_str).is_some() {
+        return;
+    }
+    let any_placed = obj
+        .get("nodes")
+        .and_then(Value::as_array)
+        .is_some_and(|nodes| nodes.iter().any(has_valid_position));
+    if !any_placed {
+        obj.insert("layoutDirection".into(), json!("TB"));
+    }
+}
 
 /// The canvas node type for a component: the canvas registers only these
 /// three, and control / quality / custom components render as transforms, as
@@ -53,9 +81,9 @@ fn has_valid_position(node: &Value) -> bool {
     })
 }
 
-/// Left-to-right layers by longest path from a root, for nodes with no usable
-/// position. Nodes caught in a cycle fall into the last layer.
-fn layered_positions(node_ids: &[String], edges: &[Value]) -> HashMap<String, (f64, f64)> {
+/// Layers by longest path from a root, for nodes with no usable position: left
+/// to right, or top to bottom. Nodes caught in a cycle fall into the last layer.
+fn layered_positions(node_ids: &[String], edges: &[Value], top_to_bottom: bool) -> HashMap<String, (f64, f64)> {
     let mut indegree: HashMap<&str, usize> = node_ids.iter().map(|id| (id.as_str(), 0)).collect();
     let mut next: HashMap<&str, Vec<&str>> = HashMap::new();
     for e in edges {
@@ -98,7 +126,11 @@ fn layered_positions(node_ids: &[String], edges: &[Value]) -> HashMap<String, (f
         .map(|id| {
             let d = depth.get(id.as_str()).copied().unwrap_or(last);
             let row = rows.entry(d).or_insert(0);
-            let pos = (d as f64 * X_STEP, *row as f64 * Y_STEP);
+            let pos = if top_to_bottom {
+                (*row as f64 * TB_X_STEP, d as f64 * TB_Y_STEP)
+            } else {
+                (d as f64 * X_STEP, *row as f64 * Y_STEP)
+            };
             *row += 1;
             (id.clone(), pos)
         })
@@ -188,6 +220,7 @@ pub fn normalize(pipeline: &mut Value) {
         return;
     };
     repair_common_shapes(obj);
+    let top_to_bottom = is_top_to_bottom(obj);
     let edges: Vec<Value> = obj
         .get("edges")
         .and_then(Value::as_array)
@@ -208,7 +241,7 @@ pub fn normalize(pipeline: &mut Value) {
         let layout = if unplaced.is_empty() {
             HashMap::new()
         } else {
-            layered_positions(&all_ids, &edges)
+            layered_positions(&all_ids, &edges, top_to_bottom)
         };
 
         for node in nodes.iter_mut() {
@@ -321,6 +354,49 @@ mod tests {
         let x = |i: usize| p["nodes"][i]["position"]["x"].as_f64().unwrap();
         assert!(x(0) == 0.0 && x(1) == 0.0 && x(2) > x(0) && x(3) > x(2) && x(4) > x(3));
         assert_ne!(p["nodes"][0]["position"]["y"], p["nodes"][1]["position"]["y"]);
+    }
+
+    #[test]
+    fn a_new_unplaced_pipeline_flows_top_to_bottom() {
+        let mut p = agent_pipeline();
+        default_new_to_top_to_bottom(&mut p);
+        assert_eq!(p["layoutDirection"], "TB");
+        normalize(&mut p);
+        // Laid out top to bottom by depth: sources side by side, then join, code, sink.
+        let pos = |i: usize, k: &str| p["nodes"][i]["position"][k].as_f64().unwrap();
+        assert!(pos(0, "y") == 0.0 && pos(1, "y") == 0.0 && pos(0, "x") != pos(1, "x"));
+        assert!(pos(2, "y") > pos(0, "y") && pos(3, "y") > pos(2, "y") && pos(4, "y") > pos(3, "y"));
+        assert!(pos(2, "x") == 0.0 && pos(3, "x") == 0.0 && pos(4, "x") == 0.0);
+    }
+
+    #[test]
+    fn a_chosen_direction_or_placed_nodes_are_kept() {
+        let mut lr = agent_pipeline();
+        lr["layoutDirection"] = json!("LR");
+        default_new_to_top_to_bottom(&mut lr);
+        assert_eq!(lr["layoutDirection"], "LR");
+
+        let mut placed = json!({
+            "nodes": [ { "id": "a", "position": { "x": 0, "y": 0 }, "data": { "componentId": "src.csv" } } ],
+            "edges": []
+        });
+        default_new_to_top_to_bottom(&mut placed);
+        assert!(placed.get("layoutDirection").is_none());
+    }
+
+    #[test]
+    fn nodes_added_to_a_top_to_bottom_pipeline_go_below() {
+        let mut p = json!({
+            "layoutDirection": "TB",
+            "nodes": [
+                { "id": "a", "data": { "componentId": "src.csv" } },
+                { "id": "b", "data": { "componentId": "snk.csv" } }
+            ],
+            "edges": [ { "source": "a", "target": "b" } ]
+        });
+        normalize(&mut p);
+        assert_eq!(p["nodes"][0]["position"], json!({ "x": 0.0, "y": 0.0 }));
+        assert_eq!(p["nodes"][1]["position"], json!({ "x": 0.0, "y": TB_Y_STEP }));
     }
 
     #[test]

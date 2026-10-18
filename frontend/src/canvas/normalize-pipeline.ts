@@ -8,6 +8,9 @@ const FLOW_TYPES = new Set<string>(['source', 'transform', 'sink']);
 // A 240px card plus a 120px gap across; room for a card with several ports down.
 const X_STEP = 360;
 const Y_STEP = 200;
+// Top-to-bottom: cards side by side in a row, rows a tall card plus a gap apart.
+const TB_X_STEP = 300;
+const TB_Y_STEP = 240;
 
 /**
  * The canvas node type for a component. The canvas registers only these three;
@@ -31,8 +34,12 @@ function hasPosition(node: Node): boolean {
     return typeof node.position?.x === 'number' && typeof node.position?.y === 'number';
 }
 
-/** Left-to-right layers by longest path from a root, for nodes with no position. */
-function layeredPositions(nodes: Node[], edges: Edge[]): Map<string, { x: number; y: number }> {
+/** Layers by longest path from a root, for nodes with no position: left to right, or top to bottom. */
+function layeredPositions(
+    nodes: Node[],
+    edges: Edge[],
+    topToBottom: boolean,
+): Map<string, { x: number; y: number }> {
     const indegree = new Map(nodes.map(n => [n.id, 0]));
     const next = new Map<string, string[]>();
     for (const e of edges) {
@@ -59,7 +66,7 @@ function layeredPositions(nodes: Node[], edges: Edge[]): Map<string, { x: number
         const d = depth.get(n.id) ?? last;
         const row = rows.get(d) ?? 0;
         rows.set(d, row + 1);
-        out.set(n.id, { x: d * X_STEP, y: row * Y_STEP });
+        out.set(n.id, topToBottom ? { x: row * TB_X_STEP, y: d * TB_Y_STEP } : { x: d * X_STEP, y: row * Y_STEP });
     }
     return out;
 }
@@ -72,15 +79,21 @@ function layeredPositions(nodes: Node[], edges: Edge[]): Map<string, { x: number
  * nor wired), and an edge without `sourceHandle` is dropped because Duckle
  * nodes expose named handles. Existing values are never overridden, and the
  * same object comes back when nothing was missing.
+ *
+ * A pipeline with no direction and no node placed at all was written by an
+ * agent: it flows top to bottom, as create_pipeline lays agent pipelines out.
  */
-export function normalizePipelineForCanvas<T extends { nodes?: Node<DuckleNodeData>[]; edges?: Edge[] }>(
-    pipeline: T,
-): T {
+export function normalizePipelineForCanvas<
+    T extends { nodes?: Node<DuckleNodeData>[]; edges?: Edge[]; layoutDirection?: unknown },
+>(pipeline: T): T {
     const nodes = Array.isArray(pipeline?.nodes) ? pipeline.nodes : [];
     const edges = Array.isArray(pipeline?.edges) ? pipeline.edges : [];
     const needsLayout = nodes.some(n => !hasPosition(n));
-    const layout = needsLayout ? layeredPositions(nodes, edges) : null;
-    let changed = false;
+    const defaultToTopToBottom =
+        pipeline?.layoutDirection == null && nodes.length > 0 && !nodes.some(hasPosition);
+    const topToBottom = defaultToTopToBottom || pipeline?.layoutDirection === 'TB';
+    const layout = needsLayout ? layeredPositions(nodes, edges, topToBottom) : null;
+    let changed = defaultToTopToBottom;
 
     const nextNodes = nodes.map(n => {
         const typeOk = typeof n.type === 'string' && FLOW_TYPES.has(n.type);
@@ -118,5 +131,7 @@ export function normalizePipelineForCanvas<T extends { nodes?: Node<DuckleNodeDa
         return { ...e, sourceHandle, targetHandle, data: { ...data, connectionType } };
     });
 
-    return changed ? { ...pipeline, nodes: nextNodes, edges: nextEdges } : pipeline;
+    if (!changed) return pipeline;
+    const next = { ...pipeline, nodes: nextNodes, edges: nextEdges };
+    return defaultToTopToBottom ? { ...next, layoutDirection: 'TB' } : next;
 }
