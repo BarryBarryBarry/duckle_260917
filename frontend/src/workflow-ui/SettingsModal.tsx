@@ -15,6 +15,9 @@ import {
     settingsSetAllowUnsigned,
     settingsGetContextFile,
     settingsSetContextFile,
+    settingsGetAgentAttachmentMaxMb,
+    settingsSetAgentAttachmentMaxMb,
+    DEFAULT_AGENT_ATTACHMENT_MAX_MB,
 } from '../tauri-bridge';
 import { loadPersisted, savePersisted } from '../persistence';
 import { openExternal } from '../tauri-io';
@@ -72,6 +75,8 @@ export function SettingsModal({
     const [cpuCount, setCpuCount] = useState(1);
     // Global context file: a key/value file auto-merged into the global context.
     const [contextFile, setContextFile] = useState('');
+    // Largest file, in MB, the Agent input may attach (empty = default).
+    const [attachMaxMb, setAttachMaxMb] = useState('');
     // Local UI pref: show/hide the top-bar Dives button.
     const [showDives, setShowDives] = useState(() => !loadPersisted('hideDivesButton', false));
     // Local UI pref: show/hide the canvas minimap. On by default, because it
@@ -104,8 +109,9 @@ export function SettingsModal({
             settingsGetContextFile(workspace),
             settingsGetAllowUnsigned(workspace),
             settingsGetPower(workspace),
+            settingsGetAgentAttachmentMaxMb(workspace),
         ])
-            .then(([p, ai, mem, ic, unsigned, power]) => {
+            .then(([p, ai, mem, ic, unsigned, power, attachMb]) => {
                 if (!alive) return;
                 setProxy(p ?? '');
                 const mode = ai.mode ?? 'deepseek_harness';
@@ -125,6 +131,7 @@ export function SettingsModal({
                 setMaxRuns(power.maxConcurrentRuns != null ? String(power.maxConcurrentRuns) : '');
                 setSpillDir(power.spillDir ?? '');
                 setCpuCount(power.cpuCount || 1);
+                setAttachMaxMb(attachMb !== DEFAULT_AGENT_ATTACHMENT_MAX_MB ? String(attachMb) : '');
                 setLoaded(true);
             })
             .catch(e => {
@@ -165,6 +172,8 @@ export function SettingsModal({
             });
             await settingsSetAllowUnsigned(workspace, allowUnsigned);
             await settingsSetContextFile(workspace, contextFile.trim() || null);
+            const attachMb = parseInt(attachMaxMb.trim(), 10);
+            await settingsSetAgentAttachmentMaxMb(workspace, Number.isFinite(attachMb) && attachMb > 0 ? attachMb : null);
             setSaved(true);
             setTimeout(() => setSaved(false), 1500);
         } catch (e) {
@@ -434,6 +443,24 @@ export function SettingsModal({
                             disabled={!loaded || !workspace}
                             spellCheck={false}
                             autoComplete="off"
+                            style={aiInput}
+                        />
+                    </SettingsSection>
+
+                    <SettingsSection {...sectionState('agentAttachments')} title="Agent attachments">
+                        <p style={help}>
+                            Largest file, in MB, the + button in the Agent input may attach. Leave empty for
+                            the default ({DEFAULT_AGENT_ATTACHMENT_MAX_MB} MB). Executable files (.exe, .msi,
+                            .bat, .sh, .dmg and the like) are never accepted.
+                        </p>
+                        <input
+                            id="settings-agent-attach-max"
+                            type="number"
+                            min={1}
+                            value={attachMaxMb}
+                            onChange={e => setAttachMaxMb(e.target.value)}
+                            placeholder={`${DEFAULT_AGENT_ATTACHMENT_MAX_MB} (MB)`}
+                            disabled={!loaded || !workspace}
                             style={aiInput}
                         />
                     </SettingsSection>

@@ -587,7 +587,7 @@
       "noMatch": "一致するスキルはありません"
     },
     "attach": {
-      "button": "ファイルを添付",
+      "button": "データ移行説明ドキュメントを追加",
       "remove": "削除",
       "failed": "ファイルを添付できませんでした：{{message}}",
       "defaultPrompt": "添付ファイルを読んでください。"

@@ -59,6 +59,9 @@ struct AppSettings {
     /// gets a private subdirectory beneath it, so concurrent runs cannot
     /// collide over spill cleanup.
     spill_dir: Option<String>,
+    /// Largest file, in MB, the Agent input may attach. None = the default
+    /// (`agent_attachments::DEFAULT_MAX_ATTACHMENT_MB`).
+    agent_attachment_max_mb: Option<u32>,
 }
 
 /// The power-mode settings returned to the UI. camelCase for JS.
@@ -278,6 +281,33 @@ pub fn settings_set_memory_limit(workspace: String, mb: Option<u32>) -> Result<(
     // Apply immediately so the current session's runs use it without a relaunch.
     apply_memory_limit(mb);
     Ok(())
+}
+
+/// The per-file size limit, in MB, for files attached in the Agent input.
+pub fn agent_attachment_max_mb(workspace: &Path) -> u32 {
+    load(workspace)
+        .agent_attachment_max_mb
+        .filter(|m| *m > 0)
+        .unwrap_or(crate::agent_attachments::DEFAULT_MAX_ATTACHMENT_MB)
+}
+
+#[tauri::command]
+pub fn settings_get_agent_attachment_max_mb(workspace: String) -> u32 {
+    if workspace.is_empty() {
+        return crate::agent_attachments::DEFAULT_MAX_ATTACHMENT_MB;
+    }
+    agent_attachment_max_mb(Path::new(&workspace))
+}
+
+/// None or 0 goes back to the default.
+#[tauri::command]
+pub fn settings_set_agent_attachment_max_mb(workspace: String, mb: Option<u32>) -> Result<(), String> {
+    if workspace.is_empty() {
+        return Err("no workspace is open".into());
+    }
+    let mut s = load(Path::new(&workspace));
+    s.agent_attachment_max_mb = mb.filter(|m| *m > 0);
+    store(Path::new(&workspace), &s)
 }
 
 #[tauri::command]

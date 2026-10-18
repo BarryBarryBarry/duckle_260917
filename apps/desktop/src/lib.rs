@@ -282,6 +282,7 @@ pub fn run() {
             agent_list_connections,
             agent_list_skills,
             agent_attach_files,
+            agent_check_attachments,
             llama_models,
             llama_default_model,
             dbt_status,
@@ -345,6 +346,8 @@ pub fn run() {
             app_settings::settings_set_ai,
             app_settings::settings_get_memory_limit,
             app_settings::settings_set_memory_limit,
+            app_settings::settings_get_agent_attachment_max_mb,
+            app_settings::settings_set_agent_attachment_max_mb,
             app_settings::settings_get_allow_unsigned,
             app_settings::settings_set_allow_unsigned,
             app_settings::settings_get_power,
@@ -1506,10 +1509,31 @@ async fn agent_attach_files(
         return Err("Open or create a workspace first".into());
     }
     tokio::task::spawn_blocking(move || {
-        agent_attachments::attach_files(std::path::Path::new(workspace.trim()), &conversation_id, &paths)
+        let workspace = std::path::Path::new(workspace.trim());
+        let max_mb = app_settings::agent_attachment_max_mb(workspace);
+        agent_attachments::attach_files(workspace, &conversation_id, &paths, max_mb)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The picked files the Agent input may not attach (executables, or over the
+/// workspace's size limit), each with why. Nothing is copied.
+#[tauri::command]
+async fn agent_check_attachments(
+    workspace: String,
+    paths: Vec<String>,
+) -> Result<Vec<agent_attachments::Rejection>, String> {
+    tokio::task::spawn_blocking(move || {
+        let max_mb = if workspace.trim().is_empty() {
+            agent_attachments::DEFAULT_MAX_ATTACHMENT_MB
+        } else {
+            app_settings::agent_attachment_max_mb(std::path::Path::new(workspace.trim()))
+        };
+        agent_attachments::check_files(&paths, max_mb)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// The workspace's skills (`.duckle/skills/<name>/SKILL.md`), read from disk on

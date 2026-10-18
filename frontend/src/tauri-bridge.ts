@@ -857,6 +857,21 @@ export async function pickAgentAttachments(): Promise<string[]> {
     return Array.isArray(picked) ? picked : [picked];
 }
 
+/** A picked file the Agent input may not attach, and why. */
+export type AgentAttachmentRejection = {
+    path: string;
+    error: string;
+};
+
+/** The picks the backend would refuse (executables, or over the size limit); nothing is copied. */
+export async function agentCheckAttachments(
+    workspace: string,
+    paths: string[],
+): Promise<AgentAttachmentRejection[]> {
+    if (!isTauri() || paths.length === 0) return [];
+    return await invoke<AgentAttachmentRejection[]>('agent_check_attachments', { workspace, paths });
+}
+
 /** Copy the picked files into the conversation's attachment folder. */
 export async function agentAttachFiles(
     workspace: string,
@@ -1982,6 +1997,25 @@ export async function settingsSetPower(workspace: string, cfg: Omit<PowerConfig,
 }
 
 /** #143: read whether this workspace allows loading unsigned DuckDB extensions. */
+/** The default largest file, in MB, the Agent input may attach. */
+export const DEFAULT_AGENT_ATTACHMENT_MAX_MB = 10;
+
+/** The largest file, in MB, the Agent input may attach in this workspace. */
+export async function settingsGetAgentAttachmentMaxMb(workspace: string): Promise<number> {
+    if (!workspace || !isTauri()) return DEFAULT_AGENT_ATTACHMENT_MAX_MB;
+    try {
+        return (await invoke<number>('settings_get_agent_attachment_max_mb', { workspace })) ?? DEFAULT_AGENT_ATTACHMENT_MAX_MB;
+    } catch {
+        return DEFAULT_AGENT_ATTACHMENT_MAX_MB;
+    }
+}
+
+/** Persist the Agent attachment size limit in MB; null goes back to the default. */
+export async function settingsSetAgentAttachmentMaxMb(workspace: string, mb: number | null): Promise<void> {
+    if (!isTauri()) return;
+    await invoke('settings_set_agent_attachment_max_mb', { workspace, mb });
+}
+
 export async function settingsGetAllowUnsigned(workspace: string): Promise<boolean> {
     if (!workspace) return false;
     try {

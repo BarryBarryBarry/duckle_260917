@@ -27,6 +27,7 @@ import {
 import {
     agentAbort,
     agentAttachFiles,
+    agentCheckAttachments,
     agentCheckInstalled,
     agentConversationDelete,
     agentConversationGet,
@@ -1202,8 +1203,19 @@ export default function AgentChatPanel({
 
     async function handleAttach() {
         try {
-            const paths = await pickAgentAttachments();
+            const picked = await pickAgentAttachments();
+            // Executables and files over the workspace's size limit are turned
+            // away now rather than when the message is sent.
+            const rejected = workspace ? await agentCheckAttachments(workspace, picked) : [];
+            const refused = new Set(rejected.map(r => r.path));
+            const paths = picked.filter(p => !refused.has(p));
             if (paths.length) setPendingFiles(prev => [...prev, ...paths.filter(p => !prev.includes(p))]);
+            if (rejected.length) {
+                setError({
+                    message: t('agent.attach.failed', { message: rejected.map(r => r.error).join('; ') }),
+                    needsSettings: false,
+                });
+            }
         } catch (err) {
             setError({ message: t('agent.attach.failed', { message: String(err) }), needsSettings: false });
         }
@@ -1508,6 +1520,15 @@ export default function AgentChatPanel({
                                             {t('agent.openSettings')}
                                         </button>
                                     ) : null}
+                                    <button
+                                        type="button"
+                                        className="chat-status-dismiss"
+                                        onClick={() => setError(null)}
+                                        title={t('common.close')}
+                                        aria-label={t('common.close')}
+                                    >
+                                        <X size={12} />
+                                    </button>
                                 </div>
                             ) : null}
                         </div>

@@ -729,7 +729,7 @@
       "noMatch": "No matching skill"
     },
     "attach": {
-      "button": "Attach files",
+      "button": "Add data migration documents",
       "remove": "Remove",
       "failed": "Could not attach the files: {{message}}",
       "defaultPrompt": "Please read the attached files."

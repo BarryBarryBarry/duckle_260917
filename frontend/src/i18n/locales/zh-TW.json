@@ -624,7 +624,7 @@
       "noMatch": "沒有符合的 skill"
     },
     "attach": {
-      "button": "新增附件",
+      "button": "新增資料遷移說明文件",
       "remove": "移除",
       "failed": "附件新增失敗：{{message}}",
       "defaultPrompt": "請閱讀附件。"

@@ -8279,6 +8279,26 @@ select.modal-select:focus {
     background: var(--accent);
     color: var(--bg-0);
 }
+.chat-status-dismiss {
+    align-self: flex-start;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-3);
+    cursor: pointer;
+    transition: background 100ms, color 100ms;
+}
+.chat-status-dismiss:hover {
+    background: color-mix(in srgb, var(--text-1) 10%, transparent);
+    color: var(--text-1);
+}
 .chat-caret {
     display: inline-block;
     width: 6px;

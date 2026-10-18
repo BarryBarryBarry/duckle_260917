@@ -695,7 +695,7 @@
       "noMatch": "没有匹配的 skill"
     },
     "attach": {
-      "button": "添加附件",
+      "button": "添加数据迁移说明文档",
       "remove": "移除",
       "failed": "附件添加失败：{{message}}",
       "defaultPrompt": "请阅读附件。"

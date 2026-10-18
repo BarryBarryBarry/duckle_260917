@@ -1721,6 +1721,7 @@ mod agent_e2e {
             &ws,
             "c-e2e-1",
             &[src.to_string_lossy().into_owned()],
+            crate::agent_attachments::DEFAULT_MAX_ATTACHMENT_MB,
         )
         .unwrap();
         std::fs::rename(&attached[0].path, ws.join(".duckle/pi-agent/attachments/c-e2e-1/orders.csv")).unwrap();
