@@ -1550,6 +1550,32 @@ textarea:focus-visible {
     display: none;
 }
 
+.left-sidebar {
+    position: relative;
+    /* A widened sidebar gives way when the window shrinks, so the canvas stays usable. */
+    max-width: max(240px, calc(100vw - 480px));
+}
+
+.left-sidebar-resize {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: -3px;
+    width: 6px;
+    cursor: ew-resize;
+    z-index: 5;
+}
+
+.left-sidebar-resize:hover,
+.left-sidebar.is-resizing .left-sidebar-resize {
+    background: var(--accent);
+    opacity: 0.5;
+}
+
+.left-sidebar.is-resizing {
+    user-select: none;
+}
+
 .left-sidebar-tabs {
     display: flex;
     height: 36px;

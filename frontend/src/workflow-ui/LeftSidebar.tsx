@@ -1,9 +1,31 @@
-import { useState } from 'react';
+import { useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Activity, Boxes, FolderTree } from 'lucide-react';
 import Palette from './Palette';
 import ProjectTree from './ProjectTree';
 import type { RepoItem } from '../repo-types';
+
+const WIDTH_KEY = 'duckle.leftSidebar.width';
+const DEFAULT_WIDTH = 272;
+const MIN_WIDTH = 240;
+const MAX_WIDTH = 640;
+
+function savedWidth(): number {
+    try {
+        const saved = Number(localStorage.getItem(WIDTH_KEY));
+        return saved >= MIN_WIDTH && saved <= MAX_WIDTH ? saved : DEFAULT_WIDTH;
+    } catch {
+        return DEFAULT_WIDTH;
+    }
+}
+
+function storeWidth(width: number) {
+    try {
+        localStorage.setItem(WIDTH_KEY, String(width));
+    } catch {
+        /* localStorage unavailable - non-fatal */
+    }
+}
 
 type SideTab = 'project' | 'palette';
 
@@ -63,9 +85,56 @@ export default function LeftSidebar({
 }: Props) {
     const { t } = useTranslation();
     const [tab, setTab] = useState<SideTab>('palette');
+    // Drag the right edge to resize; double-click it to go back to the default.
+    const [width, setWidth] = useState(savedWidth);
+    const widthRef = useRef(width);
+    const [resizing, setResizing] = useState(false);
+
+    const startResize = (e: ReactMouseEvent) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        const startX = e.clientX;
+        // What is on screen: the CSS may have narrowed it to fit a small window.
+        const shown = e.currentTarget.parentElement?.getBoundingClientRect().width;
+        const startW = shown ? Math.round(shown) : widthRef.current;
+        // Never squeeze the canvas below a usable width, nor snap narrower than
+        // the panel already is on a small window.
+        const max = Math.max(startW, Math.min(MAX_WIDTH, window.innerWidth - 480));
+        setResizing(true);
+        const onMove = (ev: MouseEvent) => {
+            const next = Math.max(MIN_WIDTH, Math.min(max, startW + (ev.clientX - startX)));
+            widthRef.current = next;
+            setWidth(next);
+        };
+        const onUp = () => {
+            setResizing(false);
+            storeWidth(widthRef.current);
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        };
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    };
+
+    const resetWidth = () => {
+        widthRef.current = DEFAULT_WIDTH;
+        setWidth(DEFAULT_WIDTH);
+        storeWidth(DEFAULT_WIDTH);
+    };
 
     return (
-        <aside className={'left-sidebar' + (hidden ? ' is-hidden' : '')} data-tour="palette" aria-hidden={hidden || undefined}>
+        <aside
+            className={'left-sidebar' + (hidden ? ' is-hidden' : '') + (resizing ? ' is-resizing' : '')}
+            style={{ width }}
+            data-tour="palette"
+            aria-hidden={hidden || undefined}
+        >
+            <div
+                className="left-sidebar-resize"
+                onMouseDown={startResize}
+                onDoubleClick={resetWidth}
+                aria-hidden="true"
+            />
             <div className="left-sidebar-tabs" role="tablist" aria-label={t('sidebar.ariaLabel')}>
                 <button
                     type="button"
