@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Edge, Node } from '@xyflow/react';
-import { AlertTriangle, CheckCircle2, ChevronRight, MousePointer2, Workflow } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, MousePointer2, Workflow, X } from 'lucide-react';
 import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema, deriveSchemaFromEngine, diagnosticsFor } from '../schema-resolve';
 import { analyzeNodeSql } from '../tauri-bridge';
 import { setSqlContext } from './fields/sql-context';
@@ -295,10 +295,10 @@ export default function PropertiesPanel({
                     type="button"
                     className="properties-collapse-toggle properties-collapse-toggle-float"
                     onClick={onHide}
-                    title={t('properties.collapsePanel', { defaultValue: 'Collapse panel' })}
-                    aria-label={t('properties.collapsePanel', { defaultValue: 'Collapse panel' })}
+                    title={t('common.close')}
+                    aria-label={t('common.close')}
                 >
-                    <ChevronRight size={16} />
+                    <X size={14} />
                 </button>
                 <div className="properties-empty">
                     <MousePointer2 size={32} strokeWidth={1.4} />
@@ -420,10 +420,10 @@ export default function PropertiesPanel({
                 type="button"
                 className="properties-collapse-toggle properties-collapse-toggle-float"
                 onClick={onHide}
-                title={t('properties.collapsePanel', { defaultValue: 'Collapse panel' })}
-                aria-label={t('properties.collapsePanel', { defaultValue: 'Collapse panel' })}
+                title={t('common.close')}
+                aria-label={t('common.close')}
             >
-                <ChevronRight size={16} />
+                <X size={14} />
             </button>
             <div className="properties-header">
                 <div className="properties-kind-row">

@@ -2301,12 +2301,14 @@ textarea:focus-visible {
     justify-content: center;
     width: 22px;
     height: 22px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg-2);
-    color: var(--text-2);
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-3);
     cursor: pointer;
     flex: none;
+    transition: background 100ms, color 100ms;
 }
 
 .properties-collapse-toggle:hover {
@@ -2314,11 +2316,12 @@ textarea:focus-visible {
     background: var(--bg-3);
 }
 
-/* When expanded, float the collapse button in the panel's top-right corner. */
+/* Float the close button in the panel's top-right corner, where the Agent
+   window's close button sits. */
 .properties-collapse-toggle-float {
     position: absolute;
-    top: 8px;
-    right: 8px;
+    top: 10px;
+    right: 14px;
     z-index: 2;
 }
 
@@ -2365,8 +2368,8 @@ textarea:focus-visible {
     font-size: 0.8462rem;
     margin-bottom: 8px;
     /* #102: reserve room on the right so the node id is not slid under / clipped
-       by the absolutely-positioned collapse toggle (right: 8px). */
-    padding-right: 26px;
+       by the absolutely-positioned close button (22px wide, right: 14px). */
+    padding-right: 30px;
 }
 
 .properties-kind-dot {
