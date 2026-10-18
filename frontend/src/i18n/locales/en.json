@@ -459,14 +459,9 @@
     "user": "User",
     "hero": {
       "badge": "Local-first · AI-assisted",
-      "title": "Let the Agent build your data pipelines",
+      "title": "Let the Agent build your data migration pipelines",
       "sub": "Design, run, schedule and govern pipelines, all on this computer",
-      "agent": "Agent drafted 3 nodes",
-      "group": {
-        "build": "Build",
-        "operate": "Operate",
-        "govern": "Govern"
-      }
+      "agent": "Agent drafted 3 nodes"
     },
     "showPassword": "Show password",
     "hidePassword": "Hide password"

@@ -13,12 +13,10 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { Bot, Check, Copy, Eye, EyeOff, Loader2, Lock, ShieldCheck, Timer, Workflow } from 'lucide-react';
+import { Bot, Check, Copy, Eye, EyeOff, Loader2, Lock } from 'lucide-react';
 import { DuckleLogo } from '../workflow-ui/DuckleLogo';
-import { buildModules, type ModuleGroup } from '../workflow-ui/HomeLauncher';
 import WindowControls from '../workflow-ui/WindowControls';
 import WindowResizeHandles from '../workflow-ui/WindowResizeHandles';
-import { DUCKIE_ENABLED } from '../features';
 import { getWorkspacePath } from '../workspace';
 import { isTauri } from '../tauri-dialog';
 import { copyText } from '../tauri-io';
@@ -231,40 +229,10 @@ function AuthScreen({ children, wide = false, home = false }: { children: ReactN
     );
 }
 
-/** What Home shows before anyone is signed in: the same groups and counts the
- *  editor's Home has on this desktop, for looking at, not opening. */
-function signedOutModules() {
-    const none = () => {};
-    return buildModules({
-        openDesigner: none,
-        importJob: none,
-        openDuckie: DUCKIE_ENABLED ? none : undefined,
-        openMcp: none,
-        openRuns: none,
-        openSchedules: none,
-        openPlans: none,
-        openBuild: none,
-        openLineage: none,
-        openTrust: none,
-        openCatalog: none,
-        openDataQuality: none,
-        openGit: none,
-        openSettings: none,
-        activePipelineId: '',
-    });
-}
-
-type GroupFigure = { group: ModuleGroup; ready: number; total: number };
-
 /** The signed-out landing page: a headline and a picture of the product on
  *  the left, the sign-in card on the right. */
 function LandingFrame({ children }: { children: ReactNode }) {
     const { t } = useTranslation();
-    const modules = signedOutModules();
-    const groups: GroupFigure[] = (['build', 'operate', 'govern'] as const).map(group => {
-        const inGroup = modules.filter(m => m.group === group);
-        return { group, ready: inGroup.filter(m => m.status === 'ready').length, total: inGroup.length };
-    });
     const workspaceName = getWorkspacePath()?.split(/[\\/]/).filter(Boolean).pop() ?? null;
     return (
         <div className="auth-landing">
@@ -274,7 +242,7 @@ function LandingFrame({ children }: { children: ReactNode }) {
                     <span className="auth-hero-badge">{t('auth.hero.badge')}</span>
                     <h1 className="auth-hero-title">{t('auth.hero.title')}</h1>
                     <p className="auth-hero-sub">{t('auth.hero.sub')}</p>
-                    <HeroArt groups={groups} />
+                    <HeroArt />
                 </section>
                 <div className="auth-landing-card">{children}</div>
             </main>
@@ -288,12 +256,10 @@ function LandingFrame({ children }: { children: ReactNode }) {
     );
 }
 
-const GROUP_ICON: Record<ModuleGroup, typeof Workflow> = { build: Workflow, operate: Timer, govern: ShieldCheck };
-
-/** The product, drawn: a pipeline on a canvas, with what the app holds - its
- *  three areas and the Agent - floating around it. Decorative; every word in
- *  it is also said elsewhere on the page. */
-function HeroArt({ groups }: { groups: GroupFigure[] }) {
+/** The product, drawn: a pipeline on a canvas, with the Agent that built it
+ *  floating beside it. Decorative; every word in it is also said elsewhere on
+ *  the page. */
+function HeroArt() {
     const { t } = useTranslation();
     const nodes = [
         { kind: 'source', name: 'MySQL' },
@@ -325,18 +291,6 @@ function HeroArt({ groups }: { groups: GroupFigure[] }) {
                     ))}
                 </div>
             </div>
-            {groups.map(g => {
-                const Icon = GROUP_ICON[g.group];
-                return (
-                    <div key={g.group} className={`auth-hero-chip is-${g.group}`}>
-                        <Icon size={13} />
-                        <span className="auth-hero-chip-name">{t(`auth.hero.group.${g.group}`)}</span>
-                        <span className="auth-hero-chip-count">
-                            {g.ready}/{g.total}
-                        </span>
-                    </div>
-                );
-            })}
             <div className="auth-hero-chip is-agent">
                 <Bot size={13} />
                 <span>{t('auth.hero.agent')}</span>

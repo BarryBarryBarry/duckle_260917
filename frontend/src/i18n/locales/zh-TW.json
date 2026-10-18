@@ -356,14 +356,9 @@
     "user": "一般使用者",
     "hero": {
       "badge": "本機優先 · AI 驅動",
-      "title": "讓 Agent 幫你搭建資料管線",
+      "title": "讓 Agent 幫你搭建資料遷移管線",
       "sub": "設計、執行、排程與治理 pipeline，都在這臺電腦上完成",
-      "agent": "Agent 已生成 3 個節點",
-      "group": {
-        "build": "建構",
-        "operate": "執行",
-        "govern": "治理"
-      }
+      "agent": "Agent 已生成 3 個節點"
     },
     "showPassword": "顯示密碼",
     "hidePassword": "隱藏密碼"

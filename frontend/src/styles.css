@@ -10531,6 +10531,7 @@ select.modal-select:focus {
     flex-direction: column;
     align-items: flex-start;
     min-width: 0;
+    container-type: inline-size;
 }
 .auth-hero-badge {
     display: inline-flex;
@@ -10551,6 +10552,11 @@ select.modal-select:focus {
     letter-spacing: -0.02em;
     color: var(--text-1);
 }
+/* The Chinese headline is about 14.2em wide: size it off the column so it
+   stays on one line. */
+:lang(zh) .auth-hero-title {
+    font-size: clamp(22px, 6.9cqi, 40px);
+}
 .auth-hero-sub {
     margin: 0;
     font-size: clamp(13px, 1.25vw, 17px);
@@ -10561,22 +10567,24 @@ select.modal-select:focus {
 /* ---- the picture: everything in it is sized off its own width ---- */
 .auth-hero-art {
     position: relative;
-    align-self: center;
+    /* Flush with the headline's left edge, as wide as the column allows. */
+    align-self: flex-start;
     container-type: inline-size;
-    width: min(100%, 560px, calc((100vh - var(--topbar-h) - 330px) * 1.75));
+    width: min(100%, 640px, calc((100vh - var(--topbar-h) - 300px) * 1.75));
     aspect-ratio: 560 / 320;
-    margin-top: clamp(14px, 4vh, 44px);
+    margin-top: clamp(16px, 4vh, 40px);
 }
 .auth-hero-glow {
     position: absolute;
-    inset: 18% 14% 4%;
+    inset: 10% 8% 0;
     border-radius: 50%;
     background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 26%, transparent), transparent);
     filter: blur(6px);
 }
 .auth-hero-canvas {
     position: absolute;
-    inset: 15% 8% 17%;
+    /* Room below only for the Agent chip that sits on its bottom edge. */
+    inset: 0 0 9%;
     border-radius: 2.4cqw;
     border: 1px solid var(--border);
     background:
@@ -10686,22 +10694,7 @@ select.modal-select:focus {
     color: var(--accent);
     flex: 0 0 auto;
 }
-.auth-hero-chip-name {
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    font-size: 0.92em;
-}
-.auth-hero-chip-count {
-    padding: 1px 7px;
-    border-radius: 999px;
-    background: var(--accent-soft);
-    color: var(--accent-strong);
-    font-variant-numeric: tabular-nums;
-}
-.auth-hero-chip.is-build { left: 0; top: 2%; animation-delay: -1s; }
-.auth-hero-chip.is-operate { right: 3%; top: 0; animation-delay: -3s; }
-.auth-hero-chip.is-govern { left: 4%; bottom: 3%; animation-delay: -2s; }
-.auth-hero-chip.is-agent { right: 0; bottom: 8%; animation-delay: -4s; }
+.auth-hero-chip.is-agent { right: 4%; bottom: 3%; animation-delay: -4s; }
 .auth-hero-chip-ok {
     color: #22a06b !important;
 }
