@@ -1,9 +1,28 @@
 // The tool strip on the workspace's right edge, as in IntelliJ IDEA: one
 // icon-and-label button per tool window. A tool window opens docked between
 // the canvas and the strip, one at a time; its button is lit while it is open.
-import { useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 
 export type RightTool = 'properties' | 'agent';
+
+/** One width for every right-hand tool window, so switching between them
+ *  does not resize the canvas. */
+export const RIGHT_TOOL_WIDTH = {
+    storageKey: 'duckle.properties.width',
+    defaultWidth: 352,
+    minWidth: 280,
+    maxWidth: 720,
+} as const;
+
+export function savedRightToolWidth(): number {
+    const { storageKey, defaultWidth, minWidth, maxWidth } = RIGHT_TOOL_WIDTH;
+    try {
+        const saved = Number(localStorage.getItem(storageKey));
+        return saved >= minWidth && saved <= maxWidth ? saved : defaultWidth;
+    } catch {
+        return defaultWidth;
+    }
+}
 
 export type ToolStripItem = {
     id: RightTool;
@@ -74,6 +93,16 @@ export function SideToolWindow({
     });
     const widthRef = useRef(width);
     const [resizing, setResizing] = useState(false);
+
+    // Another tool window may share this width and have resized it meanwhile.
+    useEffect(() => {
+        if (hidden) return;
+        const saved = Number(localStorage.getItem(storageKey));
+        if (saved >= minWidth && saved <= maxWidth && saved !== widthRef.current) {
+            widthRef.current = saved;
+            setWidth(saved);
+        }
+    }, [hidden, storageKey, minWidth, maxWidth]);
 
     const startResize = (e: ReactMouseEvent) => {
         e.preventDefault();

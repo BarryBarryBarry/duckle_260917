@@ -50,7 +50,7 @@ import EngineSetupModal from './workflow-ui/EngineSetupModal';
 import SetupWizard from './workflow-ui/SetupWizard';
 import ChatPanel from './workflow-ui/ChatPanel';
 import AgentChatPanel from './workflow-ui/AgentChatPanel';
-import { RightToolStrip, SideToolWindow, type RightTool } from './workflow-ui/RightToolStrip';
+import { RIGHT_TOOL_WIDTH, RightToolStrip, SideToolWindow, type RightTool } from './workflow-ui/RightToolStrip';
 import GitPanel from './workflow-ui/GitPanel';
 import WindowControls from './workflow-ui/WindowControls';
 import WindowResizeHandles from './workflow-ui/WindowResizeHandles';
@@ -2874,13 +2874,7 @@ export default function App() {
                     />
                 ) : null}
                 {agentPanelMounted ? (
-                    <SideToolWindow
-                        storageKey="duckle.agentWindow.width"
-                        defaultWidth={460}
-                        minWidth={340}
-                        maxWidth={1100}
-                        hidden={!showAgentPanel}
-                    >
+                    <SideToolWindow {...RIGHT_TOOL_WIDTH} hidden={!showAgentPanel}>
                         <AgentChatPanel
                             placement="side"
                             workspace={workspacePathState}

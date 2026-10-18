@@ -8416,6 +8416,12 @@ select.modal-select:focus {
 .agent-chat-panel-side .chat-panel-head {
     cursor: default;
 }
+/* One flat background, as in the Properties tool window beside it. */
+.agent-chat-panel-side .chat-panel-head,
+:root[data-theme='light'] .agent-chat-panel-side .chat-panel-head,
+.agent-chat-panel-side .chat-panel-form {
+    background: transparent;
+}
 :root[data-theme='light'] .agent-chat-panel-side {
     box-shadow: none;
 }

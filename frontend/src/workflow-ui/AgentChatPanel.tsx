@@ -87,8 +87,6 @@ type Props = {
     placement?: 'floating' | 'side';
 };
 
-const SIDE_SIDEBAR_KEY = 'pi-agent-side-sidebar';
-
 type ToolCall = {
     id: string;
     name: string;
@@ -517,28 +515,19 @@ export default function AgentChatPanel({
     } = useFloatingPanel('pi-agent-panel-position', 'Agent', AGENT_PANEL_LIMITS);
     const side = placement === 'side';
     // Docked beside the canvas, the history sidebar is simply on or off: the
-    // tool window's width is the user's, so it is not grown to make room.
-    const [sideSidebar, setSideSidebar] = useState(() => {
-        try {
-            return localStorage.getItem(SIDE_SIDEBAR_KEY) === '1';
-        } catch {
-            return false;
-        }
-    });
+    // tool window's width is the user's, so it is not grown to make room. It
+    // starts closed every time the Agent window opens.
+    const [sideSidebar, setSideSidebar] = useState(false);
+    useEffect(() => {
+        if (open) setSideSidebar(false);
+    }, [open]);
     const sidebarShown = side ? sideSidebar : floatingSidebarShown;
     const toggleSidebar = () => {
         if (!side) {
             toggleFloatingSidebar();
             return;
         }
-        setSideSidebar(prev => {
-            try {
-                localStorage.setItem(SIDE_SIDEBAR_KEY, prev ? '0' : '1');
-            } catch {
-                /* localStorage unavailable - non-fatal */
-            }
-            return !prev;
-        });
+        setSideSidebar(prev => !prev);
     };
     /** The conversation whose Pi session is running, if any. */
     const startedConversationRef = useRef<string | null>(null);
