@@ -57,6 +57,7 @@ import { SkillCommandMenu, looksLikeSkillCommand, matchSkills, skillCommand, sla
 import ReplyFooter, { type ReplyUsage } from './ReplyFooter';
 import { syncComposerHeight, useInputRecall } from './composer';
 import { useFloatingPanel } from './floating-panel';
+import { useMaximized } from './maximize';
 import type { ComponentDef } from './palette-data';
 import {
     ConnectionDialog,
@@ -514,6 +515,15 @@ export default function AgentChatPanel({
         sidebarShown: floatingSidebarShown,
     } = useFloatingPanel('pi-agent-panel-position', 'Agent', AGENT_PANEL_LIMITS);
     const side = placement === 'side';
+    // Docked, the panel can also cover everything below the top bar.
+    const [sideMaximized, setSideMaximized] = useMaximized(open && side);
+    // An opened pipeline shows on the canvas, so a maximized panel steps aside.
+    const openPipeline = onOpenPipeline
+        ? (pipelineId: string) => {
+              setSideMaximized(false);
+              onOpenPipeline(pipelineId);
+          }
+        : undefined;
     // Docked beside the canvas, the history sidebar is simply on or off: the
     // tool window's width is the user's, so it is not grown to make room. It
     // starts closed every time the Agent window opens.
@@ -802,16 +812,18 @@ export default function AgentChatPanel({
         [workspace, activeId, startNewConversation, stopAgent, runHistoryTask],
     );
 
-    // Esc closes the panel, like Duckie's. The history menu handles its own
-    // Escape first.
+    // Esc closes the panel, like Duckie's; a maximized panel is restored
+    // first. The history menu handles its own Escape first.
     useEffect(() => {
         if (!open) return;
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape' && !uiDialog) onClose();
+            if (e.key !== 'Escape' || uiDialog) return;
+            if (sideMaximized) setSideMaximized(false);
+            else onClose();
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [open, onClose, uiDialog]);
+    }, [open, onClose, uiDialog, sideMaximized, setSideMaximized]);
 
     useEffect(() => {
         if (!workspace) return;
@@ -1306,7 +1318,7 @@ export default function AgentChatPanel({
 
     return (
         <aside
-            className={`chat-panel agent-chat-panel ${floatingClasses}`}
+            className={`chat-panel agent-chat-panel ${floatingClasses}${side && sideMaximized ? ' tool-maximized' : ''}`}
             role="complementary"
             aria-label="Agent"
             style={side ? undefined : panelStyle}
@@ -1340,7 +1352,18 @@ export default function AgentChatPanel({
                     ) : null}
                 </div>
                 <div className="chat-panel-head-actions">
-                    {side ? null : (
+                    {side ? (
+                        <button
+                            type="button"
+                            className="chat-panel-head-btn"
+                            onClick={() => setSideMaximized(m => !m)}
+                            title={sideMaximized ? t('panel.restoreSize', { name: 'Agent' }) : t('panel.maximize', { name: 'Agent' })}
+                            aria-label={sideMaximized ? t('panel.restoreSize', { name: 'Agent' }) : t('panel.maximize', { name: 'Agent' })}
+                            aria-pressed={sideMaximized}
+                        >
+                            {sideMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                        </button>
+                    ) : (
                         <>
                             <span className="chat-panel-drag-hint">{t('panel.dragHint')}</span>
                             <button
@@ -1482,7 +1505,7 @@ export default function AgentChatPanel({
                                             key={index}
                                             turn={message.turn}
                                             live={busy && index === messages.length - 1}
-                                            onOpenPipeline={onOpenPipeline}
+                                            onOpenPipeline={openPipeline}
                                         />
                                     ),
                                 )

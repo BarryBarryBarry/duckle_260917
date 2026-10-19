@@ -2,6 +2,7 @@
 // icon-and-label button per tool window. A tool window opens docked between
 // the canvas and the strip, one at a time; its button is lit while it is open.
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
+import { maxPanelWidth } from './maximize';
 
 export type RightTool = 'properties' | 'agent' | 'guide';
 
@@ -11,7 +12,7 @@ export const RIGHT_TOOL_WIDTH = {
     storageKey: 'duckle.properties.width',
     defaultWidth: 352,
     minWidth: 280,
-    maxWidth: 720,
+    maxWidth: 1600,
 } as const;
 
 export function savedRightToolWidth(): number {
@@ -108,8 +109,7 @@ export function SideToolWindow({
         e.preventDefault();
         const startX = e.clientX;
         const startW = widthRef.current;
-        // Never squeeze the canvas below a usable width.
-        const max = Math.min(maxWidth, Math.max(minWidth, window.innerWidth - 480));
+        const max = maxPanelWidth(startW, maxWidth);
         setResizing(true);
         const onMove = (ev: MouseEvent) => {
             const next = clampWidth(startW + (startX - ev.clientX), minWidth, max);

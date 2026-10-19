@@ -8,6 +8,7 @@ import remarkGfm from 'remark-gfm';
 import { ArrowUp, BookOpen, Loader2, Maximize2, Minimize2, X } from 'lucide-react';
 import { loadManual, resolveGuideImage, slugifyHeading } from '../guide';
 import { openExternal } from '../tauri-io';
+import { useMaximized } from './maximize';
 
 /** The guide keeps its own width: reading wants more room than Properties
  *  or the Agent, so it may grow well past their shared limit. */
@@ -27,10 +28,7 @@ export default function GuidePanel({ open, onClose }: { open: boolean; onClose: 
     const [error, setError] = useState<string | null>(null);
     const [toc, setToc] = useState<TocEntry[]>([]);
     const [zoomed, setZoomed] = useState<ZoomedImage | null>(null);
-    const [maximized, setMaximized] = useState(false);
-    useEffect(() => {
-        if (!open) setMaximized(false);
-    }, [open]);
+    const [maximized, setMaximized] = useMaximized(open);
     const scrollRef = useRef<HTMLDivElement>(null);
     const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -130,7 +128,7 @@ export default function GuidePanel({ open, onClose }: { open: boolean; onClose: 
         : t('panel.maximize', { name: t('guide.title') });
 
     return (
-        <aside className={`guide-panel${maximized ? ' guide-panel-maximized' : ''}`} aria-label={t('guide.title')}>
+        <aside className={`guide-panel${maximized ? ' tool-maximized' : ''}`} aria-label={t('guide.title')}>
             <header className="guide-panel-head">
                 <div className="guide-panel-title">
                     <BookOpen size={14} aria-hidden="true" />

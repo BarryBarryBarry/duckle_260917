@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Edge, Node } from '@xyflow/react';
-import { AlertTriangle, CheckCircle2, MousePointer2, Workflow, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Maximize2, Minimize2, MousePointer2, Workflow, X } from 'lucide-react';
 import { resolveUpstreamSchema, resolveUpstreamSampleRows, resolveOutputSchema, deriveSchemaFromEngine, diagnosticsFor } from '../schema-resolve';
 import { analyzeNodeSql } from '../tauri-bridge';
 import { setSqlContext } from './fields/sql-context';
@@ -20,6 +20,7 @@ import { getManifest } from './fields/component-manifests';
 import { isFieldVisible } from './fields/visibility';
 import type { Field } from './fields/types';
 import { RIGHT_TOOL_WIDTH, savedRightToolWidth } from './RightToolStrip';
+import { maxPanelWidth, useMaximized } from './maximize';
 
 type TabId = 'basic' | 'schema' | 'preview' | 'advanced' | 'validation';
 
@@ -261,16 +262,17 @@ export default function PropertiesPanel({
     // #102 item 4a: drag the panel's left edge to resize; width persists per machine.
     const [panelWidth, setPanelWidth] = useState<number>(savedRightToolWidth);
     const widthRef = useRef(panelWidth);
+    const asideRef = useRef<HTMLElement>(null);
+    const [maximized, setMaximized] = useMaximized(true, asideRef);
+    const maximizeLabel = t(maximized ? 'panel.restoreSize' : 'panel.maximize', { name: t('toolStrip.properties') });
     const startResize = (e: ReactMouseEvent) => {
         e.preventDefault();
         const startX = e.clientX;
         const startW = widthRef.current;
+        const max = maxPanelWidth(startW, RIGHT_TOOL_WIDTH.maxWidth);
         const onMove = (ev: MouseEvent) => {
             // Dragging the left edge: moving left widens the panel.
-            const next = Math.max(
-                RIGHT_TOOL_WIDTH.minWidth,
-                Math.min(RIGHT_TOOL_WIDTH.maxWidth, startW + (startX - ev.clientX)),
-            );
+            const next = Math.max(RIGHT_TOOL_WIDTH.minWidth, Math.min(max, startW + (startX - ev.clientX)));
             widthRef.current = next;
             setPanelWidth(next);
         };
@@ -287,10 +289,29 @@ export default function PropertiesPanel({
         document.addEventListener('mouseup', onUp);
     };
 
+    const maximizeButton = (
+        <button
+            type="button"
+            className="properties-collapse-toggle properties-collapse-toggle-float properties-maximize-toggle"
+            onClick={() => setMaximized(m => !m)}
+            title={maximizeLabel}
+            aria-label={maximizeLabel}
+            aria-pressed={maximized}
+        >
+            {maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        </button>
+    );
+
     if (!selected) {
         return (
-            <aside className="properties" data-tour="properties" style={{ width: panelWidth }}>
+            <aside
+                ref={asideRef}
+                className={'properties' + (maximized ? ' tool-maximized' : '')}
+                data-tour="properties"
+                style={{ width: panelWidth }}
+            >
                 <div className="properties-resize-handle" onMouseDown={startResize} aria-hidden="true" />
+                {maximizeButton}
                 <button
                     type="button"
                     className="properties-collapse-toggle properties-collapse-toggle-float"
@@ -414,8 +435,14 @@ export default function PropertiesPanel({
     };
 
     return (
-        <aside className="properties" data-tour="properties" style={{ width: panelWidth }}>
+        <aside
+            ref={asideRef}
+            className={'properties' + (maximized ? ' tool-maximized' : '')}
+            data-tour="properties"
+            style={{ width: panelWidth }}
+        >
             <div className="properties-resize-handle" onMouseDown={startResize} aria-hidden="true" />
+            {maximizeButton}
             <button
                 type="button"
                 className="properties-collapse-toggle properties-collapse-toggle-float"
