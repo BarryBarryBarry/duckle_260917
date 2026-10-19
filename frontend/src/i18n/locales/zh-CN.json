@@ -428,8 +428,7 @@
     "hero": {
       "badge": "本地优先 · AI 驱动",
       "title": "让 Agent 帮你搭建数据迁移管道",
-      "sub": "设计、运行、调度与治理 pipeline，都在这台电脑上完成",
-      "agent": "Agent 已生成 3 个节点"
+      "sub": "设计、运行、调度与治理 pipeline，都在这台电脑上完成"
     },
     "showPassword": "显示密码",
     "hidePassword": "隐藏密码"

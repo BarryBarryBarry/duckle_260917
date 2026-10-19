@@ -357,8 +357,7 @@
     "hero": {
       "badge": "本機優先 · AI 驅動",
       "title": "讓 Agent 幫你搭建資料遷移管線",
-      "sub": "設計、執行、排程與治理 pipeline，都在這臺電腦上完成",
-      "agent": "Agent 已生成 3 個節點"
+      "sub": "設計、執行、排程與治理 pipeline，都在這臺電腦上完成"
     },
     "showPassword": "顯示密碼",
     "hidePassword": "隱藏密碼"

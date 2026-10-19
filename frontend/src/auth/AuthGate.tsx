@@ -6,15 +6,18 @@ import {
     useCallback,
     useContext,
     useEffect,
+    useMemo,
     useRef,
     useState,
+    type CSSProperties,
     type FormEvent,
     type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { Bot, Check, Copy, Eye, EyeOff, Loader2, Lock } from 'lucide-react';
+import { Check, Copy, Eye, EyeOff, Loader2, Lock } from 'lucide-react';
 import { DuckleLogo } from '../workflow-ui/DuckleLogo';
+import ComponentIcon from '../workflow-ui/ComponentIcon';
 import WindowControls from '../workflow-ui/WindowControls';
 import WindowResizeHandles from '../workflow-ui/WindowResizeHandles';
 import { getWorkspacePath } from '../workspace';
@@ -256,16 +259,71 @@ function LandingFrame({ children }: { children: ReactNode }) {
     );
 }
 
-/** The product, drawn: a pipeline on a canvas, with the Agent that built it
- *  floating beside it. Decorative; every word in it is also said elsewhere on
+// The databases drifting behind the pipeline, drawn with the palette's marks.
+const HERO_DATABASES = ['src.postgres', 'src.mysql', 'src.mariadb', 'src.sqlserver', 'src.oracle', 'src.hana'];
+
+// One slot per database in each band, above and below the row of nodes:
+// centre in % of the canvas, and a scale that reads as depth.
+const HERO_DB_SLOTS: { x: number; y: number; s: number }[][] = [
+    [
+        { x: 11, y: 22, s: 0.8 },
+        { x: 26, y: 13, s: 1 },
+        { x: 42, y: 25, s: 0.85 },
+        { x: 58, y: 12, s: 0.95 },
+        { x: 74, y: 23, s: 1.05 },
+        { x: 89, y: 13, s: 0.8 },
+    ],
+    [
+        { x: 9, y: 79, s: 0.9 },
+        { x: 25, y: 88, s: 0.8 },
+        { x: 41, y: 76, s: 1.05 },
+        { x: 58, y: 87, s: 0.85 },
+        { x: 74, y: 77, s: 0.95 },
+        { x: 90, y: 87, s: 0.85 },
+    ],
+];
+
+function shuffled<T>(items: T[]): T[] {
+    const out = [...items];
+    for (let i = out.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+}
+
+/** Every database once in each band, in a fresh order and with its own drift
+ *  each time the page opens. */
+function heroDatabaseLayout() {
+    const between = (lo: number, hi: number) => lo + Math.random() * (hi - lo);
+    return HERO_DB_SLOTS.flatMap((band, b) => {
+        const order = shuffled(HERO_DATABASES);
+        return band.map((slot, i) => ({
+            key: `${b}-${i}`,
+            componentId: order[i],
+            style: {
+                left: `${slot.x + between(-2, 2)}%`,
+                top: `${slot.y + between(-3, 3)}%`,
+                '--s': slot.s,
+                '--o': (0.45 + slot.s * 0.45).toFixed(2),
+                '--dx': `${between(-1.2, 1.2).toFixed(2)}cqw`,
+                '--dy': `${between(-1.6, -0.6).toFixed(2)}cqw`,
+                '--rot': `${between(-6, 6).toFixed(1)}deg`,
+                '--dur': `${between(6, 10).toFixed(1)}s`,
+                '--delay': `${between(-10, 0).toFixed(1)}s`,
+                '--in': `${(0.15 + (b * band.length + i) * 0.06).toFixed(2)}s`,
+            } as CSSProperties,
+        }));
+    });
+}
+
+/** The product, drawn: a pipeline on a canvas, the databases it moves between
+ *  drifting behind it. Decorative; every word in it is also said elsewhere on
  *  the page. */
 function HeroArt() {
     const { t } = useTranslation();
-    const nodes = [
-        { kind: 'source', name: 'MySQL' },
-        { kind: 'transform', name: 'Filter' },
-        { kind: 'sink', name: 'PostgreSQL' },
-    ] as const;
+    const nodes = ['source', 'transform', 'sink'] as const;
+    const databases = useMemo(heroDatabaseLayout, []);
     return (
         <div className="auth-hero-art" aria-hidden="true">
             <div className="auth-hero-glow" />
@@ -275,26 +333,24 @@ function HeroArt() {
                     <i />
                     <i />
                 </div>
+                <div className="auth-hero-dbs">
+                    {databases.map(d => (
+                        <span key={d.key} className="auth-hero-db" style={d.style}>
+                            <ComponentIcon componentId={d.componentId} kind="source" size={24} />
+                        </span>
+                    ))}
+                </div>
                 <svg className="auth-hero-links" viewBox="0 0 100 60" preserveAspectRatio="none">
                     <path d="M29 30 C 33 30, 33 30, 37 30" />
                     <path d="M63 30 C 67 30, 67 30, 71 30" />
                 </svg>
                 <div className="auth-hero-nodes">
-                    {nodes.map((n, i) => (
-                        <div key={n.name} className={`auth-hero-node is-${n.kind}`} style={{ animationDelay: `${i * 0.6}s` }}>
-                            <span className="auth-hero-node-kind">{t(`node.${n.kind}`)}</span>
-                            <span className="auth-hero-node-name">
-                                <span className="auth-hero-node-seq">{i + 1}</span>
-                                {n.name}
-                            </span>
+                    {nodes.map((kind, i) => (
+                        <div key={kind} className={`auth-hero-node is-${kind}`} style={{ animationDelay: `${i * 0.6}s` }}>
+                            <span className="auth-hero-node-kind">{t(`node.${kind}`)}</span>
                         </div>
                     ))}
                 </div>
-            </div>
-            <div className="auth-hero-chip is-agent">
-                <Bot size={13} />
-                <span>{t('auth.hero.agent')}</span>
-                <Check size={12} className="auth-hero-chip-ok" />
             </div>
         </div>
     );

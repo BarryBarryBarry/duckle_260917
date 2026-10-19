@@ -10573,8 +10573,8 @@ select.modal-select:focus {
     /* Flush with the headline's left edge, as wide as the column allows. */
     align-self: flex-start;
     container-type: inline-size;
-    width: min(100%, 640px, calc((100vh - var(--topbar-h) - 300px) * 1.75));
-    aspect-ratio: 560 / 320;
+    width: min(100%, 640px, calc((100vh - var(--topbar-h) - 300px) * 1.92));
+    aspect-ratio: 560 / 292;
     margin-top: clamp(16px, 4vh, 40px);
 }
 .auth-hero-glow {
@@ -10586,8 +10586,7 @@ select.modal-select:focus {
 }
 .auth-hero-canvas {
     position: absolute;
-    /* Room below only for the Agent chip that sits on its bottom edge. */
-    inset: 0 0 9%;
+    inset: 0;
     border-radius: 2.4cqw;
     border: 1px solid var(--border);
     background:
@@ -10608,6 +10607,44 @@ select.modal-select:focus {
     height: 1.2cqw;
     border-radius: 50%;
     background: var(--border-strong);
+}
+.auth-hero-dbs {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    border-radius: inherit;
+    pointer-events: none;
+}
+.auth-hero-db {
+    position: absolute;
+    display: grid;
+    place-items: center;
+    width: 6cqw;
+    height: 6cqw;
+    border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+    border-radius: 1.6cqw;
+    background: color-mix(in srgb, var(--field-bg) 82%, transparent);
+    backdrop-filter: blur(4px);
+    box-shadow:
+        0 1.4cqw 3cqw -1.4cqw rgba(40, 10, 80, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    opacity: var(--o, 0.8);
+    transform: translate(-50%, -50%) scale(var(--s, 1));
+    animation:
+        auth-db-in 900ms cubic-bezier(0.16, 1, 0.3, 1) var(--in, 0s) backwards,
+        auth-db-drift var(--dur, 8s) ease-in-out var(--delay, 0s) infinite;
+}
+.auth-hero-db > img,
+.auth-hero-db > svg {
+    width: 58%;
+    height: 58%;
+}
+@keyframes auth-db-in {
+    from { opacity: 0; }
+}
+@keyframes auth-db-drift {
+    0%, 100% { transform: translate(-50%, -50%) scale(var(--s, 1)); }
+    50% { transform: translate(calc(-50% + var(--dx, 0px)), calc(-50% + var(--dy, -6px))) rotate(var(--rot, 0deg)) scale(var(--s, 1)); }
 }
 .auth-hero-links {
     position: absolute;
@@ -10637,7 +10674,7 @@ select.modal-select:focus {
     display: flex;
     flex-direction: column;
     gap: 0.4cqw;
-    padding: 1.6cqw 1.8cqw;
+    padding: 2.6cqw 1.8cqw;
     border: 1px solid var(--border);
     border-left: 0.6cqw solid var(--node-color, var(--accent));
     border-radius: 1.4cqw;
@@ -10652,54 +10689,10 @@ select.modal-select:focus {
 .auth-hero-node.is-transform { --node-color: var(--accent); }
 .auth-hero-node.is-sink { --node-color: #f08a24; }
 .auth-hero-node-kind {
-    font-size: 1.6cqw;
-    color: var(--text-3);
-}
-.auth-hero-node-name {
-    display: flex;
-    align-items: center;
-    gap: 0.7cqw;
     font-size: 2.3cqw;
     font-weight: 700;
     color: var(--text-1);
     white-space: nowrap;
-    min-width: 0;
-}
-.auth-hero-node-seq {
-    display: inline-grid;
-    place-items: center;
-    flex-shrink: 0;
-    width: 2.4cqw;
-    height: 2.4cqw;
-    border-radius: 50%;
-    background: var(--accent);
-    color: #fff;
-    font-size: 1.4cqw;
-    font-weight: 700;
-}
-.auth-hero-chip {
-    position: absolute;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 10px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--field-bg);
-    color: var(--text-1);
-    font-size: clamp(11px, 2.1cqw, 12.5px);
-    font-weight: 600;
-    white-space: nowrap;
-    box-shadow: 0 8px 20px -10px rgba(40, 10, 80, 0.35);
-    animation: auth-float 6s ease-in-out infinite;
-}
-.auth-hero-chip svg {
-    color: var(--accent);
-    flex: 0 0 auto;
-}
-.auth-hero-chip.is-agent { right: 4%; bottom: 3%; animation-delay: -4s; }
-.auth-hero-chip-ok {
-    color: #22a06b !important;
 }
 @keyframes auth-float {
     0%, 100% { transform: translateY(0); }
@@ -10710,7 +10703,7 @@ select.modal-select:focus {
 }
 @media (prefers-reduced-motion: reduce) {
     .auth-hero-canvas,
-    .auth-hero-chip,
+    .auth-hero-db,
     .auth-hero-links path {
         animation: none;
     }
