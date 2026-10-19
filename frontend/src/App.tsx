@@ -12,7 +12,7 @@ import {
     type OnSelectionChangeParams,
 } from '@xyflow/react';
 import type { ConnectionType } from './canvas/connection-types';
-import { BarChart3, Bot, Braces, FolderOpen, GitBranch, LayoutDashboard, Loader2, Moon, PanelLeftClose, PanelLeftOpen, RotateCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Waypoints } from 'lucide-react';
+import { BarChart3, BookOpen, Bot, Braces, FolderOpen, GitBranch, LayoutDashboard, Loader2, Moon, PanelLeftClose, PanelLeftOpen, RotateCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Waypoints } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import LanguageSelector from './i18n/LanguageSelector';
 import { UpdateBanner } from './UpdateBanner';
@@ -51,6 +51,7 @@ import SetupWizard from './workflow-ui/SetupWizard';
 import ChatPanel from './workflow-ui/ChatPanel';
 import AgentChatPanel from './workflow-ui/AgentChatPanel';
 import { RIGHT_TOOL_WIDTH, RightToolStrip, SideToolWindow, type RightTool } from './workflow-ui/RightToolStrip';
+import GuidePanel from './workflow-ui/GuidePanel';
 import GitPanel from './workflow-ui/GitPanel';
 import WindowControls from './workflow-ui/WindowControls';
 import WindowResizeHandles from './workflow-ui/WindowResizeHandles';
@@ -424,7 +425,7 @@ export default function App() {
     const [rightTool, setRightTool] = useState<RightTool | null>(() => {
         try {
             const saved = localStorage.getItem('duckle.rightTool');
-            if (saved === 'properties' || saved === 'agent') return saved;
+            if (saved === 'properties' || saved === 'agent' || saved === 'guide') return saved;
             if (saved === 'none') return null;
             return localStorage.getItem('duckle.properties.collapsed') === '1' ? null : 'properties';
         } catch {
@@ -474,6 +475,11 @@ export default function App() {
     useEffect(() => {
         if (showAgentPanel) setAgentPanelMounted(true);
     }, [showAgentPanel]);
+    const showGuidePanel = rightTool === 'guide';
+    const [guidePanelMounted, setGuidePanelMounted] = useState(false);
+    useEffect(() => {
+        if (showGuidePanel) setGuidePanelMounted(true);
+    }, [showGuidePanel]);
     // In Tauri AND the web edition: stay un-ready until the workspace has
     // hydrated, so auto-save can't overwrite the server/disk files with empty
     // in-memory defaults. Pure browser (no backend) is ready immediately.
@@ -2888,9 +2894,20 @@ export default function App() {
                         />
                     </SideToolWindow>
                 ) : null}
+                {guidePanelMounted ? (
+                    <SideToolWindow {...RIGHT_TOOL_WIDTH} hidden={!showGuidePanel}>
+                        <GuidePanel onClose={() => setRightTool(null)} />
+                    </SideToolWindow>
+                ) : null}
                 <RightToolStrip
                     ariaLabel={t('toolStrip.aria')}
-                    active={showAgentPanel ? 'agent' : rightTool === 'properties' ? 'properties' : null}
+                    active={
+                        showAgentPanel
+                            ? 'agent'
+                            : rightTool === 'properties' || rightTool === 'guide'
+                              ? rightTool
+                              : null
+                    }
                     onToggle={toggleRightTool}
                     items={[
                         {
@@ -2907,6 +2924,12 @@ export default function App() {
                             icon: <Bot size={18} />,
                             disabled: !workspacePathState,
                             title: t('toolStrip.agentTitle'),
+                        },
+                        {
+                            id: 'guide',
+                            label: t('toolStrip.guide'),
+                            icon: <BookOpen size={18} />,
+                            title: t('toolStrip.guideTitle'),
                         },
                     ]}
                 />

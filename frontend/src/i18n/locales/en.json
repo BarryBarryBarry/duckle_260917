@@ -764,6 +764,15 @@
     "aria": "Tool windows",
     "properties": "Properties",
     "propertiesTitle": "Show or hide the Properties panel",
-    "agentTitle": "Show or hide the Agent"
+    "agentTitle": "Show or hide the Agent",
+    "guide": "Guide",
+    "guideTitle": "Show or hide the user guide"
+  },
+  "guide": {
+    "title": "User guide",
+    "toc": "Contents",
+    "backToTop": "Back to top",
+    "zoomImage": "Click to enlarge",
+    "loadFailed": "Could not load the user guide: {{error}}"
   }
 }

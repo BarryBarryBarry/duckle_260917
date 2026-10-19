@@ -3,7 +3,7 @@
 // the canvas and the strip, one at a time; its button is lit while it is open.
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 
-export type RightTool = 'properties' | 'agent';
+export type RightTool = 'properties' | 'agent' | 'guide';
 
 /** One width for every right-hand tool window, so switching between them
  *  does not resize the canvas. */

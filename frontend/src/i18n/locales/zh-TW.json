@@ -658,6 +658,15 @@
     "aria": "工具視窗",
     "properties": "屬性",
     "propertiesTitle": "開啟或關閉屬性面板",
-    "agentTitle": "開啟或關閉 Agent"
+    "agentTitle": "開啟或關閉 Agent",
+    "guide": "手冊",
+    "guideTitle": "開啟或關閉使用手冊"
+  },
+  "guide": {
+    "title": "使用手冊",
+    "toc": "目錄",
+    "backToTop": "回到頂部",
+    "zoomImage": "點擊查看大圖",
+    "loadFailed": "使用手冊載入失敗：{{error}}"
   }
 }

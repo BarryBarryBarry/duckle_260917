@@ -729,6 +729,15 @@
     "aria": "工具窗口",
     "properties": "属性",
     "propertiesTitle": "打开或关闭属性面板",
-    "agentTitle": "打开或关闭 Agent"
+    "agentTitle": "打开或关闭 Agent",
+    "guide": "手册",
+    "guideTitle": "打开或关闭使用手册"
+  },
+  "guide": {
+    "title": "使用手册",
+    "toc": "目录",
+    "backToTop": "回到顶部",
+    "zoomImage": "点击查看大图",
+    "loadFailed": "使用手册加载失败：{{error}}"
   }
 }
