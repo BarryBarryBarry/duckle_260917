@@ -51,7 +51,7 @@ import SetupWizard from './workflow-ui/SetupWizard';
 import ChatPanel from './workflow-ui/ChatPanel';
 import AgentChatPanel from './workflow-ui/AgentChatPanel';
 import { RIGHT_TOOL_WIDTH, RightToolStrip, SideToolWindow, type RightTool } from './workflow-ui/RightToolStrip';
-import GuidePanel from './workflow-ui/GuidePanel';
+import GuidePanel, { GUIDE_WIDTH } from './workflow-ui/GuidePanel';
 import GitPanel from './workflow-ui/GitPanel';
 import WindowControls from './workflow-ui/WindowControls';
 import WindowResizeHandles from './workflow-ui/WindowResizeHandles';
@@ -2895,8 +2895,8 @@ export default function App() {
                     </SideToolWindow>
                 ) : null}
                 {guidePanelMounted ? (
-                    <SideToolWindow {...RIGHT_TOOL_WIDTH} hidden={!showGuidePanel}>
-                        <GuidePanel onClose={() => setRightTool(null)} />
+                    <SideToolWindow {...GUIDE_WIDTH} hidden={!showGuidePanel}>
+                        <GuidePanel open={showGuidePanel} onClose={() => setRightTool(null)} />
                     </SideToolWindow>
                 ) : null}
                 <RightToolStrip

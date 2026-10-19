@@ -5,8 +5,8 @@ import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type R
 
 export type RightTool = 'properties' | 'agent' | 'guide';
 
-/** One width for every right-hand tool window, so switching between them
- *  does not resize the canvas. */
+/** One width for the Properties and Agent tool windows, so switching between
+ *  them does not resize the canvas. The guide keeps its own (GUIDE_WIDTH). */
 export const RIGHT_TOOL_WIDTH = {
     storageKey: 'duckle.properties.width',
     defaultWidth: 352,

@@ -5,19 +5,32 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { ArrowUp, BookOpen, Loader2, X } from 'lucide-react';
+import { ArrowUp, BookOpen, Loader2, Maximize2, Minimize2, X } from 'lucide-react';
 import { loadManual, resolveGuideImage, slugifyHeading } from '../guide';
 import { openExternal } from '../tauri-io';
+
+/** The guide keeps its own width: reading wants more room than Properties
+ *  or the Agent, so it may grow well past their shared limit. */
+export const GUIDE_WIDTH = {
+    storageKey: 'duckle.guide.width',
+    defaultWidth: 480,
+    minWidth: 280,
+    maxWidth: 1600,
+} as const;
 
 type TocEntry = { id: string; text: string; level: number };
 type ZoomedImage = { src: string; alt: string };
 
-export default function GuidePanel({ onClose }: { onClose: () => void }) {
+export default function GuidePanel({ open, onClose }: { open: boolean; onClose: () => void }) {
     const { t, i18n } = useTranslation();
     const [content, setContent] = useState<string | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [toc, setToc] = useState<TocEntry[]>([]);
     const [zoomed, setZoomed] = useState<ZoomedImage | null>(null);
+    const [maximized, setMaximized] = useState(false);
+    useEffect(() => {
+        if (!open) setMaximized(false);
+    }, [open]);
     const scrollRef = useRef<HTMLDivElement>(null);
     const bodyRef = useRef<HTMLDivElement>(null);
 
@@ -74,16 +87,18 @@ export default function GuidePanel({ onClose }: { onClose: () => void }) {
         [scrollToAnchor],
     );
 
+    // Esc closes an enlarged image first, then leaves the maximized view.
     useEffect(() => {
-        if (!zoomed) return;
+        if (!zoomed && !maximized) return;
         const onKey = (e: KeyboardEvent) => {
             if (e.key !== 'Escape') return;
             e.stopPropagation();
-            setZoomed(null);
+            if (zoomed) setZoomed(null);
+            else setMaximized(false);
         };
         window.addEventListener('keydown', onKey, true);
         return () => window.removeEventListener('keydown', onKey, true);
-    }, [zoomed]);
+    }, [zoomed, maximized]);
 
     const components = useMemo<Components>(
         () => ({
@@ -110,8 +125,12 @@ export default function GuidePanel({ onClose }: { onClose: () => void }) {
         [handleLink, t],
     );
 
+    const maximizeLabel = maximized
+        ? t('panel.restoreSize', { name: t('guide.title') })
+        : t('panel.maximize', { name: t('guide.title') });
+
     return (
-        <aside className="guide-panel" aria-label={t('guide.title')}>
+        <aside className={`guide-panel${maximized ? ' guide-panel-maximized' : ''}`} aria-label={t('guide.title')}>
             <header className="guide-panel-head">
                 <div className="guide-panel-title">
                     <BookOpen size={14} aria-hidden="true" />
@@ -126,6 +145,16 @@ export default function GuidePanel({ onClose }: { onClose: () => void }) {
                         aria-label={t('guide.backToTop')}
                     >
                         <ArrowUp size={14} />
+                    </button>
+                    <button
+                        type="button"
+                        className="guide-panel-btn"
+                        onClick={() => setMaximized(m => !m)}
+                        title={maximizeLabel}
+                        aria-label={maximizeLabel}
+                        aria-pressed={maximized}
+                    >
+                        {maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
                     </button>
                     <button
                         type="button"
