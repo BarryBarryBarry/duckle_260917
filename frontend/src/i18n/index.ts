@@ -11,7 +11,7 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
-import { isRtl, LANGUAGES, type LangCode } from './languages';
+import { ENABLED_LANGUAGES, isRtl, type LangCode } from './languages';
 
 import en from './locales/en.json';
 import es from './locales/es.json';
@@ -147,7 +147,7 @@ void i18n
     .init({
         resources: RESOURCES,
         fallbackLng: 'en',
-        supportedLngs: LANGUAGES.map(l => l.code),
+        supportedLngs: ENABLED_LANGUAGES.map(l => l.code),
         ns: ['common'],
         defaultNS: 'common',
         interpolation: { escapeValue: false },
@@ -158,13 +158,16 @@ void i18n
         },
     });
 
-function applyDocumentDir(lang: string) {
+function applyDocumentDir() {
+    // resolvedLanguage, not language: a detected but disabled language (e.g. a
+    // German browser) renders in English and must be tagged as English.
+    const lang = i18n.resolvedLanguage ?? i18n.language;
     const dir = isRtl(lang) ? 'rtl' : 'ltr';
     document.documentElement.setAttribute('lang', lang);
     document.documentElement.setAttribute('dir', dir);
 }
 
-applyDocumentDir(i18n.language);
+applyDocumentDir();
 i18n.on('languageChanged', applyDocumentDir);
 
 export default i18n;

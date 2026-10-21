@@ -17,14 +17,15 @@
   },
   "sidebar": {
     "ariaLabel": "側邊欄",
-    "project": "Project",
-    "components": "組件"
+    "project": "專案",
+    "components": "元件"
   },
   "editorTabs": {
     "ariaLabel": "編輯器檢視次數",
-    "canvas": "Canvas",
-    "plan": "方案",
-    "run": "運作"
+    "canvas": "畫布",
+    "plan": "計畫",
+    "run": "執行",
+    "history": "歷史記錄"
   },
   "header": {
     "unsavedChanges": "未儲存的變更",
@@ -36,9 +37,9 @@
     "newPipeline": "新管道",
     "stop": "停止",
     "stopTooltip": "停止管道（ F6 ）",
-    "run": "運作",
-    "runTooltip": "運行管道（ F5 ）",
-    "save": "Submit",
+    "run": "執行",
+    "runTooltip": "執行管道（F5）",
+    "save": "儲存",
     "saveTooltip": "儲存 (Ctrl+S)",
     "validate": "驗證",
     "validateTooltip": "驗證管線",
@@ -185,7 +186,7 @@
     "componentName": "元件名稱",
     "tabBasic": "基本",
     "tabSchema": "架構",
-    "tabPreview": "預習",
+    "tabPreview": "預覽",
     "tabAdvanced": "進階",
     "tabValidation": "驗證",
     "openVisualMapper": "開啟視覺化對應程式",
@@ -204,7 +205,7 @@
     "noSampleDescHtml": "單擊<b>架</b>構選項卡上的自動偵測以拉取樣本，或運行管道以填寫此內容。"
   },
   "bottom": {
-    "problems": "問題&#10;",
+    "problems": "問題",
     "output": "輸出",
     "console": "主控台",
     "expand": "展開面板",
@@ -668,5 +669,252 @@
     "backToTop": "回到頂部",
     "zoomImage": "點擊查看大圖",
     "loadFailed": "使用手冊載入失敗：{{error}}"
+  },
+  "settings": {
+    "title": "設定",
+    "openAria": "開啟設定",
+    "noWorkspace": "請先開啟一個工作區，才能儲存工作區設定。",
+    "saved": "已儲存",
+    "sections": {
+      "appearance": "外觀",
+      "proxy": "HTTP / HTTPS 代理伺服器",
+      "memory": "記憶體上限",
+      "power": "效能模式",
+      "unsigned": "未簽署的擴充功能",
+      "context": "全域上下文檔案",
+      "agentAttachments": "Agent 附件",
+      "ai": "AI 助理",
+      "signin": "登入與鎖定",
+      "toolbar": "工具列",
+      "security": "安全性與隱私權",
+      "tour": "首次執行"
+    },
+    "appearance": {
+      "fontSize": "字型大小",
+      "fontSizeHelp": "縮放介面文字，套用至所有檢視。（{{min}}-{{max}}px）",
+      "decrease": "縮小字型",
+      "increase": "放大字型",
+      "reset": "重設"
+    },
+    "proxy": {
+      "help": "讓 REST 與雲端 API 連接器以及應用程式內更新程式透過代理伺服器連線，如此一來不必設定系統環境變數，Otter ETL agent 也能在公司代理伺服器後方正常運作。留空表示直接連線。"
+    },
+    "memory": {
+      "help": "限制此工作區每次執行的總記憶體（設定 DuckDB 的 memory_limit，批次執行與逐階段執行皆適用）。留空則使用引擎預設值（約為系統記憶體的 80%）。",
+      "placeholder": "例如 4096（MB）"
+    },
+    "power": {
+      "help": "此工作區的吞吐量設定。彼此獨立的管道能善用多核心，因此同時執行多條管道才是真正有效的做法；將單一管道拆成多個程序執行經實測反而更慢，因此刻意不提供。",
+      "maxRuns": "同時執行的管道數",
+      "maxRunsPlaceholder": "留空 = 預設值（本機有 {{cores}} 個核心）",
+      "maxRunsHelp": "限制同時執行的排程管道數量。每條管道都有獨立的記憶體上限與獨立的 DuckDB 程序，因此同時執行 N 條大約需要上方記憶體的 N 倍。請在記憶體足夠時再調高。",
+      "spill": "溢出資料夾",
+      "spillPlaceholder": "留空 = 放在該次執行自己的資料庫旁邊",
+      "spillHelp": "查詢超出記憶體時 DuckDB 寫入資料的位置。可指向更大或更快的磁碟。每次執行都有專屬的子資料夾，因此並行執行不會在此衝突。"
+    },
+    "unsigned": {
+      "help": "允許載入未簽署或社群版的 DuckDB 擴充功能（例如自行建置的 <code>quack</code>）。開啟後，引擎會以 <code>-unsigned</code> 啟動 DuckDB。除非你信任該擴充功能，否則請保持關閉：它會停用此工作區所有執行的簽章驗證。",
+      "allow": "允許未簽署的擴充功能"
+    },
+    "context": {
+      "help": "每次執行前自動從鍵值檔案載入上下文變數，不需連接任何節點，<code>${KEY}</code> 就能在任何地方解析。支援 .env / .properties（KEY=VALUE）、.csv（key,value）與 .json。相對路徑以工作區根目錄為基準解析。",
+      "placeholder": "config/context.env（或絕對路徑）"
+    },
+    "attachments": {
+      "help": "Agent 輸入框中 + 按鈕可附加的最大檔案大小（MB）。留空則使用預設值（{{mb}} MB）。可執行檔（.exe、.msi、.bat、.sh、.dmg 等）一律不接受。"
+    },
+    "ai": {
+      "helpDuckie": "選擇 Duckie 的執行方式：透過 ACP 使用 DeepSeek Harness + duckle-mcp（預設）、外部 OpenAI 相容端點，或內建的本機 Qwen 模型。",
+      "help": "選擇 AI 功能使用的模型：外部 OpenAI 相容端點（Agent 需要使用此項），或內建的本機 Qwen 模型。",
+      "modeDsh": "DeepSeek Harness (DSH) + duckle-mcp",
+      "dshCommandPlaceholder": "選填：覆寫 DSH 指令，例如 /opt/homebrew/bin/dsh 或 /Users/me/.dsh/.../bin.js",
+      "dshCommandHelp": "留空則自動偵測 DSH。Otter ETL agent 會以 <code>--profile acp</code> 啟動它。",
+      "dshProviderPlaceholder": "選填：覆寫 DSH provider，例如 deepseek-official 或 dashscope",
+      "dshModelPlaceholder": "選填：覆寫 DSH 模型，例如 deepseek-v4-pro",
+      "dshProviderHelp": "同時設定 provider 與模型後，Otter ETL agent 會在 <code>session/new</code> 之後呼叫 ACP <code>session/set_config_option</code>。兩者皆留空則使用 ACP 設定檔的預設值。",
+      "dshIdlePlaceholder": "DSH 閒置逾時（分鐘，預設 30，0 = 不限制）",
+      "dshIdleHelp": "只要 DSH 仍在串流進度，Duckie 的這一輪就會持續等待；只有在 DSH 連續這麼多分鐘沒有任何輸出時才會取消。留空使用預設值（若已設定則使用 <code>DUCKLE_DSH_IDLE_TIMEOUT_SECS</code>），填 0 表示永不逾時。",
+      "modeOpenai": "外部 OpenAI 相容端點",
+      "baseUrlPlaceholder": "Base URL，例如 https://api.openai.com 或 https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "modelPlaceholder": "模型，例如 gpt-4o-mini",
+      "fetchModels": "取得模型清單",
+      "fetching": "取得中...",
+      "pickModel": "{{n}} 個模型 - 請選擇",
+      "noModels": "該端點沒有列出任何模型。",
+      "nonChatModels": "列出的 {{total}} 個模型中有 {{skipped}} 個不是對話模型，已被排除：嵌入、影像、轉錄與評估模型無法回答助理的問題。Jev 就是其中之一——它回傳的是結構化決策而非文字，可在 Classify 節點中使用。",
+      "apiKeyPlaceholder": "API 金鑰（以 Bearer token 方式傳送）",
+      "modeLocal": "內建本機 Qwen（基於 llama.cpp）"
+    },
+    "signin": {
+      "help": "一段時間沒有鍵盤或滑鼠操作後鎖定 Otter ETL agent。鎖定不會影響已開啟的管道、未儲存的編輯與正在執行的工作；輸入密碼即可解鎖。立即生效。",
+      "lockAfter": "閒置多久後鎖定",
+      "never": "永不",
+      "minutes": "{{n}} 分鐘"
+    },
+    "toolbar": {
+      "showDives": "在工具列顯示 Dives 按鈕（即時資料檢視與儀表板）",
+      "showMinimap": "在畫布角落顯示小地圖"
+    },
+    "security": {
+      "help": "此工作區將憑證存放在哪裡，以及哪些內容受到保護。架構指南中有相同的說明與出處。",
+      "connSecrets": "連線機密",
+      "aesPerValue": "AES-256-GCM，逐值加密",
+      "serverKeys": "伺服器 API 金鑰",
+      "gitToken": "快取的 Git token",
+      "decryptKey": "用來解密它們的金鑰",
+      "decryptKeyWhere": "明文檔案，位於 .duckle/keys，與受保護的內容放在一起",
+      "contextVars": "上下文變數（即使標記為「secret」）",
+      "plainOnDisk": "以明文儲存在磁碟上",
+      "aiKeyProxy": "AI 金鑰與代理伺服器網址",
+      "aiKeyProxyWhere": "以明文儲存在 .duckle/settings.json",
+      "fieldValues": "直接輸入在管道欄位中的值",
+      "fieldValuesWhere": "明文；請改用 ${ENV:NAME}",
+      "encryptionNote": "此處的加密可防範零散檔案、備份或提交造成的外洩，但無法防範整個工作區資料夾被複製，因為金鑰會隨資料夾一起被帶走。以上所有內容都會自動排除在 git 之外。",
+      "telemetry": "<b>無遙測。</b>沒有任何形式的分析、使用情況回報或當機回報。唯一的自動對外連線是向公開的 GitHub 網址檢查新版本，不會傳送任何關於你或你工作的資訊。",
+      "thisWorkspace": "目前工作區：",
+      "readGuide": "閱讀架構指南"
+    },
+    "tour": {
+      "help": "首次開啟 Otter ETL agent 時展示的所有內容，隨時都能再次查看。",
+      "replay": "重新播放導覽",
+      "setupHelp": "初始設定會詢問你是在自己的電腦上使用，還是與團隊一起使用伺服器。重設後會再次詢問；重設本身不會變更任何內容，已連線的伺服器也會保持連線。",
+      "runSetup": "重新執行初始設定"
+    }
+  },
+  "mcp": {
+    "short": "連線到 Claude",
+    "title": "將 Otter ETL agent 連線到 Claude",
+    "loadError": "無法載入 MCP 資訊：{{error}}",
+    "preparing": "正在準備 MCP 伺服器…",
+    "intro": "Otter ETL agent 內建 Model Context Protocol (MCP) 伺服器，Claude 可以直接在此工作區中為你產生、驗證、執行與建置管道。",
+    "notBundled": "此版本未內建 MCP 伺服器。請使用 <code>cargo build -p duckle-mcp --release</code> 建置，並將用戶端指向它。",
+    "noDuckdb": "尚未安裝 DuckDB 引擎。AI 仍可產生與驗證管道；若要執行或建置管道，請先安裝引擎（在安裝畫面中）。",
+    "added": "已新增至 {{client}}。請結束並重新開啟 {{client}}，然後對 Claude 說：",
+    "samplePrompt": "使用 duckle 列出可用的元件",
+    "copy": "複製",
+    "copied": "已複製",
+    "copyCommand": "複製指令",
+    "copyConfig": "複製設定",
+    "connecting": "正在連線…",
+    "adding": "正在新增…",
+    "connectClaudeCode": "連線到 Claude Code",
+    "addTo": "新增至 {{client}}",
+    "showCommand": "顯示指令",
+    "showConfig": "顯示設定",
+    "otherClients": "Claude Desktop、Cursor 或任何 MCP 用戶端",
+    "hint": "會在用戶端設定中新增一個 \"duckle\" 項目。其他用戶端請複製設定。",
+    "resolvedPaths": "已解析的路徑",
+    "mcpServer": "MCP 伺服器",
+    "runner": "執行器",
+    "pathNotBundled": "（未內建）",
+    "pathNotInstalled": "（未安裝）",
+    "done": "完成",
+    "webUnavailable": "網頁編輯器不支援連線 AI 用戶端：duckle-mcp 需要與 Claude 在同一台電腦上執行，請在那台電腦上透過桌面應用程式進行設定。"
+  },
+  "guidedTour": {
+    "ariaLabel": "Otter ETL agent 導覽",
+    "progress": "第 {{n}} 步，共 {{total}} 步",
+    "lastOne": "最後一步",
+    "toGo": "還剩 {{n}} 步",
+    "skip": "略過導覽",
+    "back": "上一步",
+    "next": "下一步",
+    "getStarted": "開始使用",
+    "chapters": {
+      "build": "建置",
+      "operate": "營運",
+      "govern": "治理",
+      "finish": "收尾"
+    },
+    "steps": {
+      "welcome": {
+        "title": "歡迎使用 Otter ETL agent",
+        "body": "一個以 DuckDB 建置資料管道的工作室。在這裡畫好管道後，可以在本機執行，也可以將同一個檔案部署到你自己的伺服器。不需要 JVM，也不會把任何資料傳送到你沒有選擇的地方。接下來會完整介紹 Otter ETL agent 的所有功能，之後隨時可以從「設定」重新播放。"
+      },
+      "palette": {
+        "title": "元件與專案",
+        "body": "這個面板有兩個分頁。「元件」提供 380 多個建置區塊：資料庫、檔案、雲端與物件儲存、向量資料庫、資料品質、AI，以及 Python、JavaScript 和 SQL 程式碼區塊。分類預設為收合，建議直接使用搜尋框。「專案」可瀏覽你的管道、已儲存的連線、上下文以及內建範例。"
+      },
+      "canvas": {
+        "title": "畫布",
+        "body": "將區塊拖曳到畫布上，或直接在畫布上輸入名稱來新增。從一個節點的輸出拖曳到下一個節點的輸入即可連線：先是來源，再來是轉換，最後是目標。在節點上按右鍵可選擇 Run to here。在「專案」分頁中於管道上按右鍵，可使用 Schedule、Backfill 和 Build。"
+      },
+      "properties": {
+        "title": "屬性",
+        "body": "選取節點後在這裡設定：連線、查詢、欄位，以及寫入模式（overwrite、append 或 upsert）。凡是會隨環境或每次執行而改變的內容，都可以使用 ${name} 預留位置。"
+      },
+      "tabs": {
+        "title": "畫布、計畫、執行、歷史記錄",
+        "body": "同一條管道的四種檢視。「計畫」顯示每個區塊編譯成的 SQL，是了解 Otter ETL agent 實際在做什麼的最快方式。「執行」顯示上一次的結果與資料預覽。「歷史記錄」列出這條管道過去的每一次執行。"
+      },
+      "save": {
+        "title": "儲存、驗證與整理",
+        "body": "「儲存」會將管道寫入你的工作區（也可以按 Ctrl+S）。管道以純 JSON 檔案存放在磁碟上，方便比對差異與版本控制。「儲存」旁邊依序是「驗證」（不執行即可檢查整張圖）、自動佈局，以及包含匯入與匯出的選單。"
+      },
+      "run": {
+        "title": "執行",
+        "body": "在本機以 DuckDB 執行。如果管道中有尚未填值的 ${...}，會先跳出對話框請你填寫，因此同一條管道可以依需求處理某個特定月份的資料。執行期間，這個按鈕會變成「停止」。"
+      },
+      "live": {
+        "title": "即時預覽",
+        "body": "開啟後，選取節點或編輯其設定時，會自動將管道執行到該節點，並填入它的「預覽」分頁。不必按「執行」就能看到資料列。當管道有錯誤或已有執行進行中時，它不會觸發。"
+      },
+      "bottom": {
+        "title": "問題、輸出與主控台",
+        "body": "這個面板預設為收合，點一下即可展開。「問題」列出驗證錯誤並顯示數量標記，「輸出」是執行記錄，「主控台」是引擎的原始輸出。執行失敗時，請先來這裡查看。"
+      },
+      "duckie": {
+        "title": "內建助理 Duckie",
+        "body": "用自然語言描述你想要的結果，Duckie 會在本機為你草擬管道。適合用來產生初稿，或接上一個你從未用過的連接器。"
+      },
+      "home": {
+        "title": "Home 是所有功能的總目錄",
+        "body": "Otter ETL agent 的所有功能都在這個畫面上，分為 Build、Operate 和 Govern 三組。隨時都可以從這裡開啟。接下來幾個步驟介紹的就是其中的內容。"
+      },
+      "schedules": {
+        "title": "排程執行",
+        "body": "在 Operate 分組中：Runs 是執行歷史，記錄哪些執行成功、哪些失敗。Schedules 依時鐘、時間間隔或檔案到達來執行單一管道。Plans 依照必要的先後順序分步驟執行多條管道，某一步失敗會停止後續步驟。Build and Deploy 會將管道打包成一個可在伺服器上執行的檔案。"
+      },
+      "dashboard": {
+        "title": "管理主控台",
+        "body": "開啟為此工作區提供服務的網頁主控台：每條管道的狀態、執行歷史、排程、計畫、資料目錄、誰可以登入，以及稽核記錄。這就是 duckle-runner serve 在你自己的伺服器上所提供的內容。"
+      },
+      "git": {
+        "title": "版本控制",
+        "body": "不必離開 Otter ETL agent 就能提交、推送和拉取你的工作區。因為一條管道就是一個 JSON 檔案，審查它的變更就和審查其他程式碼變更一樣。"
+      },
+      "context": {
+        "title": "上下文與環境",
+        "body": "上下文為那些 ${...} 預留位置提供實際的值。只要在這裡切換，同一條管道就能分別在開發、預備或正式環境中執行，而不必修改管道本身。"
+      },
+      "lineage": {
+        "title": "欄位血緣",
+        "body": "將任一輸出欄位沿著每個轉換步驟回溯到它來自的來源欄位。在修改別人依賴的查詢之前，值得先看看。"
+      },
+      "trust": {
+        "title": "可信度報告",
+        "body": "0-100 的分數，每扣一分都對應一項具體問題：管道能否編譯、結構性風險，以及看似個人資料卻沒有遮罩或合約標籤的欄位。開啟即時 schema 漂移偵測後，會立即讀取每個資料來源，並與其節點宣告的 schema 比較。可以用它將管道標記為可供審查。"
+      },
+      "dives": {
+        "title": "Dives",
+        "body": "在即時、自動產生圖表的檢視中探索結果，並釘選到儀表板，一切以本機優先。不必離開 Otter ETL agent，就能快速查看管道產出了什麼。"
+      },
+      "catalog": {
+        "title": "資料目錄與資料品質",
+        "body": "同樣位於 Home 的 Govern 分組中：Data Catalog 列出你的工作區讀寫的所有資料、負責人，以及哪些資料被寫入卻從未被讀取。資料品質區塊位於「元件」分頁中，可在管道內直接對資料列進行斷言、遮罩、核對與隔離。"
+      },
+      "mcp": {
+        "title": "讓 AI 代理程式操作 Otter ETL agent",
+        "body": "將 Claude、Cursor 或任何 MCP 用戶端連線到此工作區。代理程式可以列出元件、讀寫管道、執行管道並讀取記錄，權限與你相同。"
+      },
+      "settings": {
+        "title": "設定，以及如何再次開啟導覽",
+        "body": "引擎、AI、代理伺服器、記憶體、語言和外觀都在這裡設定。在「首次執行」中可以重新播放本導覽，也可以重新回答初始設定問題：你是在自己的電腦上使用，還是與團隊一起使用伺服器。"
+      },
+      "finish": {
+        "title": "介紹完畢",
+        "body": "從「專案」分頁開啟一個內建範例，看看可運作的管道，或自己畫一條。這裡的一切都能從「設定」重新播放，你剛才看到的所有功能也都不需要帳號或雲端服務。"
+      }
+    }
   }
 }

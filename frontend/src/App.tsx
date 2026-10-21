@@ -2641,8 +2641,8 @@ export default function App() {
                     className="topbar-theme-toggle"
                     data-tour="topbar"
                     onClick={() => setShowMcpModal(true)}
-                    title="Connect to Claude"
-                    aria-label="Connect Otter ETL agent to Claude"
+                    title={t('mcp.short')}
+                    aria-label={t('mcp.title')}
                 >
                     <ClaudeIcon size={14} className="claude-icon claude-icon-glow" />
                 </button>
@@ -2651,8 +2651,8 @@ export default function App() {
                     className="topbar-theme-toggle"
                     data-tour="settings"
                     onClick={() => setShowSettings(true)}
-                    title="Settings (proxy)"
-                    aria-label="Open settings"
+                    title={t('settings.title')}
+                    aria-label={t('settings.openAria')}
                 >
                     <SettingsIcon size={14} />
                 </button>

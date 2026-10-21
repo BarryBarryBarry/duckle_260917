@@ -24,7 +24,8 @@
     "ariaLabel": "メインエディタービュー",
     "canvas": "キャンバス",
     "plan": "プラン",
-    "run": "実行"
+    "run": "実行",
+    "history": "履歴"
   },
   "header": {
     "unsavedChanges": "未保存の変更",
@@ -36,7 +37,7 @@
     "runTooltip": "パイプラインを実行（ F 5 ）",
     "save": "保存",
     "saveTooltip": "保存（Ctrl + S）",
-    "validate": "確認",
+    "validate": "検証",
     "validateTooltip": "パイプラインを検証する",
     "autoLayout": "自動レイアウト",
     "more": "増加",
@@ -148,7 +149,7 @@
     "componentName": "Component name",
     "tabBasic": "Basic",
     "tabSchema": "Schema",
-    "tabPreview": "Preview",
+    "tabPreview": "プレビュー",
     "tabAdvanced": "Advanced",
     "tabValidation": "Validation",
     "openVisualMapper": "Open visual mapper",
@@ -167,9 +168,9 @@
     "noSampleDescHtml": "Click <b>Autodetect</b> on the Schema tab to pull a sample, or run the pipeline to fill this in."
   },
   "bottom": {
-    "problems": "Problems",
-    "output": "Output",
-    "console": "Console",
+    "problems": "問題",
+    "output": "出力",
+    "console": "コンソール",
     "expand": "Expand panel",
     "collapse": "Collapse panel",
     "noProblems": "No problems detected",
@@ -622,5 +623,252 @@
     "properties": "プロパティ",
     "propertiesTitle": "プロパティパネルを表示/非表示",
     "agentTitle": "Agent を表示/非表示"
+  },
+  "settings": {
+    "title": "設定",
+    "openAria": "設定を開く",
+    "noWorkspace": "ワークスペースの設定を保存するには、先にワークスペースを開いてください。",
+    "saved": "保存しました",
+    "sections": {
+      "appearance": "外観",
+      "proxy": "HTTP / HTTPS プロキシ",
+      "memory": "メモリ上限",
+      "power": "パワーモード",
+      "unsigned": "未署名の拡張機能",
+      "context": "グローバルコンテキストファイル",
+      "agentAttachments": "Agent の添付ファイル",
+      "ai": "AI アシスタント",
+      "signin": "サインインとロック",
+      "toolbar": "ツールバー",
+      "security": "セキュリティとプライバシー",
+      "tour": "初回起動"
+    },
+    "appearance": {
+      "fontSize": "フォントサイズ",
+      "fontSizeHelp": "インターフェースの文字サイズを変更します。すべての画面に適用されます。（{{min}}-{{max}}px）",
+      "decrease": "フォントサイズを小さくする",
+      "increase": "フォントサイズを大きくする",
+      "reset": "リセット"
+    },
+    "proxy": {
+      "help": "REST・クラウド API コネクタとアプリ内アップデーターの通信をプロキシ経由にします。システム環境変数を設定しなくても、社内プロキシの内側で Otter ETL agent を使えます。空欄の場合は直接接続します。"
+    },
+    "memory": {
+      "help": "このワークスペースでの各実行の合計メモリを制限します（バッチ実行とステージごとの実行の両方で DuckDB の memory_limit を設定）。空欄の場合はエンジンの既定値（システムメモリの約 80%）を使用します。",
+      "placeholder": "例: 4096（MB）"
+    },
+    "power": {
+      "help": "このワークスペースのスループット設定です。独立したパイプラインはコア数に応じてよくスケールするため、複数を同時に実行するのが効果的です。単一のパイプラインを複数プロセスに分割する方式は計測で遅いと分かったため、意図的に提供していません。",
+      "maxRuns": "同時実行するパイプライン数",
+      "maxRunsPlaceholder": "空欄 = 既定値（このマシンのコア数: {{cores}}）",
+      "maxRunsHelp": "同時に実行するスケジュール済みパイプラインの数を制限します。各パイプラインは個別のメモリ上限と DuckDB プロセスを持つため、N 本を同時に実行すると上記メモリのおよそ N 倍が必要です。十分なメモリがある場合にのみ増やしてください。",
+      "spill": "スピルフォルダー",
+      "spillPlaceholder": "空欄 = その実行のデータベースと同じ場所",
+      "spillHelp": "クエリがメモリに収まらないときに DuckDB が書き出す場所です。より大きい、または高速なディスクを指定できます。実行ごとに専用のサブフォルダーが作られるため、同時実行でも衝突しません。"
+    },
+    "unsigned": {
+      "help": "未署名またはコミュニティ版の DuckDB 拡張機能（例: 独自ビルドの <code>quack</code>）の読み込みを許可します。オンにすると、エンジンは DuckDB を <code>-unsigned</code> 付きで起動します。信頼できる拡張機能でない限りオフのままにしてください。このワークスペースのすべての実行で署名検証が無効になります。",
+      "allow": "未署名の拡張機能を許可する"
+    },
+    "context": {
+      "help": "各実行の前にキー/値ファイルからコンテキスト変数を自動で読み込みます。ノードをつながなくても <code>${KEY}</code> がどこでも解決されます。.env / .properties（KEY=VALUE）、.csv（key,value）、.json に対応しています。相対パスはワークスペースのルートを基準に解決されます。",
+      "placeholder": "config/context.env（または絶対パス）"
+    },
+    "attachments": {
+      "help": "Agent 入力欄の + ボタンで添付できるファイルの最大サイズ（MB）です。空欄の場合は既定値（{{mb}} MB）を使用します。実行ファイル（.exe、.msi、.bat、.sh、.dmg など）は受け付けません。"
+    },
+    "ai": {
+      "helpDuckie": "Duckie の動作方式を選択します: ACP 経由の DeepSeek Harness + duckle-mcp（既定）、外部の OpenAI 互換エンドポイント、または同梱のローカル Qwen モデル。",
+      "help": "AI 機能で使うモデルを選択します: 外部の OpenAI 互換エンドポイント（Agent にはこちらが必要）、または同梱のローカル Qwen モデル。",
+      "modeDsh": "DeepSeek Harness (DSH) + duckle-mcp",
+      "dshCommandPlaceholder": "任意: DSH コマンドの上書き（例: /opt/homebrew/bin/dsh または /Users/me/.dsh/.../bin.js）",
+      "dshCommandHelp": "空欄の場合は DSH を自動検出します。Otter ETL agent は <code>--profile acp</code> 付きで起動します。",
+      "dshProviderPlaceholder": "任意: DSH プロバイダーの上書き（例: deepseek-official または dashscope）",
+      "dshModelPlaceholder": "任意: DSH モデルの上書き（例: deepseek-v4-pro）",
+      "dshProviderHelp": "プロバイダーとモデルの両方を設定すると、Otter ETL agent は <code>session/new</code> の後に ACP の <code>session/set_config_option</code> を呼び出します。両方空欄の場合は ACP プロファイルの既定値を使用します。",
+      "dshIdlePlaceholder": "DSH のアイドルタイムアウト（分、既定 30、0 = 無制限）",
+      "dshIdleHelp": "DSH が進捗を出力し続けている間、Duckie のターンは待機を続けます。DSH からの出力がこの分数のあいだ一切ない場合にのみキャンセルされます。空欄の場合は既定値（設定されていれば <code>DUCKLE_DSH_IDLE_TIMEOUT_SECS</code>）、0 の場合はタイムアウトしません。",
+      "modeOpenai": "外部の OpenAI 互換エンドポイント",
+      "baseUrlPlaceholder": "ベース URL（例: https://api.openai.com または https://dashscope.aliyuncs.com/compatible-mode/v1）",
+      "modelPlaceholder": "モデル（例: gpt-4o-mini）",
+      "fetchModels": "モデルを取得",
+      "fetching": "取得中...",
+      "pickModel": "{{n}} 個のモデル - 選択してください",
+      "noModels": "このエンドポイントにはモデルがありません。",
+      "nonChatModels": "一覧の {{total}} 個のうち {{skipped}} 個はチャットモデルではないため除外しました: 埋め込み、画像、文字起こし、評価用のモデルはアシスタントとして応答できません。Jev もその一つで、テキストではなく型付きの判定を返します。代わりに Classify ノードで利用できます。",
+      "apiKeyPlaceholder": "API キー（Bearer トークンとして送信）",
+      "modeLocal": "同梱のローカル Qwen（llama.cpp）"
+    },
+    "signin": {
+      "help": "キーボードやマウスの操作がしばらくないと Otter ETL agent をロックします。ロック中も開いているパイプライン、未保存の編集、実行中の処理はそのまま保たれ、パスワードで再び開けます。すぐに適用されます。",
+      "lockAfter": "アイドル状態でロックするまでの時間",
+      "never": "しない",
+      "minutes": "{{n}} 分"
+    },
+    "toolbar": {
+      "showDives": "ツールバーに Dives ボタン（ライブデータビューとダッシュボード）を表示する",
+      "showMinimap": "キャンバスの隅にミニマップを表示する"
+    },
+    "security": {
+      "help": "このワークスペースが認証情報をどこに保存し、何が保護されているかを示します。同じ内容が出典付きでアーキテクチャガイドにも記載されています。",
+      "connSecrets": "接続のシークレット",
+      "aesPerValue": "AES-256-GCM、値ごと",
+      "serverKeys": "サーバーの API キー",
+      "gitToken": "キャッシュされた Git トークン",
+      "decryptKey": "それらを復号する鍵",
+      "decryptKeyWhere": ".duckle/keys 内の平文ファイル。保護対象と同じ場所にあります",
+      "contextVars": "コンテキスト変数（「secret」とされたものも含む）",
+      "plainOnDisk": "ディスク上に平文で保存",
+      "aiKeyProxy": "AI キーとプロキシ URL",
+      "aiKeyProxyWhere": ".duckle/settings.json に平文で保存",
+      "fieldValues": "パイプラインのフィールドに直接入力した値",
+      "fieldValuesWhere": "平文。${ENV:NAME} を使ってください",
+      "encryptionNote": "ここでの暗号化は、単独のファイル、バックアップ、コミットからの漏えいを防ぎます。ワークスペースフォルダーごとコピーされた場合は鍵も一緒に移るため防げません。上記はすべて自動的に git の対象外になります。",
+      "telemetry": "<b>テレメトリなし。</b>分析、利用状況の報告、クラッシュレポートは一切ありません。自動で行われる外部通信は、公開 GitHub URL へのバージョン確認の 1 つだけで、あなたや作業内容に関する情報は送信しません。",
+      "thisWorkspace": "このワークスペース:",
+      "readGuide": "アーキテクチャガイドを読む"
+    },
+    "tour": {
+      "help": "Otter ETL agent を初めて開いたときに表示された内容を、いつでも再表示できます。",
+      "replay": "ガイドツアーを再生",
+      "setupHelp": "初期設定では、自分のマシンで使うか、サーバー上でチームと使うかを尋ねます。リセットすると再度尋ねられます。リセット自体は何も変更せず、接続済みのサーバーも接続されたままです。",
+      "runSetup": "初期設定をやり直す"
+    }
+  },
+  "mcp": {
+    "short": "Claude に接続",
+    "title": "Otter ETL agent を Claude に接続",
+    "loadError": "MCP の情報を読み込めませんでした: {{error}}",
+    "preparing": "MCP サーバーを準備しています…",
+    "intro": "Otter ETL agent には Model Context Protocol (MCP) サーバーが付属しているため、Claude がこのワークスペースでパイプラインの生成、検証、実行、ビルドを代わりに行えます。",
+    "notBundled": "このビルドには MCP サーバーが同梱されていません。<code>cargo build -p duckle-mcp --release</code> でビルドし、クライアントからそれを指定してください。",
+    "noDuckdb": "DuckDB エンジンがまだインストールされていません。AI によるパイプラインの生成と検証は可能です。実行やビルドを行うには、セットアップ画面でエンジンをインストールしてください。",
+    "added": "{{client}} に追加しました。{{client}} を終了して再度開き、Claude に次のように頼んでください:",
+    "samplePrompt": "duckle を使って利用可能なコンポーネントを一覧表示して",
+    "copy": "コピー",
+    "copied": "コピーしました",
+    "copyCommand": "コマンドをコピー",
+    "copyConfig": "設定をコピー",
+    "connecting": "接続中…",
+    "adding": "追加中…",
+    "connectClaudeCode": "Claude Code に接続",
+    "addTo": "{{client}} に追加",
+    "showCommand": "コマンドを表示",
+    "showConfig": "設定を表示",
+    "otherClients": "Claude Desktop、Cursor、その他の MCP クライアント",
+    "hint": "クライアントの設定に \"duckle\" エントリを追加します。その他のクライアントでは設定をコピーしてください。",
+    "resolvedPaths": "解決済みのパス",
+    "mcpServer": "MCP サーバー",
+    "runner": "ランナー",
+    "pathNotBundled": "（同梱されていません）",
+    "pathNotInstalled": "（インストールされていません）",
+    "done": "完了",
+    "webUnavailable": "Web エディターでは AI クライアントに接続できません。duckle-mcp は Claude と同じコンピューターで動作する必要があるため、そのコンピューターのデスクトップアプリから設定してください。"
+  },
+  "guidedTour": {
+    "ariaLabel": "Otter ETL agent ガイドツアー",
+    "progress": "ステップ {{n}} / {{total}}",
+    "lastOne": "最後のステップ",
+    "toGo": "残り {{n}} ステップ",
+    "skip": "ツアーをスキップ",
+    "back": "戻る",
+    "next": "次へ",
+    "getStarted": "始める",
+    "chapters": {
+      "build": "構築",
+      "operate": "運用",
+      "govern": "ガバナンス",
+      "finish": "まとめ"
+    },
+    "steps": {
+      "welcome": {
+        "title": "Otter ETL agent へようこそ",
+        "body": "DuckDB でデータパイプラインを構築するスタジオです。ここでパイプラインを描いてこのマシンで実行することも、同じファイルを自分のサーバーにデプロイすることもできます。JVM は不要で、あなたが選んでいない場所にデータが送られることはありません。このツアーでは Otter ETL agent のすべての機能を一度紹介します。「設定」からいつでも再生できます。"
+      },
+      "palette": {
+        "title": "コンポーネントとプロジェクト",
+        "body": "このパネルには 2 つのタブがあります。「コンポーネント」には 380 以上のビルディングブロックがあります: データベース、ファイル、クラウド・オブジェクトストレージ、ベクトルデータベース、データ品質、AI、そして Python・JavaScript・SQL のコードブロック。カテゴリは折りたたまれた状態で始まるので、検索ボックスを使ってください。「プロジェクト」では、パイプライン、保存済みの接続、コンテキスト、同梱のサンプルを閲覧できます。"
+      },
+      "canvas": {
+        "title": "キャンバス",
+        "body": "ブロックをドラッグして配置するか、キャンバス上で名前を入力して追加します。ノードの出力から次のノードの入力へドラッグして接続します: ソース、変換、シンクの順です。ノードを右クリックすると Run to here を選べます。「プロジェクト」タブでパイプラインを右クリックすると Schedule、Backfill、Build を使えます。"
+      },
+      "properties": {
+        "title": "プロパティ",
+        "body": "ノードを選択すると、ここで設定できます: 接続、クエリ、列、書き込みモード（overwrite、append、upsert）。環境や実行ごとに変わる値には ${name} プレースホルダーを使ってください。"
+      },
+      "tabs": {
+        "title": "キャンバス、プラン、実行、履歴",
+        "body": "同じパイプラインの 4 つのビューです。「プラン」には各ブロックがコンパイルされた SQL が表示され、Otter ETL agent が実際に何をしているかを理解する最速の方法です。「実行」には前回の結果とデータのプレビューが表示されます。「履歴」にはこのパイプラインの過去の実行がすべて表示されます。"
+      },
+      "save": {
+        "title": "保存、検証、整理",
+        "body": "「保存」はパイプラインをワークスペースに書き込みます（Ctrl+S でも可）。パイプラインはディスク上のプレーンな JSON なので、差分の確認やバージョン管理が容易です。「保存」の隣には、実行せずにグラフをチェックする「検証」、自動レイアウト、インポートとエクスポートのメニューがあります。"
+      },
+      "run": {
+        "title": "実行",
+        "body": "DuckDB でローカルに実行します。パイプラインに値が未設定の ${...} がある場合は、先にダイアログで入力を求められるため、同じパイプラインで特定の月だけを必要に応じて処理できます。実行中、このボタンは「停止」に変わります。"
+      },
+      "live": {
+        "title": "ライブプレビュー",
+        "body": "オンにすると、ノードを選択したり設定を編集したりしたときに、そのノードまでパイプラインを実行し、「プレビュー」タブを自動で埋めます。「実行」を押さなくても行を確認できます。パイプラインにエラーがあるときや、すでに実行中のときは動作しません。"
+      },
+      "bottom": {
+        "title": "問題、出力、コンソール",
+        "body": "このパネルは折りたたまれた状態で始まり、クリックすると開きます。「問題」には検証エラーが件数バッジ付きで表示され、「出力」は実行ログ、「コンソール」はエンジンの生の出力です。実行が失敗したら、まずここを確認してください。"
+      },
+      "duckie": {
+        "title": "組み込みアシスタント Duckie",
+        "body": "やりたいことを普通の言葉で説明すると、Duckie がこのマシン上でパイプラインの下書きを作成します。最初のたたき台や、使ったことのないコネクタの接続に便利です。"
+      },
+      "home": {
+        "title": "Home はすべての機能の目次",
+        "body": "Otter ETL agent でできることはすべてこの 1 つの画面にあり、Build、Operate、Govern の 3 つのグループに分かれています。いつでもここから開けます。次のいくつかのステップでは、その中身を紹介します。"
+      },
+      "schedules": {
+        "title": "スケジュール実行",
+        "body": "Operate の中: Runs は実行履歴で、何が実行され何が失敗したかがわかります。Schedules は 1 つのパイプラインを時刻、間隔、またはファイルの到着をきっかけに実行します。Plans は複数のパイプラインを必要な順序でステップごとに実行し、失敗したステップ以降は実行されません。Build and Deploy はパイプラインをサーバーで実行できる 1 つのファイルにパッケージします。"
+      },
+      "dashboard": {
+        "title": "管理コンソール",
+        "body": "このワークスペースを提供している Web コンソールを開きます: 各パイプラインの状態、実行履歴、スケジュール、プラン、データカタログ、サインインできるユーザー、監査ログ。これは duckle-runner serve が自分のサーバーで提供するものです。"
+      },
+      "git": {
+        "title": "バージョン管理",
+        "body": "Otter ETL agent を離れずに、ワークスペースのコミット、プッシュ、プルができます。パイプラインは 1 つの JSON ファイルなので、変更は他のコードの変更と同じようにレビューできます。"
+      },
+      "context": {
+        "title": "コンテキストと環境",
+        "body": "コンテキストは ${...} プレースホルダーの値を提供します。パイプラインを編集しなくても、ここで切り替えるだけで同じパイプラインを開発、ステージング、本番に対して実行できます。"
+      },
+      "lineage": {
+        "title": "列リネージ",
+        "body": "任意の出力列を、すべての変換をさかのぼって元のソース列まで追跡します。他の人が依存しているクエリを変更する前に確認する価値があります。"
+      },
+      "trust": {
+        "title": "信頼性レポート",
+        "body": "0-100 のスコアで、減点にはすべて具体的な指摘が対応します: パイプラインがコンパイルできるか、構造上のリスク、マスクや契約タグのない個人データらしき列など。ライブのスキーマドリフト検出をオンにすると、各ソースをその場で読み取り、ノードで宣言されたスキーマと比較します。パイプラインをレビュー可能としてマークするのに使ってください。"
+      },
+      "dives": {
+        "title": "Dives",
+        "body": "結果をライブで自動グラフ化されるビューで探索し、ダッシュボードにピン留めできます。すべてローカルファーストです。Otter ETL agent を離れずに、パイプラインの出力をすばやく確認できます。"
+      },
+      "catalog": {
+        "title": "カタログとデータ品質",
+        "body": "これも Home の Govern にあります: Data Catalog は、ワークスペースが読み書きするすべてのデータ、その所有者、書き込まれているのに一度も読まれていないデータを示します。データ品質ブロックは「コンポーネント」タブにあり、パイプラインの中で行のアサート、マスク、照合、隔離を行えます。"
+      },
+      "mcp": {
+        "title": "AI エージェントに Otter ETL agent を操作させる",
+        "body": "Claude、Cursor、または任意の MCP クライアントをこのワークスペースに接続します。エージェントはあなたと同じ権限で、コンポーネントの一覧表示、パイプラインの読み書き、実行、ログの確認ができます。"
+      },
+      "settings": {
+        "title": "設定と、このツアーをもう一度見る方法",
+        "body": "エンジン、AI、プロキシ、メモリ、言語、外観はここで設定します。「初回起動」からこのツアーを再生したり、自分のマシンで使うかサーバー上でチームと使うかという初期設定の質問をやり直したりできます。"
+      },
+      "finish": {
+        "title": "以上です",
+        "body": "「プロジェクト」タブから同梱のサンプルを開いて動くパイプラインを見るか、自分で描いてみてください。ここで紹介した内容はすべて「設定」から再生でき、どれもアカウントやクラウドを必要としません。"
+      }
+    }
   }
 }

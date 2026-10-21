@@ -2,6 +2,8 @@
 
 35 languages ship in `locales/`. English (`en.json`) is the source of truth; every other locale is generated from it.
 
+Only the languages listed in `ENABLED_CODES` in `languages.ts` (currently en, zh-CN, zh-TW, ja, ko) appear in the selector and are accepted by the language detector; the rest stay bundled but hidden, and a browser or saved choice for a hidden language falls back to English. Add a code there to turn a language back on.
+
 ## How translations get there
 
 1. `en.json` is hand-curated. Every key, every English string, every interpolation slot lives here.
@@ -36,6 +38,8 @@ Only the highest-traffic surfaces are wrapped with `useTranslation()` so far:
 - Chat panel (Duckie AI assistant)
 - Palette top-level group labels (Sources, Transforms, Sinks, Control Flow, Data Quality, Custom Code)
 - Common dialog buttons (Save, Cancel, Close, Delete, OK)
+- Settings dialog (`settings.*`) and the Connect to Claude / MCP dialog (`mcp.*`), hand-translated for zh-CN, zh-TW, ja and ko
+- Guided tour (`guidedTour.*`, one `steps.<id>` entry per step in `GuidedTour.tsx`), hand-translated for zh-CN, zh-TW, ja and ko. Labels of screens that are not translated yet (Home tiles, context menus) are kept in English inside the translated text so they match what is on screen.
 
 Deferred to follow-ups:
 - Palette subgroup labels and component summaries

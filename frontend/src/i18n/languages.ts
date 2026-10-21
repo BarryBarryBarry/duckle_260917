@@ -83,6 +83,15 @@ export const LANGUAGES: LangMeta[] = [
     { code: 'kk',    name: 'Kazakh',               nativeName: 'Қазақша', dir: 'ltr' },
 ];
 
+// Languages offered in the selector and accepted by the detector. The rest stay
+// bundled but hidden until their translations are complete; a browser or saved
+// choice for a hidden language falls back to English.
+const ENABLED_CODES: readonly LangCode[] = ['en', 'zh-CN', 'zh-TW', 'ja', 'ko'];
+
+export const ENABLED_LANGUAGES: LangMeta[] = ENABLED_CODES
+    .map(code => LANGUAGES.find(l => l.code === code))
+    .filter((l): l is LangMeta => l !== undefined);
+
 export const RTL_LANGS = new Set<string>(
     LANGUAGES.filter(l => l.dir === 'rtl').map(l => l.code as string),
 );

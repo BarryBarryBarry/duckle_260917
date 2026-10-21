@@ -739,5 +739,252 @@
     "backToTop": "回到顶部",
     "zoomImage": "点击查看大图",
     "loadFailed": "使用手册加载失败：{{error}}"
+  },
+  "settings": {
+    "title": "设置",
+    "openAria": "打开设置",
+    "noWorkspace": "请先打开一个工作区，才能保存工作区设置。",
+    "saved": "已保存",
+    "sections": {
+      "appearance": "外观",
+      "proxy": "HTTP / HTTPS 代理",
+      "memory": "内存上限",
+      "power": "性能模式",
+      "unsigned": "未签名扩展",
+      "context": "全局上下文文件",
+      "agentAttachments": "Agent 附件",
+      "ai": "AI 助手",
+      "signin": "登录与锁定",
+      "toolbar": "工具栏",
+      "security": "安全与隐私",
+      "tour": "首次运行"
+    },
+    "appearance": {
+      "fontSize": "字号",
+      "fontSizeHelp": "缩放界面文字，作用于所有视图。（{{min}}-{{max}}px）",
+      "decrease": "减小字号",
+      "increase": "增大字号",
+      "reset": "重置"
+    },
+    "proxy": {
+      "help": "让 REST 和云 API 连接器以及应用内更新程序通过代理访问网络，这样无需设置系统环境变量，Otter ETL agent 也能在公司代理后正常工作。留空表示直连。"
+    },
+    "memory": {
+      "help": "限制此工作区每次运行的总内存（设置 DuckDB 的 memory_limit，对批量执行和逐阶段执行都生效）。留空则使用引擎默认值（约为系统内存的 80%）。",
+      "placeholder": "例如 4096（MB）"
+    },
+    "power": {
+      "help": "此工作区的吞吐量设置。相互独立的管道可以很好地利用多核，因此同时运行多条管道才是真正有效的手段；把单条管道拆到多个进程中运行经实测反而更慢，所以有意不提供。",
+      "maxRuns": "同时运行的管道数",
+      "maxRunsPlaceholder": "留空 = 默认值（本机有 {{cores}} 个核心）",
+      "maxRunsHelp": "限制同时执行的定时管道数量。每条管道都有独立的内存上限和独立的 DuckDB 进程，因此同时运行 N 条大约需要上面内存的 N 倍。请在内存充足时再调高。",
+      "spill": "溢出目录",
+      "spillPlaceholder": "留空 = 放在本次运行自己的数据库旁边",
+      "spillHelp": "查询超出内存时 DuckDB 写入数据的位置。可以指向更大或更快的磁盘。每次运行都有独立的子目录，并发运行不会在这里冲突。"
+    },
+    "unsigned": {
+      "help": "允许加载未签名或社区版 DuckDB 扩展（例如自定义构建的 <code>quack</code>）。开启后，引擎会以 <code>-unsigned</code> 启动 DuckDB。除非你信任该扩展，否则请保持关闭：它会关闭此工作区所有运行的签名校验。",
+      "allow": "允许未签名扩展"
+    },
+    "context": {
+      "help": "每次运行前自动从键值文件加载上下文变量，无需连接任何节点，<code>${KEY}</code> 就能在任何地方解析。支持 .env / .properties（KEY=VALUE）、.csv（key,value）和 .json。相对路径以工作区根目录为基准解析。",
+      "placeholder": "config/context.env（或绝对路径）"
+    },
+    "attachments": {
+      "help": "Agent 输入框中 + 按钮可附加的最大文件大小（MB）。留空则使用默认值（{{mb}} MB）。可执行文件（.exe、.msi、.bat、.sh、.dmg 等）一律不接受。"
+    },
+    "ai": {
+      "helpDuckie": "选择 Duckie 的运行方式：通过 ACP 使用 DeepSeek Harness + duckle-mcp（默认）、外部 OpenAI 兼容接口，或内置的本地 Qwen 模型。",
+      "help": "选择 AI 功能使用的模型：外部 OpenAI 兼容接口（Agent 需要使用此项），或内置的本地 Qwen 模型。",
+      "modeDsh": "DeepSeek Harness (DSH) + duckle-mcp",
+      "dshCommandPlaceholder": "可选：覆盖 DSH 命令，例如 /opt/homebrew/bin/dsh 或 /Users/me/.dsh/.../bin.js",
+      "dshCommandHelp": "留空则自动检测 DSH。Otter ETL agent 会以 <code>--profile acp</code> 启动它。",
+      "dshProviderPlaceholder": "可选：覆盖 DSH provider，例如 deepseek-official 或 dashscope",
+      "dshModelPlaceholder": "可选：覆盖 DSH 模型，例如 deepseek-v4-pro",
+      "dshProviderHelp": "同时设置 provider 和模型后，Otter ETL agent 会在 <code>session/new</code> 之后调用 ACP <code>session/set_config_option</code>。两者都留空则使用 ACP 配置的默认值。",
+      "dshIdlePlaceholder": "DSH 空闲超时（分钟，默认 30，0 = 不限制）",
+      "dshIdleHelp": "只要 DSH 仍在输出进度，Duckie 的这一轮就会继续等待；只有当 DSH 连续这么多分钟没有任何输出时才会取消。留空使用默认值（如已设置则使用 <code>DUCKLE_DSH_IDLE_TIMEOUT_SECS</code>），填 0 表示永不超时。",
+      "modeOpenai": "外部 OpenAI 兼容接口",
+      "baseUrlPlaceholder": "Base URL，例如 https://api.openai.com 或 https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "modelPlaceholder": "模型，例如 gpt-4o-mini",
+      "fetchModels": "获取模型列表",
+      "fetching": "获取中...",
+      "pickModel": "{{n}} 个模型 - 请选择",
+      "noModels": "该接口没有列出任何模型。",
+      "nonChatModels": "列出的 {{total}} 个模型中有 {{skipped}} 个不是对话模型，已被排除：嵌入、图像、转写和评估模型无法回答助手的提问。Jev 就是其中之一——它返回的是结构化决策而不是文本，可以在 Classify 节点中使用。",
+      "apiKeyPlaceholder": "API 密钥（以 Bearer token 方式发送）",
+      "modeLocal": "内置本地 Qwen（基于 llama.cpp）"
+    },
+    "signin": {
+      "help": "一段时间没有键盘或鼠标操作后锁定 Otter ETL agent。锁定不会影响已打开的管道、未保存的编辑和正在运行的任务；输入密码即可解锁。立即生效。",
+      "lockAfter": "空闲多久后锁定",
+      "never": "从不",
+      "minutes": "{{n}} 分钟"
+    },
+    "toolbar": {
+      "showDives": "在工具栏显示 Dives 按钮（实时数据视图与仪表盘）",
+      "showMinimap": "在画布角落显示小地图"
+    },
+    "security": {
+      "help": "此工作区在哪里保存凭据，以及哪些内容受到保护。架构指南中有相同的说明及出处。",
+      "connSecrets": "连接密钥",
+      "aesPerValue": "AES-256-GCM，逐值加密",
+      "serverKeys": "服务器 API 密钥",
+      "gitToken": "缓存的 Git token",
+      "decryptKey": "用于解密它们的密钥",
+      "decryptKeyWhere": "明文文件，位于 .duckle/keys，与被保护的内容放在一起",
+      "contextVars": "上下文变量（即使标记为“secret”）",
+      "plainOnDisk": "以明文存储在磁盘上",
+      "aiKeyProxy": "AI 密钥和代理地址",
+      "aiKeyProxyWhere": "以明文存储在 .duckle/settings.json",
+      "fieldValues": "直接填写在管道字段中的值",
+      "fieldValuesWhere": "明文；请改用 ${ENV:NAME}",
+      "encryptionNote": "这里的加密可以防范零散文件、备份或提交造成的泄露，但无法防范整个工作区文件夹被复制，因为密钥会随文件夹一起被带走。以上所有内容都会自动排除在 git 之外。",
+      "telemetry": "<b>无遥测。</b>没有任何形式的分析、使用情况上报或崩溃上报。唯一的自动外发请求是向公开的 GitHub 地址检查新版本，不会发送任何关于你或你工作的信息。",
+      "thisWorkspace": "当前工作区：",
+      "readGuide": "阅读架构指南"
+    },
+    "tour": {
+      "help": "首次打开 Otter ETL agent 时展示的所有内容，随时可以再次查看。",
+      "replay": "重新播放新手引导",
+      "setupHelp": "初始设置会询问你是在自己的电脑上使用，还是和团队一起使用服务器。重置后会再次询问；重置本身不会改变任何内容，已连接的服务器也会保持连接。",
+      "runSetup": "重新运行初始设置"
+    }
+  },
+  "mcp": {
+    "short": "连接到 Claude",
+    "title": "将 Otter ETL agent 连接到 Claude",
+    "loadError": "无法加载 MCP 信息：{{error}}",
+    "preparing": "正在准备 MCP 服务器…",
+    "intro": "Otter ETL agent 内置了 Model Context Protocol (MCP) 服务器，Claude 可以直接在此工作区中为你生成、校验、运行和构建管道。",
+    "notBundled": "此版本没有内置 MCP 服务器。请使用 <code>cargo build -p duckle-mcp --release</code> 构建，并将客户端指向它。",
+    "noDuckdb": "尚未安装 DuckDB 引擎。AI 仍然可以生成和校验管道；如需运行或构建管道，请先安装引擎（在安装界面中）。",
+    "added": "已添加到 {{client}}。请退出并重新打开 {{client}}，然后对 Claude 说：",
+    "samplePrompt": "使用 duckle 列出可用的组件",
+    "copy": "复制",
+    "copied": "已复制",
+    "copyCommand": "复制命令",
+    "copyConfig": "复制配置",
+    "connecting": "正在连接…",
+    "adding": "正在添加…",
+    "connectClaudeCode": "连接到 Claude Code",
+    "addTo": "添加到 {{client}}",
+    "showCommand": "显示命令",
+    "showConfig": "显示配置",
+    "otherClients": "Claude Desktop、Cursor 或任意 MCP 客户端",
+    "hint": "会在客户端配置中添加一个 \"duckle\" 条目。其他客户端请复制配置。",
+    "resolvedPaths": "已解析的路径",
+    "mcpServer": "MCP 服务器",
+    "runner": "运行器",
+    "pathNotBundled": "（未内置）",
+    "pathNotInstalled": "（未安装）",
+    "done": "完成",
+    "webUnavailable": "网页编辑器不支持连接 AI 客户端：duckle-mcp 需要和 Claude 运行在同一台电脑上，请在那台电脑上通过桌面应用进行设置。"
+  },
+  "guidedTour": {
+    "ariaLabel": "Otter ETL agent 新手引导",
+    "progress": "第 {{n}} 步，共 {{total}} 步",
+    "lastOne": "最后一步",
+    "toGo": "还剩 {{n}} 步",
+    "skip": "跳过引导",
+    "back": "上一步",
+    "next": "下一步",
+    "getStarted": "开始使用",
+    "chapters": {
+      "build": "构建",
+      "operate": "运维",
+      "govern": "治理",
+      "finish": "收尾"
+    },
+    "steps": {
+      "welcome": {
+        "title": "欢迎使用 Otter ETL agent",
+        "body": "一个基于 DuckDB 构建数据管道的工作室。在这里画好管道，可以在本机运行，也可以把同一个文件部署到你自己的服务器上。不需要 JVM，也不会把任何数据发送到你没有选择的地方。接下来会把 Otter ETL agent 的全部功能完整介绍一遍，之后随时可以在“设置”中重新播放。"
+      },
+      "palette": {
+        "title": "组件与项目",
+        "body": "这个面板有两个标签页。“组件”提供 380 多个构建块：数据库、文件、云存储和对象存储、向量数据库、数据质量、AI，以及 Python、JavaScript 和 SQL 代码块。分类默认是折叠的，建议直接使用搜索框。“项目”用于浏览你的管道、已保存的连接、上下文和内置示例。"
+      },
+      "canvas": {
+        "title": "画布",
+        "body": "把构建块拖到画布上，或者直接在画布上输入名称来添加。从一个节点的输出拖到下一个节点的输入即可连线：先是源，然后是转换，最后是目标。右键单击节点可选择 Run to here。在“项目”标签页中右键单击管道，可使用 Schedule、Backfill 和 Build。"
+      },
+      "properties": {
+        "title": "属性",
+        "body": "选中一个节点后在这里配置：连接、查询、列，以及写入模式（overwrite、append 或 upsert）。凡是随环境或每次运行而变化的内容，都可以使用 ${name} 占位符。"
+      },
+      "tabs": {
+        "title": "画布、计划、运行、历史记录",
+        "body": "同一条管道的四种视图。“计划”显示每个构建块编译成的 SQL，这是了解 Otter ETL agent 实际在做什么的最快方式。“运行”显示上一次的结果和数据预览。“历史记录”列出这条管道以前的每一次运行。"
+      },
+      "save": {
+        "title": "保存、验证与整理",
+        "body": "“保存”会把管道写入你的工作区（也可以按 Ctrl+S）。管道以纯 JSON 文件保存在磁盘上，便于比较差异和进行版本控制。“保存”旁边依次是“验证”（不运行就能检查整个图）、自动布局，以及包含导入和导出的菜单。"
+      },
+      "run": {
+        "title": "运行",
+        "body": "在本地用 DuckDB 运行。如果管道里有尚未填值的 ${...}，会先弹出对话框让你填写，因此同一条管道可以按需处理某个特定月份的数据。运行期间，这个按钮会变成“停止”。"
+      },
+      "live": {
+        "title": "实时预览",
+        "body": "开启后，选中节点或修改其设置时，会自动把管道运行到该节点，并填充它的“预览”标签页。不用点击“运行”就能看到数据行。当管道有错误或已有运行在进行时，它不会触发。"
+      },
+      "bottom": {
+        "title": "问题、输出和控制台",
+        "body": "这个面板默认是折叠的，点击即可展开。“问题”列出验证错误并显示数量徽标，“输出”是运行日志，“控制台”是引擎的原始输出。运行失败时，首先来这里查看。"
+      },
+      "duckie": {
+        "title": "内置助手 Duckie",
+        "body": "用自然语言描述你想要的效果，Duckie 会在本机为你起草管道。适合用来写第一版，或者接入一个你从未用过的连接器。"
+      },
+      "home": {
+        "title": "Home 是所有功能的总目录",
+        "body": "Otter ETL agent 的所有功能都在这一个界面上，分为 Build、Operate 和 Govern 三组。随时可以从这里打开。接下来几步介绍的就是其中的内容。"
+      },
+      "schedules": {
+        "title": "定时运行",
+        "body": "在 Operate 分组中：Runs 是运行历史，记录哪些运行成功、哪些失败。Schedules 按时钟、时间间隔或文件到达来运行单条管道。Plans 按照必须的先后顺序分步运行多条管道，某一步失败会阻止后续步骤。Build and Deploy 会把管道打包成一个可以在服务器上运行的文件。"
+      },
+      "dashboard": {
+        "title": "管理控制台",
+        "body": "打开为此工作区提供服务的 Web 控制台：每条管道的状态、运行历史、定时任务、计划、数据目录、谁可以登录，以及审计日志。这就是 duckle-runner serve 在你自己的服务器上提供的内容。"
+      },
+      "git": {
+        "title": "版本控制",
+        "body": "无需离开 Otter ETL agent 即可提交、推送和拉取你的工作区。因为一条管道就是一个 JSON 文件，审查它的改动就和审查其他代码改动一样。"
+      },
+      "context": {
+        "title": "上下文与环境",
+        "body": "上下文为那些 ${...} 占位符提供具体的值。只需在这里切换，同一条管道就能分别运行在开发、预发布或生产环境，而不用修改管道本身。"
+      },
+      "lineage": {
+        "title": "列级血缘",
+        "body": "把任意输出列沿着每一步转换追溯到它所来自的源列。在修改别人依赖的查询之前，值得先看一看。"
+      },
+      "trust": {
+        "title": "可信度报告",
+        "body": "0-100 的评分，每扣一分都对应一条具体问题：管道能否编译、结构性风险，以及看起来像个人数据却没有脱敏或契约标签的列。开启实时 schema 漂移检测后，会立即读取每个数据源，并与其节点声明的 schema 进行比较。可以用它把管道标记为可供审查。"
+      },
+      "dives": {
+        "title": "Dives",
+        "body": "在实时、自动生成图表的视图中探索结果，并固定到仪表盘中，一切都以本地优先。无需离开 Otter ETL agent，就能快速查看管道产出了什么。"
+      },
+      "catalog": {
+        "title": "数据目录与数据质量",
+        "body": "同样位于 Home 的 Govern 分组中：Data Catalog 列出你的工作区读写的所有数据、它们的负责人，以及哪些数据被写入却从未被读取。数据质量构建块位于“组件”标签页中，可以在管道内部对数据行进行断言、脱敏、对账和隔离。"
+      },
+      "mcp": {
+        "title": "让 AI 智能体来操作 Otter ETL agent",
+        "body": "把 Claude、Cursor 或任意 MCP 客户端连接到此工作区。智能体可以列出组件、读写管道、运行管道并读取日志，权限与你相同。"
+      },
+      "settings": {
+        "title": "设置，以及如何再次打开引导",
+        "body": "引擎、AI、网络代理、内存、语言和外观都在这里设置。在“首次运行”中可以重新播放本引导，也可以重新回答初始设置问题：你是在自己的电脑上使用，还是和团队一起使用服务器。"
+      },
+      "finish": {
+        "title": "介绍完毕",
+        "body": "从“项目”标签页打开一个内置示例，看看可运行的管道，或者自己画一条。这里的一切都可以在“设置”中重新播放，你刚才看到的所有功能都不需要账户，也不需要云服务。"
+      }
+    }
   }
 }

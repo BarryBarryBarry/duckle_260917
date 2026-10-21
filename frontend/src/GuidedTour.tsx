@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { isWebBackend } from './web-fs';
 
 // First-run guided tour: a spotlight walkthrough of the core surfaces. Anchors
@@ -41,12 +42,13 @@ type Placement = 'top' | 'bottom' | 'left' | 'right' | 'center';
 // 'both' shows everywhere; 'desktop' only in the Tauri app; 'web' only in the
 // self-hosted web editor. Undefined is treated as 'both'.
 type Surface = 'both' | 'desktop' | 'web';
+type Chapter = 'build' | 'operate' | 'govern' | 'finish';
 interface Step {
     sel: string | null;
+    /** Text key under guidedTour.steps.<id> (title and body) in the locale files. */
+    id: string;
     /** Which part of the product this belongs to, shown above the title. */
-    chapter?: string;
-    title: string;
-    body: string;
+    chapter?: Chapter;
     placement?: Placement;
     surface?: Surface;
     /**
@@ -64,76 +66,66 @@ interface Step {
 const ALL_STEPS: Step[] = [
     {
         sel: null,
-        title: 'Welcome to Otter ETL agent',
-        body: 'A studio for building data pipelines on DuckDB. Draw one here and run it on this machine, or deploy the same file to a server you own. No JVM, and nothing is sent anywhere you did not choose. This walks through everything Otter ETL agent does, once. You can replay it any time from Settings.',
+        id: 'welcome',
         placement: 'center',
     },
 
     // ---- Build -------------------------------------------------------------
     {
         sel: '[data-tour="palette"]',
-        chapter: 'Build',
-        title: 'Components and your project',
-        body: 'This panel has two tabs. Components holds 380+ building blocks: databases, files, cloud and object stores, vector databases, data quality, AI, and code blocks in Python, JavaScript and SQL. Categories start collapsed, so use the search box. Project browses your pipelines, saved connections, contexts and the bundled examples.',
+        chapter: 'build',
+        id: 'palette',
         placement: 'right',
     },
     {
         sel: '[data-tour="canvas"]',
-        chapter: 'Build',
-        title: 'The canvas',
-        body: 'Drag a block on, or just start typing on the canvas to add one by name. Wire them by dragging from one node output to the next node input: source, then transform, then sink. Right-click a node for Run to here. Right-click a pipeline in the Project tab for Schedule, Backfill and Build.',
+        chapter: 'build',
+        id: 'canvas',
         placement: 'bottom',
     },
     {
         sel: '[data-tour="properties"]',
-        chapter: 'Build',
-        title: 'Properties',
-        body: 'Select a node to configure it here: the connection, the query, its columns, and the write mode (overwrite, append or upsert). Use ${name} placeholders for anything that changes per environment or per run.',
+        chapter: 'build',
+        id: 'properties',
         placement: 'left',
     },
     {
         sel: '[data-tour="tabs"]',
-        chapter: 'Build',
-        title: 'Canvas, Plan, Run, History',
-        body: 'Four views of the same pipeline. Plan shows the SQL each block compiles to, which is the fastest way to understand what Otter ETL agent is actually doing. Run shows the last result with a data preview. History lists every previous run of this pipeline.',
+        chapter: 'build',
+        id: 'tabs',
         placement: 'bottom',
         requireAnchor: true,
     },
     {
         sel: '[data-tour="save"]',
-        chapter: 'Build',
-        title: 'Save, validate, tidy up',
-        body: 'Save writes the pipeline to your workspace (Ctrl+S works too). Pipelines are plain JSON on disk, so they diff and version-control cleanly. Beside Save are Validate, which checks the graph without running it, auto-layout, and a menu with import and export.',
+        chapter: 'build',
+        id: 'save',
         placement: 'bottom',
     },
     {
         sel: '[data-tour="run"]',
-        chapter: 'Build',
-        title: 'Run it',
-        body: 'Runs locally on DuckDB. If the pipeline uses ${...} values nothing has filled in, a dialog asks for them first, so the same pipeline can process one specific month on demand. While a run is going this button becomes Stop.',
+        chapter: 'build',
+        id: 'run',
         placement: 'bottom',
     },
     {
         sel: '[data-tour="live"]',
-        chapter: 'Build',
-        title: 'Live preview',
-        body: 'Turn this on and selecting a node, or editing its settings, runs the pipeline up to that node and fills its Preview tab automatically. You see the rows without pressing Run. It stays quiet while the pipeline has errors or a run is already going.',
+        chapter: 'build',
+        id: 'live',
         placement: 'bottom',
         requireAnchor: true,
     },
     {
         sel: '[data-tour="bottom"]',
-        chapter: 'Build',
-        title: 'Problems, Output and Console',
-        body: 'This panel starts collapsed: click it to open. Problems lists validation errors and carries a count badge, Output is the run log, and Console is the raw engine chatter. When a run fails, this is the first place to look.',
+        chapter: 'build',
+        id: 'bottom',
         placement: 'top',
         requireAnchor: true,
     },
     {
         sel: '[data-tour="duckie"]',
-        chapter: 'Build',
-        title: 'Duckie, the built-in assistant',
-        body: 'Describe what you want in plain language and Duckie drafts the pipeline for you, on this machine. Useful for a first draft or for wiring up a connector you have not used before.',
+        chapter: 'build',
+        id: 'duckie',
         placement: 'bottom',
         requireAnchor: true,
     },
@@ -141,42 +133,37 @@ const ALL_STEPS: Step[] = [
     // ---- Operate -----------------------------------------------------------
     {
         sel: '[data-tour="home"]',
-        chapter: 'Operate',
-        title: 'Home is the index of everything',
-        body: 'Everything Otter ETL agent can do is on this one screen, in three groups: Build, Operate and Govern. Open it any time from here. The next few steps are what lives inside it.',
+        chapter: 'operate',
+        id: 'home',
         placement: 'bottom',
         requireAnchor: true,
     },
     {
         sel: '[data-tour="home"]',
-        chapter: 'Operate',
-        title: 'Running things on a schedule',
-        body: 'Under Operate: Runs is the history of what ran and what failed. Schedules runs one pipeline on a clock, an interval, or a file landing. Plans runs several in the order they have to run, in steps, where a failed step stops the ones after it. Build and Deploy packages a pipeline into one file that runs on a server.',
+        chapter: 'operate',
+        id: 'schedules',
         placement: 'bottom',
         requireAnchor: true,
     },
     {
         sel: '[data-tour="dashboard"]',
-        chapter: 'Operate',
-        title: 'The management console',
-        body: 'Opens the web console this workspace is served by: every pipeline with its status, run history, schedules, plans, the data catalog, who may sign in, and an audit log. This is what duckle-runner serve hosts on a server you own.',
+        chapter: 'operate',
+        id: 'dashboard',
         placement: 'bottom',
         surface: 'desktop',
         requireAnchor: true,
     },
     {
         sel: '[data-tour="git"]',
-        chapter: 'Operate',
-        title: 'Version control',
-        body: 'Commit, push and pull your workspace without leaving Otter ETL agent. Because a pipeline is one JSON file, a change reviews like any other code change.',
+        chapter: 'operate',
+        id: 'git',
         placement: 'bottom',
         requireAnchor: true,
     },
     {
         sel: '[data-tour="context"]',
-        chapter: 'Operate',
-        title: 'Contexts and environments',
-        body: 'A context supplies the values behind those ${...} placeholders, so one pipeline runs against dev, staging or production by switching here rather than by editing it.',
+        chapter: 'operate',
+        id: 'context',
         placement: 'bottom',
         requireAnchor: true,
     },
@@ -184,58 +171,51 @@ const ALL_STEPS: Step[] = [
     // ---- Govern ------------------------------------------------------------
     {
         sel: '[data-tour="lineage"]',
-        chapter: 'Govern',
-        title: 'Column lineage',
-        body: 'Trace any output column back through every transform to the source columns it came from. Worth doing before you change a query somebody else depends on.',
+        chapter: 'govern',
+        id: 'lineage',
         placement: 'bottom',
         requireAnchor: true,
     },
     {
         sel: '[data-tour="trust"]',
-        chapter: 'Govern',
-        title: 'Trust report',
-        body: 'A 0-100 score where every lost point is a named finding: whether the pipeline compiles, structural risks, and columns that look like personal data with no mask or contract tag. Switch on live schema drift to read each source now and compare it with the schema its node declares. Use it to mark a pipeline review-ready.',
+        chapter: 'govern',
+        id: 'trust',
         placement: 'bottom',
         requireAnchor: true,
     },
     {
         sel: '[data-tour="dives"]',
-        chapter: 'Govern',
-        title: 'Dives',
-        body: 'Explore results in live, auto-charting views and pin them into dashboards, all local-first. A quick way to look at what a pipeline produced without leaving Otter ETL agent.',
+        chapter: 'govern',
+        id: 'dives',
         placement: 'bottom',
         requireAnchor: true,
     },
     {
         sel: '[data-tour="home"]',
-        chapter: 'Govern',
-        title: 'Catalog and data quality',
-        body: 'Also under Govern in Home: the Data Catalog is everything your workspace reads and writes, who owns it, and what is written but never read. Data Quality blocks live in the Components tab and let you assert, mask, reconcile and quarantine rows as part of the pipeline itself.',
+        chapter: 'govern',
+        id: 'catalog',
         placement: 'bottom',
         requireAnchor: true,
     },
     {
         sel: '[data-tour="topbar"]',
-        chapter: 'Govern',
-        title: 'Let an AI agent drive Otter ETL agent',
-        body: 'Connect Claude, Cursor or any MCP client to this workspace. The agent can list components, read and write pipelines, run them and read the logs, with the same permissions you have.',
+        chapter: 'govern',
+        id: 'mcp',
         placement: 'bottom',
     },
 
     // ---- Finish ------------------------------------------------------------
     {
         sel: '[data-tour="settings"]',
-        chapter: 'Finish',
-        title: 'Settings, and how to get this back',
-        body: 'Engine, AI, proxy, memory, language and appearance live here. Under First run you can replay this tour, and re-run the setup question about whether you work on your own machine or with a team on a server.',
+        chapter: 'finish',
+        id: 'settings',
         placement: 'bottom',
         requireAnchor: true,
     },
     {
         sel: null,
-        chapter: 'Finish',
-        title: "That is all of it",
-        body: 'Open one of the bundled examples from the Project tab to see a working pipeline, or draw your own. Everything here is replayable from Settings, and nothing you just saw needs an account or a cloud.',
+        chapter: 'finish',
+        id: 'finish',
         placement: 'center',
     },
 ];
@@ -295,6 +275,7 @@ type TourProps = {
 };
 
 export function GuidedTour({ ready = true }: TourProps) {
+    const { t } = useTranslation();
     const [active, setActive] = useState(false);
     // Whether this is the first run rather than a replay.
     //
@@ -430,7 +411,7 @@ export function GuidedTour({ ready = true }: TourProps) {
     }
 
     return (
-        <div className="tour-root" role="dialog" aria-modal="true" aria-label="Otter ETL agent guided tour">
+        <div className="tour-root" role="dialog" aria-modal="true" aria-label={t('guidedTour.ariaLabel')}>
             {/* Spotlight: a transparent box with a huge shadow dims everything else. */}
             {box ? (
                 <div
@@ -449,11 +430,11 @@ export function GuidedTour({ ready = true }: TourProps) {
             )}
             <div className="tour-tip" style={{ ...tipStyle, width: TIP_W }}>
                 <div className="tour-progress">
-                    {step.chapter ? <span className="tour-chapter">{step.chapter}</span> : null}
-                    Step {i + 1} of {steps.length}
+                    {step.chapter ? <span className="tour-chapter">{t(`guidedTour.chapters.${step.chapter}`)}</span> : null}
+                    {t('guidedTour.progress', { n: i + 1, total: steps.length })}
                 </div>
-                <h3 className="tour-title">{step.title}</h3>
-                <p className="tour-body">{step.body}</p>
+                <h3 className="tour-title">{t(`guidedTour.steps.${step.id}.title`)}</h3>
+                <p className="tour-body">{t(`guidedTour.steps.${step.id}.body`)}</p>
                 <div className="tour-dots">
                     {steps.map((_, n) => (
                         <span key={n} className={n === i ? 'tour-dot on' : 'tour-dot'} />
@@ -465,21 +446,21 @@ export function GuidedTour({ ready = true }: TourProps) {
                         // open-ended. It replaces Skip rather than sitting beside it, which
                         // keeps the row's layout identical either way.
                         <span className="tour-remaining">
-                            {last ? 'Last one' : `${steps.length - i - 1} to go`}
+                            {last ? t('guidedTour.lastOne') : t('guidedTour.toGo', { n: steps.length - i - 1 })}
                         </span>
                     ) : (
                         <button type="button" className="tour-skip" onClick={close}>
-                            Skip tour
+                            {t('guidedTour.skip')}
                         </button>
                     )}
                     <div className="tour-nav">
                         {i > 0 ? (
                             <button type="button" className="tour-btn" onClick={back}>
-                                Back
+                                {t('guidedTour.back')}
                             </button>
                         ) : null}
                         <button type="button" className="tour-btn primary" onClick={next}>
-                            {last ? 'Get started' : 'Next'}
+                            {last ? t('guidedTour.getStarted') : t('guidedTour.next')}
                         </button>
                     </div>
                 </div>

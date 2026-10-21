@@ -774,5 +774,252 @@
     "backToTop": "Back to top",
     "zoomImage": "Click to enlarge",
     "loadFailed": "Could not load the user guide: {{error}}"
+  },
+  "settings": {
+    "title": "Settings",
+    "openAria": "Open settings",
+    "noWorkspace": "Open a workspace first to save workspace settings.",
+    "saved": "Saved",
+    "sections": {
+      "appearance": "Appearance",
+      "proxy": "HTTP / HTTPS proxy",
+      "memory": "Memory limit",
+      "power": "Power mode",
+      "unsigned": "Unsigned extensions",
+      "context": "Global context file",
+      "agentAttachments": "Agent attachments",
+      "ai": "AI assistant",
+      "signin": "Sign-in and lock",
+      "toolbar": "Toolbar",
+      "security": "Security and privacy",
+      "tour": "First run"
+    },
+    "appearance": {
+      "fontSize": "Font size",
+      "fontSizeHelp": "Scales the interface text. Affects every view. ({{min}}-{{max}}px)",
+      "decrease": "Decrease font size",
+      "increase": "Increase font size",
+      "reset": "Reset"
+    },
+    "proxy": {
+      "help": "Routes REST and cloud-API connectors and the in-app updater through a proxy, so Otter ETL agent works behind a corporate proxy without setting a system environment variable. Leave empty for a direct connection."
+    },
+    "memory": {
+      "help": "Caps total RAM for every run in this workspace (sets DuckDB's memory_limit for both batched and per-stage execution). Leave empty for the engine default (about 80% of system RAM).",
+      "placeholder": "e.g. 4096 (MB)"
+    },
+    "power": {
+      "help": "Throughput settings for this workspace. Independent pipelines scale well across cores, so running several at once is the lever that pays; splitting a single pipeline across processes was measured slower and is deliberately not offered.",
+      "maxRuns": "Pipelines at once",
+      "maxRunsPlaceholder": "empty = default  (this machine has {{cores}} cores)",
+      "maxRunsHelp": "Caps how many scheduled pipelines execute together. Each one gets its own memory limit and its own DuckDB process, so N at once needs roughly N times the memory above. Raise it only with the RAM to match.",
+      "spill": "Spill folder",
+      "spillPlaceholder": "empty = beside the run's own database",
+      "spillHelp": "Where DuckDB writes when a query outgrows memory. Point it at a bigger or faster disk. Every run gets a private subfolder, so concurrent runs cannot collide here."
+    },
+    "unsigned": {
+      "help": "Allow loading unsigned or community DuckDB extensions (for example a custom <code>quack</code> build). When on, the engine starts DuckDB with <code>-unsigned</code>. Leave off unless you trust the extension: it turns off signature verification for every run in this workspace.",
+      "allow": "Allow unsigned extensions"
+    },
+    "context": {
+      "help": "Auto-load context variables from a key/value file before every run, so <code>${KEY}</code> resolves everywhere without wiring a node. Supports .env / .properties (KEY=VALUE), .csv (key,value) and .json. A relative path is resolved against the workspace root.",
+      "placeholder": "config/context.env  (or an absolute path)"
+    },
+    "attachments": {
+      "help": "Largest file, in MB, the + button in the Agent input may attach. Leave empty for the default ({{mb}} MB). Executable files (.exe, .msi, .bat, .sh, .dmg and the like) are never accepted."
+    },
+    "ai": {
+      "helpDuckie": "Choose how Duckie runs: DeepSeek Harness via ACP + duckle-mcp (default), an external OpenAI-compatible endpoint, or the bundled local Qwen model.",
+      "help": "Choose the model AI features use: an external OpenAI-compatible endpoint (the Agent needs this one) or the bundled local Qwen model.",
+      "modeDsh": "DeepSeek Harness (DSH) + duckle-mcp",
+      "dshCommandPlaceholder": "Optional DSH command override, e.g. /opt/homebrew/bin/dsh or /Users/me/.dsh/.../bin.js",
+      "dshCommandHelp": "Leave blank to auto-detect DSH. Otter ETL agent launches it as <code>--profile acp</code>.",
+      "dshProviderPlaceholder": "Optional DSH provider override, e.g. deepseek-official or dashscope",
+      "dshModelPlaceholder": "Optional DSH model override, e.g. deepseek-v4-pro",
+      "dshProviderHelp": "Set both provider and model to make Otter ETL agent call ACP <code>session/set_config_option</code> after <code>session/new</code>. Leave both blank to use the ACP profile default.",
+      "dshIdlePlaceholder": "DSH idle timeout in minutes (default 30, 0 = no limit)",
+      "dshIdleHelp": "A Duckie turn keeps waiting while DSH is still streaming progress; it is cancelled only after this many minutes without any output from DSH. Leave blank for the default (or <code>DUCKLE_DSH_IDLE_TIMEOUT_SECS</code> if set), 0 to never time out.",
+      "modeOpenai": "External OpenAI-compatible endpoint",
+      "baseUrlPlaceholder": "Base URL, e.g. https://api.openai.com or https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "modelPlaceholder": "Model, e.g. gpt-4o-mini",
+      "fetchModels": "Fetch models",
+      "fetching": "Fetching...",
+      "pickModel": "{{n}} model(s) - pick one",
+      "noModels": "That endpoint listed no models.",
+      "nonChatModels": "{{skipped}} of {{total}} listed models are not chat models and are left out: embedding, image, transcription and evaluation models cannot answer the assistant. Jev is one of them - it returns typed decisions rather than text, and it is available on the Classify node instead.",
+      "apiKeyPlaceholder": "API key (sent as a Bearer token)",
+      "modeLocal": "Bundled local Qwen via llama.cpp"
+    },
+    "signin": {
+      "help": "Lock Otter ETL agent after a while without keyboard or mouse input. Locking keeps open pipelines, unsaved edits and running work as they are; the password opens it again. Applies immediately.",
+      "lockAfter": "Lock when idle for",
+      "never": "Never",
+      "minutes": "{{n}} minutes"
+    },
+    "toolbar": {
+      "showDives": "Show the Dives button (live data views & dashboards) in the toolbar",
+      "showMinimap": "Show the minimap in the corner of the canvas"
+    },
+    "security": {
+      "help": "Where this workspace keeps credentials, and what is protected. The same facts are in the architecture guide, with citations.",
+      "connSecrets": "Connection secrets",
+      "aesPerValue": "AES-256-GCM, per value",
+      "serverKeys": "Server API keys",
+      "gitToken": "Cached Git token",
+      "decryptKey": "The key that decrypts them",
+      "decryptKeyWhere": "plain file in .duckle/keys, beside what it protects",
+      "contextVars": "Context variables, even \"secret\" ones",
+      "plainOnDisk": "plain text on disk",
+      "aiKeyProxy": "AI key and proxy URL",
+      "aiKeyProxyWhere": "plain text in .duckle/settings.json",
+      "fieldValues": "Values typed into a pipeline field",
+      "fieldValuesWhere": "plain text; use ${ENV:NAME}",
+      "encryptionNote": "Encryption here defends a stray file, a backup or a commit. It does not defend a copied workspace folder, because the key travels with it. Everything above is excluded from git automatically.",
+      "telemetry": "<b>No telemetry.</b> No analytics, usage reporting or crash reporting of any kind. One automatic outbound call exists: a version check against a public GitHub URL that sends nothing about you or your work.",
+      "thisWorkspace": "This workspace:",
+      "readGuide": "Read the architecture guide"
+    },
+    "tour": {
+      "help": "Everything you were shown the first time you opened Otter ETL agent, available again whenever you want it.",
+      "replay": "Replay guided tour",
+      "setupHelp": "The setup question asks whether you are working on your own machine or with a team on a server. Resetting it asks again; it changes nothing on its own, and any server you already connected to stays connected.",
+      "runSetup": "Run setup again"
+    }
+  },
+  "mcp": {
+    "short": "Connect to Claude",
+    "title": "Connect Otter ETL agent to Claude",
+    "loadError": "Could not load MCP details: {{error}}",
+    "preparing": "Preparing the MCP server…",
+    "intro": "Otter ETL agent ships a Model Context Protocol (MCP) server, so Claude can generate, validate, run and build your pipelines for you - right in this workspace.",
+    "notBundled": "This build does not bundle the MCP server. Build it with <code>cargo build -p duckle-mcp --release</code> and point your client at it.",
+    "noDuckdb": "The DuckDB engine is not installed yet. The AI can still generate and validate pipelines; install the engine (setup screen) to run or build them.",
+    "added": "Added to {{client}}. Quit and reopen {{client}}, then ask Claude:",
+    "samplePrompt": "Use duckle to list the available components",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyCommand": "Copy command",
+    "copyConfig": "Copy config",
+    "connecting": "Connecting…",
+    "adding": "Adding…",
+    "connectClaudeCode": "Connect to Claude Code",
+    "addTo": "Add to {{client}}",
+    "showCommand": "Show command",
+    "showConfig": "Show config",
+    "otherClients": "Claude Desktop, Cursor, or any MCP client",
+    "hint": "Adds a \"duckle\" entry to the client's config. For any other client, copy the config.",
+    "resolvedPaths": "Resolved paths",
+    "mcpServer": "MCP server",
+    "runner": "Runner",
+    "pathNotBundled": "(not bundled)",
+    "pathNotInstalled": "(not installed)",
+    "done": "Done",
+    "webUnavailable": "Connecting an AI client is not available in the web editor: duckle-mcp runs on the same computer as Claude, so set it up from the desktop app there."
+  },
+  "guidedTour": {
+    "ariaLabel": "Otter ETL agent guided tour",
+    "progress": "Step {{n}} of {{total}}",
+    "lastOne": "Last one",
+    "toGo": "{{n}} to go",
+    "skip": "Skip tour",
+    "back": "Back",
+    "next": "Next",
+    "getStarted": "Get started",
+    "chapters": {
+      "build": "Build",
+      "operate": "Operate",
+      "govern": "Govern",
+      "finish": "Finish"
+    },
+    "steps": {
+      "welcome": {
+        "title": "Welcome to Otter ETL agent",
+        "body": "A studio for building data pipelines on DuckDB. Draw one here and run it on this machine, or deploy the same file to a server you own. No JVM, and nothing is sent anywhere you did not choose. This walks through everything Otter ETL agent does, once. You can replay it any time from Settings."
+      },
+      "palette": {
+        "title": "Components and your project",
+        "body": "This panel has two tabs. Components holds 380+ building blocks: databases, files, cloud and object stores, vector databases, data quality, AI, and code blocks in Python, JavaScript and SQL. Categories start collapsed, so use the search box. Project browses your pipelines, saved connections, contexts and the bundled examples."
+      },
+      "canvas": {
+        "title": "The canvas",
+        "body": "Drag a block on, or just start typing on the canvas to add one by name. Wire them by dragging from one node output to the next node input: source, then transform, then sink. Right-click a node for Run to here. Right-click a pipeline in the Project tab for Schedule, Backfill and Build."
+      },
+      "properties": {
+        "title": "Properties",
+        "body": "Select a node to configure it here: the connection, the query, its columns, and the write mode (overwrite, append or upsert). Use ${name} placeholders for anything that changes per environment or per run."
+      },
+      "tabs": {
+        "title": "Canvas, Plan, Run, History",
+        "body": "Four views of the same pipeline. Plan shows the SQL each block compiles to, which is the fastest way to understand what Otter ETL agent is actually doing. Run shows the last result with a data preview. History lists every previous run of this pipeline."
+      },
+      "save": {
+        "title": "Save, validate, tidy up",
+        "body": "Save writes the pipeline to your workspace (Ctrl+S works too). Pipelines are plain JSON on disk, so they diff and version-control cleanly. Beside Save are Validate, which checks the graph without running it, auto-layout, and a menu with import and export."
+      },
+      "run": {
+        "title": "Run it",
+        "body": "Runs locally on DuckDB. If the pipeline uses ${...} values nothing has filled in, a dialog asks for them first, so the same pipeline can process one specific month on demand. While a run is going this button becomes Stop."
+      },
+      "live": {
+        "title": "Live preview",
+        "body": "Turn this on and selecting a node, or editing its settings, runs the pipeline up to that node and fills its Preview tab automatically. You see the rows without pressing Run. It stays quiet while the pipeline has errors or a run is already going."
+      },
+      "bottom": {
+        "title": "Problems, Output and Console",
+        "body": "This panel starts collapsed: click it to open. Problems lists validation errors and carries a count badge, Output is the run log, and Console is the raw engine chatter. When a run fails, this is the first place to look."
+      },
+      "duckie": {
+        "title": "Duckie, the built-in assistant",
+        "body": "Describe what you want in plain language and Duckie drafts the pipeline for you, on this machine. Useful for a first draft or for wiring up a connector you have not used before."
+      },
+      "home": {
+        "title": "Home is the index of everything",
+        "body": "Everything Otter ETL agent can do is on this one screen, in three groups: Build, Operate and Govern. Open it any time from here. The next few steps are what lives inside it."
+      },
+      "schedules": {
+        "title": "Running things on a schedule",
+        "body": "Under Operate: Runs is the history of what ran and what failed. Schedules runs one pipeline on a clock, an interval, or a file landing. Plans runs several in the order they have to run, in steps, where a failed step stops the ones after it. Build and Deploy packages a pipeline into one file that runs on a server."
+      },
+      "dashboard": {
+        "title": "The management console",
+        "body": "Opens the web console this workspace is served by: every pipeline with its status, run history, schedules, plans, the data catalog, who may sign in, and an audit log. This is what duckle-runner serve hosts on a server you own."
+      },
+      "git": {
+        "title": "Version control",
+        "body": "Commit, push and pull your workspace without leaving Otter ETL agent. Because a pipeline is one JSON file, a change reviews like any other code change."
+      },
+      "context": {
+        "title": "Contexts and environments",
+        "body": "A context supplies the values behind those ${...} placeholders, so one pipeline runs against dev, staging or production by switching here rather than by editing it."
+      },
+      "lineage": {
+        "title": "Column lineage",
+        "body": "Trace any output column back through every transform to the source columns it came from. Worth doing before you change a query somebody else depends on."
+      },
+      "trust": {
+        "title": "Trust report",
+        "body": "A 0-100 score where every lost point is a named finding: whether the pipeline compiles, structural risks, and columns that look like personal data with no mask or contract tag. Switch on live schema drift to read each source now and compare it with the schema its node declares. Use it to mark a pipeline review-ready."
+      },
+      "dives": {
+        "title": "Dives",
+        "body": "Explore results in live, auto-charting views and pin them into dashboards, all local-first. A quick way to look at what a pipeline produced without leaving Otter ETL agent."
+      },
+      "catalog": {
+        "title": "Catalog and data quality",
+        "body": "Also under Govern in Home: the Data Catalog is everything your workspace reads and writes, who owns it, and what is written but never read. Data Quality blocks live in the Components tab and let you assert, mask, reconcile and quarantine rows as part of the pipeline itself."
+      },
+      "mcp": {
+        "title": "Let an AI agent drive Otter ETL agent",
+        "body": "Connect Claude, Cursor or any MCP client to this workspace. The agent can list components, read and write pipelines, run them and read the logs, with the same permissions you have."
+      },
+      "settings": {
+        "title": "Settings, and how to get this back",
+        "body": "Engine, AI, proxy, memory, language and appearance live here. Under First run you can replay this tour, and re-run the setup question about whether you work on your own machine or with a team on a server."
+      },
+      "finish": {
+        "title": "That is all of it",
+        "body": "Open one of the bundled examples from the Project tab to see a working pipeline, or draw your own. Everything here is replayable from Settings, and nothing you just saw needs an account or a cloud."
+      }
+    }
   }
 }

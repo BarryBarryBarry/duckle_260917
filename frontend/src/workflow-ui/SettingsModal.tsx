@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { Trans, useTranslation } from 'react-i18next';
 import { X, Loader2, Check, ChevronDown, ChevronRight, Minus, Plus } from 'lucide-react';
 import {
     settingsGetProxy,
@@ -50,6 +51,8 @@ export function SettingsModal({
     workspace: string | null;
     onClose: () => void;
 }) {
+    const { t } = useTranslation();
+    const code = { code: <code /> };
     const [proxy, setProxy] = useState('');
     const [aiMode, setAiMode] = useState<'deepseek_harness' | 'openai_compatible' | 'local_qwen'>(DEFAULT_AI_MODE);
     // Duckie AI provider configuration.
@@ -265,19 +268,19 @@ export function SettingsModal({
                 className="modal"
                 role="dialog"
                 aria-modal="true"
-                aria-label="Settings"
+                aria-label={t('settings.title')}
                 style={{ maxWidth: 480 }}
             >
                 <div className="modal-header">
-                    <div className="modal-title">Settings</div>
-                    <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+                    <div className="modal-title">{t('settings.title')}</div>
+                    <button type="button" className="modal-close" onClick={onClose} aria-label={t('common.close')}>
                         <X size={16} />
                     </button>
                 </div>
                 <div className="modal-body">
                     {!workspace ? (
                         <p style={{ fontSize: '0.9231rem', color: 'var(--danger, #ff4d6d)', margin: '0 0 8px' }}>
-                            Open a workspace first to save workspace settings.
+                            {t('settings.noWorkspace')}
                         </p>
                     ) : null}
                     {error ? (
@@ -286,12 +289,12 @@ export function SettingsModal({
                         </p>
                     ) : null}
 
-                    <SettingsSection {...sectionState('appearance')} title="Appearance">
+                    <SettingsSection {...sectionState('appearance')} title={t('settings.sections.appearance')}>
                         <label style={{ display: 'block', fontWeight: 600, marginBottom: 6 }}>
-                            Font size
+                            {t('settings.appearance.fontSize')}
                         </label>
                         <p style={help}>
-                            Scales the interface text. Affects every view. ({MIN_FONT_SIZE}-{MAX_FONT_SIZE}px)
+                            {t('settings.appearance.fontSizeHelp', { min: MIN_FONT_SIZE, max: MAX_FONT_SIZE })}
                         </p>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                             <button
@@ -299,7 +302,7 @@ export function SettingsModal({
                                 style={{ ...btn, padding: '6px 10px' }}
                                 onClick={() => changeFontSize(fontSize - 1)}
                                 disabled={fontSize <= MIN_FONT_SIZE}
-                                aria-label="Decrease font size"
+                                aria-label={t('settings.appearance.decrease')}
                             >
                                 <Minus size={14} />
                             </button>
@@ -311,7 +314,7 @@ export function SettingsModal({
                                 style={{ ...btn, padding: '6px 10px' }}
                                 onClick={() => changeFontSize(fontSize + 1)}
                                 disabled={fontSize >= MAX_FONT_SIZE}
-                                aria-label="Increase font size"
+                                aria-label={t('settings.appearance.increase')}
                             >
                                 <Plus size={14} />
                             </button>
@@ -321,18 +324,14 @@ export function SettingsModal({
                                     style={{ ...btn, padding: '6px 10px', marginLeft: 'auto' }}
                                     onClick={() => changeFontSize(DEFAULT_FONT_SIZE)}
                                 >
-                                    Reset
+                                    {t('settings.appearance.reset')}
                                 </button>
                             ) : null}
                         </div>
                     </SettingsSection>
 
-                    <SettingsSection {...sectionState('proxy')} title="HTTP / HTTPS proxy">
-                        <p style={help}>
-                            Routes REST and cloud-API connectors and the in-app updater through a proxy, so
-                            Otter ETL agent works behind a corporate proxy without setting a system environment
-                            variable. Leave empty for a direct connection.
-                        </p>
+                    <SettingsSection {...sectionState('proxy')} title={t('settings.sections.proxy')}>
+                        <p style={help}>{t('settings.proxy.help')}</p>
                         <input
                             id="settings-proxy"
                             type="text"
@@ -346,33 +345,24 @@ export function SettingsModal({
                         />
                     </SettingsSection>
 
-                    <SettingsSection {...sectionState('memory')} title="Memory limit">
-                        <p style={help}>
-                            Caps total RAM for every run in this workspace (sets DuckDB's memory_limit for
-                            both batched and per-stage execution). Leave empty for the engine default
-                            (about 80% of system RAM).
-                        </p>
+                    <SettingsSection {...sectionState('memory')} title={t('settings.sections.memory')}>
+                        <p style={help}>{t('settings.memory.help')}</p>
                         <input
                             id="settings-mem"
                             type="number"
                             min={0}
                             value={memLimit}
                             onChange={e => setMemLimit(e.target.value)}
-                            placeholder="e.g. 4096 (MB)"
+                            placeholder={t('settings.memory.placeholder')}
                             disabled={!loaded || !workspace}
                             style={aiInput}
                         />
                     </SettingsSection>
 
-                    <SettingsSection {...sectionState('power')} title="Power mode">
-                        <p style={help}>
-                            Throughput settings for this workspace. Independent pipelines scale well
-                            across cores, so running several at once is the lever that pays; splitting a
-                            single pipeline across processes was measured slower and is deliberately not
-                            offered.
-                        </p>
+                    <SettingsSection {...sectionState('power')} title={t('settings.sections.power')}>
+                        <p style={help}>{t('settings.power.help')}</p>
                         <label htmlFor="settings-max-runs" style={{ fontSize: '0.9231rem', opacity: 0.8 }}>
-                            Pipelines at once
+                            {t('settings.power.maxRuns')}
                         </label>
                         <input
                             id="settings-max-runs"
@@ -381,40 +371,29 @@ export function SettingsModal({
                             max={64}
                             value={maxRuns}
                             onChange={e => setMaxRuns(e.target.value)}
-                            placeholder={`empty = default  (this machine has ${cpuCount} cores)`}
+                            placeholder={t('settings.power.maxRunsPlaceholder', { cores: cpuCount })}
                             disabled={!loaded || !workspace}
                             style={aiInput}
                         />
-                        <p style={help}>
-                            Caps how many scheduled pipelines execute together. Each one gets its own
-                            memory limit and its own DuckDB process, so N at once needs roughly N times
-                            the memory above. Raise it only with the RAM to match.
-                        </p>
+                        <p style={help}>{t('settings.power.maxRunsHelp')}</p>
                         <label htmlFor="settings-spill" style={{ fontSize: '0.9231rem', opacity: 0.8 }}>
-                            Spill folder
+                            {t('settings.power.spill')}
                         </label>
                         <input
                             id="settings-spill"
                             type="text"
                             value={spillDir}
                             onChange={e => setSpillDir(e.target.value)}
-                            placeholder="empty = beside the run's own database"
+                            placeholder={t('settings.power.spillPlaceholder')}
                             disabled={!loaded || !workspace}
                             style={aiInput}
                         />
-                        <p style={help}>
-                            Where DuckDB writes when a query outgrows memory. Point it at a bigger or
-                            faster disk. Every run gets a private subfolder, so concurrent runs cannot
-                            collide here.
-                        </p>
+                        <p style={help}>{t('settings.power.spillHelp')}</p>
                     </SettingsSection>
 
-                    <SettingsSection {...sectionState('unsigned')} title="Unsigned extensions">
+                    <SettingsSection {...sectionState('unsigned')} title={t('settings.sections.unsigned')}>
                         <p style={help}>
-                            Allow loading unsigned or community DuckDB extensions (for example a custom{' '}
-                            <code>quack</code> build). When on, the engine starts DuckDB with{' '}
-                            <code>-unsigned</code>. Leave off unless you trust the extension: it turns off
-                            signature verification for every run in this workspace.
+                            <Trans i18nKey="settings.unsigned.help" components={code} />
                         </p>
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                             <input
@@ -423,23 +402,20 @@ export function SettingsModal({
                                 onChange={e => setAllowUnsigned(e.target.checked)}
                                 disabled={!loaded || !workspace}
                             />
-                            Allow unsigned extensions
+                            {t('settings.unsigned.allow')}
                         </label>
                     </SettingsSection>
 
-                    <SettingsSection {...sectionState('context')} title="Global context file">
+                    <SettingsSection {...sectionState('context')} title={t('settings.sections.context')}>
                         <p style={help}>
-                            Auto-load context variables from a key/value file before every run, so{' '}
-                            <code>{'${KEY}'}</code> resolves everywhere without wiring a node. Supports .env /
-                            .properties (KEY=VALUE), .csv (key,value) and .json. A relative path is resolved
-                            against the workspace root.
+                            <Trans i18nKey="settings.context.help" components={code} />
                         </p>
                         <input
                             id="settings-context-file"
                             type="text"
                             value={contextFile}
                             onChange={e => setContextFile(e.target.value)}
-                            placeholder="config/context.env  (or an absolute path)"
+                            placeholder={t('settings.context.placeholder')}
                             disabled={!loaded || !workspace}
                             spellCheck={false}
                             autoComplete="off"
@@ -447,11 +423,9 @@ export function SettingsModal({
                         />
                     </SettingsSection>
 
-                    <SettingsSection {...sectionState('agentAttachments')} title="Agent attachments">
+                    <SettingsSection {...sectionState('agentAttachments')} title={t('settings.sections.agentAttachments')}>
                         <p style={help}>
-                            Largest file, in MB, the + button in the Agent input may attach. Leave empty for
-                            the default ({DEFAULT_AGENT_ATTACHMENT_MAX_MB} MB). Executable files (.exe, .msi,
-                            .bat, .sh, .dmg and the like) are never accepted.
+                            {t('settings.attachments.help', { mb: DEFAULT_AGENT_ATTACHMENT_MAX_MB })}
                         </p>
                         <input
                             id="settings-agent-attach-max"
@@ -465,11 +439,9 @@ export function SettingsModal({
                         />
                     </SettingsSection>
 
-                    <SettingsSection {...sectionState('ai')} title="AI assistant">
+                    <SettingsSection {...sectionState('ai')} title={t('settings.sections.ai')}>
                         <p style={help}>
-                            {DUCKIE_ENABLED
-                                ? 'Choose how Duckie runs: DeepSeek Harness via ACP + duckle-mcp (default), an external OpenAI-compatible endpoint, or the bundled local Qwen model.'
-                                : 'Choose the model AI features use: an external OpenAI-compatible endpoint (the Agent needs this one) or the bundled local Qwen model.'}
+                            {DUCKIE_ENABLED ? t('settings.ai.helpDuckie') : t('settings.ai.help')}
                         </p>
                         {DUCKIE_ENABLED ? (
                             <>
@@ -481,7 +453,7 @@ export function SettingsModal({
                                     onChange={() => setAiMode('deepseek_harness')}
                                     disabled={!loaded || !workspace}
                                 />
-                                DeepSeek Harness (DSH) + duckle-mcp
+                                {t('settings.ai.modeDsh')}
                             </label>
                             {aiMode === 'deepseek_harness' ? (
                                 <>
@@ -489,20 +461,20 @@ export function SettingsModal({
                                         type="text"
                                         value={aiHarnessCommand}
                                         onChange={e => setAiHarnessCommand(e.target.value)}
-                                        placeholder="Optional DSH command override, e.g. /opt/homebrew/bin/dsh or /Users/me/.dsh/.../bin.js"
+                                        placeholder={t('settings.ai.dshCommandPlaceholder')}
                                         disabled={!loaded || !workspace}
                                         spellCheck={false}
                                         autoComplete="off"
                                         style={aiInput}
                                     />
                                     <p style={help}>
-                                        Leave blank to auto-detect DSH. Otter ETL agent launches it as <code>--profile acp</code>.
+                                        <Trans i18nKey="settings.ai.dshCommandHelp" components={code} />
                                     </p>
                                     <input
                                         type="text"
                                         value={aiHarnessProvider}
                                         onChange={e => setAiHarnessProvider(e.target.value)}
-                                        placeholder="Optional DSH provider override, e.g. deepseek-official or dashscope"
+                                        placeholder={t('settings.ai.dshProviderPlaceholder')}
                                         disabled={!loaded || !workspace}
                                         spellCheck={false}
                                         autoComplete="off"
@@ -512,29 +484,26 @@ export function SettingsModal({
                                         type="text"
                                         value={aiHarnessModel}
                                         onChange={e => setAiHarnessModel(e.target.value)}
-                                        placeholder="Optional DSH model override, e.g. deepseek-v4-pro"
+                                        placeholder={t('settings.ai.dshModelPlaceholder')}
                                         disabled={!loaded || !workspace}
                                         spellCheck={false}
                                         autoComplete="off"
                                         style={{ ...aiInput, marginTop: 8 }}
                                     />
                                     <p style={help}>
-                                        Set both provider and model to make Otter ETL agent call ACP <code>session/set_config_option</code>
-                                        after <code>session/new</code>. Leave both blank to use the ACP profile default.
+                                        <Trans i18nKey="settings.ai.dshProviderHelp" components={code} />
                                     </p>
                                     <input
                                         type="number"
                                         min={0}
                                         value={aiHarnessIdleMinutes}
                                         onChange={e => setAiHarnessIdleMinutes(e.target.value)}
-                                        placeholder="DSH idle timeout in minutes (default 30, 0 = no limit)"
+                                        placeholder={t('settings.ai.dshIdlePlaceholder')}
                                         disabled={!loaded || !workspace}
                                         style={aiInput}
                                     />
                                     <p style={help}>
-                                        A Duckie turn keeps waiting while DSH is still streaming progress; it is cancelled only
-                                        after this many minutes without any output from DSH. Leave blank for the default
-                                        (or <code>DUCKLE_DSH_IDLE_TIMEOUT_SECS</code> if set), 0 to never time out.
+                                        <Trans i18nKey="settings.ai.dshIdleHelp" components={code} />
                                     </p>
                                 </>
                             ) : null}
@@ -548,7 +517,7 @@ export function SettingsModal({
                                 onChange={() => setAiMode('openai_compatible')}
                                 disabled={!loaded || !workspace}
                             />
-                            External OpenAI-compatible endpoint
+                            {t('settings.ai.modeOpenai')}
                         </label>
                         {aiMode === 'openai_compatible' ? (
                             <>
@@ -556,7 +525,7 @@ export function SettingsModal({
                             type="text"
                             value={aiBaseUrl}
                             onChange={e => setAiBaseUrl(e.target.value)}
-                            placeholder="Base URL, e.g. https://api.openai.com or https://dashscope.aliyuncs.com/compatible-mode/v1"
+                            placeholder={t('settings.ai.baseUrlPlaceholder')}
                             disabled={!loaded || !workspace}
                             spellCheck={false}
                             autoComplete="off"
@@ -566,7 +535,7 @@ export function SettingsModal({
                             type="text"
                             value={aiModel}
                             onChange={e => setAiModel(e.target.value)}
-                            placeholder="Model, e.g. gpt-4o-mini"
+                            placeholder={t('settings.ai.modelPlaceholder')}
                             disabled={!loaded || !workspace}
                             spellCheck={false}
                             autoComplete="off"
@@ -581,7 +550,7 @@ export function SettingsModal({
                                     try {
                                         const got = await aiModels(workspace ?? '', aiBaseUrl || null, aiKey || null);
                                         setAiChoices(got);
-                                        if (got.length === 0) setAiListError('That endpoint listed no models.');
+                                        if (got.length === 0) setAiListError(t('settings.ai.noModels'));
                                     } catch (e) {
                                         setAiChoices(null);
                                         setAiListError(e instanceof Error ? e.message : String(e));
@@ -592,7 +561,7 @@ export function SettingsModal({
                                 disabled={!loaded || !workspace || !aiBaseUrl || aiListing}
                                 style={{ ...aiInput, width: 'auto', cursor: 'pointer' }}
                             >
-                                {aiListing ? 'Fetching...' : 'Fetch models'}
+                                {aiListing ? t('settings.ai.fetching') : t('settings.ai.fetchModels')}
                             </button>
                             {aiChoices && aiChoices.some(m => m.chat) && (
                                 <select
@@ -601,7 +570,7 @@ export function SettingsModal({
                                     style={{ ...aiInput, flex: 1 }}
                                 >
                                     <option value="">
-                                        {aiChoices.filter(m => m.chat).length} model(s) - pick one
+                                        {t('settings.ai.pickModel', { n: aiChoices.filter(m => m.chat).length })}
                                     </option>
                                     {aiChoices.filter(m => m.chat).map(m => (
                                         <option key={m.id} value={m.id}>{m.id}</option>
@@ -612,18 +581,17 @@ export function SettingsModal({
                         {aiListError && <p style={{ ...help, color: '#f0803c' }}>{aiListError}</p>}
                         {aiChoices && aiChoices.some(m => !m.chat) && (
                             <p style={help}>
-                                {aiChoices.filter(m => !m.chat).length} of {aiChoices.length} listed
-                                models are not chat models and are left out: embedding, image,
-                                transcription and evaluation models cannot answer the assistant.
-                                Jev is one of them - it returns typed decisions rather than text, and
-                                it is available on the Classify node instead.
+                                {t('settings.ai.nonChatModels', {
+                                    skipped: aiChoices.filter(m => !m.chat).length,
+                                    total: aiChoices.length,
+                                })}
                             </p>
                         )}
                         <input
                             type="password"
                             value={aiKey}
                             onChange={e => setAiKey(e.target.value)}
-                            placeholder="API key (sent as a Bearer token)"
+                            placeholder={t('settings.ai.apiKeyPlaceholder')}
                             disabled={!loaded || !workspace}
                             spellCheck={false}
                             autoComplete="off"
@@ -639,19 +607,15 @@ export function SettingsModal({
                                 onChange={() => setAiMode('local_qwen')}
                                 disabled={!loaded || !workspace}
                             />
-                            Bundled local Qwen via llama.cpp
+                            {t('settings.ai.modeLocal')}
                         </label>
                     </SettingsSection>
 
                     {isTauri() ? (
-                        <SettingsSection {...sectionState('signin')} title="Sign-in and lock">
-                            <p style={help}>
-                                Lock Otter ETL agent after a while without keyboard or mouse input. Locking keeps
-                                open pipelines, unsaved edits and running work as they are; the password
-                                opens it again. Applies immediately.
-                            </p>
+                        <SettingsSection {...sectionState('signin')} title={t('settings.sections.signin')}>
+                            <p style={help}>{t('settings.signin.help')}</p>
                             <label htmlFor="settings-idle-lock" style={{ fontSize: '0.9231rem', opacity: 0.8 }}>
-                                Lock when idle for
+                                {t('settings.signin.lockAfter')}
                             </label>
                             <select
                                 id="settings-idle-lock"
@@ -665,78 +629,67 @@ export function SettingsModal({
                             >
                                 {IDLE_LOCK_CHOICES.map(m => (
                                     <option key={m} value={m}>
-                                        {m === 0 ? 'Never' : `${m} minutes`}
+                                        {m === 0 ? t('settings.signin.never') : t('settings.signin.minutes', { n: m })}
                                     </option>
                                 ))}
                             </select>
                         </SettingsSection>
                     ) : null}
 
-                    <SettingsSection {...sectionState('toolbar')} title="Toolbar">
+                    <SettingsSection {...sectionState('toolbar')} title={t('settings.sections.toolbar')}>
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem', cursor: 'pointer' }}>
                             <input type="checkbox" checked={showDives} onChange={e => toggleDives(e.target.checked)} />
-                            Show the Dives button (live data views &amp; dashboards) in the toolbar
+                            {t('settings.toolbar.showDives')}
                         </label>
                         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '1rem', cursor: 'pointer', marginTop: 10 }}>
                             <input type="checkbox" checked={showMinimap} onChange={e => toggleMinimap(e.target.checked)} />
-                            Show the minimap in the corner of the canvas
+                            {t('settings.toolbar.showMinimap')}
                         </label>
                     </SettingsSection>
 
-                    <SettingsSection {...sectionState('security')} title="Security and privacy">
-                        <p style={help}>
-                            Where this workspace keeps credentials, and what is protected. The
-                            same facts are in the architecture guide, with citations.
-                        </p>
+                    <SettingsSection {...sectionState('security')} title={t('settings.sections.security')}>
+                        <p style={help}>{t('settings.security.help')}</p>
 
                         <div style={secTable}>
                             <div style={secRow}>
-                                <span style={secWhat}>Connection secrets</span>
-                                <span style={secGood}>AES-256-GCM, per value</span>
+                                <span style={secWhat}>{t('settings.security.connSecrets')}</span>
+                                <span style={secGood}>{t('settings.security.aesPerValue')}</span>
                             </div>
                             <div style={secRow}>
-                                <span style={secWhat}>Server API keys</span>
+                                <span style={secWhat}>{t('settings.security.serverKeys')}</span>
                                 <span style={secGood}>AES-256-GCM</span>
                             </div>
                             <div style={secRow}>
-                                <span style={secWhat}>Cached Git token</span>
+                                <span style={secWhat}>{t('settings.security.gitToken')}</span>
                                 <span style={secGood}>AES-256-GCM</span>
                             </div>
                             <div style={secRow}>
-                                <span style={secWhat}>The key that decrypts them</span>
-                                <span style={secWarn}>
-                                    plain file in .duckle/keys, beside what it protects
-                                </span>
+                                <span style={secWhat}>{t('settings.security.decryptKey')}</span>
+                                <span style={secWarn}>{t('settings.security.decryptKeyWhere')}</span>
                             </div>
                             <div style={secRow}>
-                                <span style={secWhat}>Context variables, even "secret" ones</span>
-                                <span style={secWarn}>plain text on disk</span>
+                                <span style={secWhat}>{t('settings.security.contextVars')}</span>
+                                <span style={secWarn}>{t('settings.security.plainOnDisk')}</span>
                             </div>
                             <div style={secRow}>
-                                <span style={secWhat}>AI key and proxy URL</span>
-                                <span style={secWarn}>plain text in .duckle/settings.json</span>
+                                <span style={secWhat}>{t('settings.security.aiKeyProxy')}</span>
+                                <span style={secWarn}>{t('settings.security.aiKeyProxyWhere')}</span>
                             </div>
                             <div style={secRow}>
-                                <span style={secWhat}>Values typed into a pipeline field</span>
-                                <span style={secWarn}>plain text; use ${'{'}ENV:NAME{'}'}</span>
+                                <span style={secWhat}>{t('settings.security.fieldValues')}</span>
+                                <span style={secWarn}>{t('settings.security.fieldValuesWhere')}</span>
                             </div>
                         </div>
 
-                        <p style={{ ...help, marginTop: 12 }}>
-                            Encryption here defends a stray file, a backup or a commit. It does
-                            not defend a copied workspace folder, because the key travels with
-                            it. Everything above is excluded from git automatically.
-                        </p>
+                        <p style={{ ...help, marginTop: 12 }}>{t('settings.security.encryptionNote')}</p>
 
                         <p style={{ ...help, marginTop: 12 }}>
-                            <b>No telemetry.</b> No analytics, usage reporting or crash reporting
-                            of any kind. One automatic outbound call exists: a version check
-                            against a public GitHub URL that sends nothing about you or your work.
+                            <Trans i18nKey="settings.security.telemetry" components={{ b: <b /> }} />
                         </p>
 
                         {workspace ? (
                             <p style={{ ...help, marginTop: 12, wordBreak: 'break-all' }}>
-                                This workspace: <code>{workspace}</code>
+                                {t('settings.security.thisWorkspace')} <code>{workspace}</code>
                             </p>
                         ) : null}
 
@@ -749,15 +702,12 @@ export function SettingsModal({
                                 )
                             }
                         >
-                            Read the architecture guide
+                            {t('settings.security.readGuide')}
                         </button>
                     </SettingsSection>
 
-                    <SettingsSection {...sectionState('tour')} title="First run">
-                        <p style={help}>
-                            Everything you were shown the first time you opened Otter ETL agent, available
-                            again whenever you want it.
-                        </p>
+                    <SettingsSection {...sectionState('tour')} title={t('settings.sections.tour')}>
+                        <p style={help}>{t('settings.tour.help')}</p>
                         <button
                             type="button"
                             style={btn}
@@ -769,13 +719,9 @@ export function SettingsModal({
                                 setTimeout(() => window.dispatchEvent(new Event('duckle:start-tour')), 250);
                             }}
                         >
-                            Replay guided tour
+                            {t('settings.tour.replay')}
                         </button>
-                        <p style={{ ...help, marginTop: 14 }}>
-                            The setup question asks whether you are working on your own machine or
-                            with a team on a server. Resetting it asks again; it changes nothing on
-                            its own, and any server you already connected to stays connected.
-                        </p>
+                        <p style={{ ...help, marginTop: 14 }}>{t('settings.tour.setupHelp')}</p>
                         <button
                             type="button"
                             style={btn}
@@ -787,17 +733,17 @@ export function SettingsModal({
                                 );
                             }}
                         >
-                            Run setup again
+                            {t('settings.tour.runSetup')}
                         </button>
                     </SettingsSection>
                 </div>
                 <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                     <button type="button" style={btn} onClick={onClose}>
-                        Close
+                        {t('common.close')}
                     </button>
                     <button type="button" style={primary} onClick={save} disabled={saving || !workspace}>
                         {saving ? <Loader2 size={14} className="spin" /> : saved ? <Check size={14} /> : null}
-                        {saved ? 'Saved' : 'Save'}
+                        {saved ? t('settings.saved') : t('common.save')}
                     </button>
                 </div>
             </div>

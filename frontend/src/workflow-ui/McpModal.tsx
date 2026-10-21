@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Trans, useTranslation } from 'react-i18next';
 import { Check, Clipboard, Loader2, X } from 'lucide-react';
 import { ClaudeIcon } from './ClaudeIcon';
 import { copyText } from '../tauri-io';
+import { isWebBackend } from '../web-fs';
 import {
     mcpConnectionInfo,
     connectClaudeCode,
@@ -13,9 +15,6 @@ import {
 
 type Busy = null | 'claude_code' | 'claude_desktop' | 'cursor';
 
-// A simple read-only prompt the user can paste to confirm the connection.
-const SAMPLE_PROMPT = 'Use duckle to list the available components';
-
 /**
  * Compact popup that connects Duckle to an MCP-capable AI (Claude Code,
  * Claude Desktop, Cursor, etc.). It bundles the duckle-mcp server with the
@@ -23,6 +22,9 @@ const SAMPLE_PROMPT = 'Use duckle to list the available components';
  * the raw command + config tucked into collapsible sections.
  */
 export function McpModal({ onClose }: { onClose: () => void }) {
+    const { t } = useTranslation();
+    // A simple read-only prompt the user can paste to confirm the connection.
+    const samplePrompt = t('mcp.samplePrompt');
     const [info, setInfo] = useState<McpConnInfo | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [copied, setCopied] = useState<string | null>(null);
@@ -31,11 +33,16 @@ export function McpModal({ onClose }: { onClose: () => void }) {
 
     useEffect(() => {
         let alive = true;
+        // The bridge refuses in the web editor with an English message; show the localized one.
+        if (isWebBackend()) {
+            setError(t('mcp.webUnavailable'));
+            return;
+        }
         mcpConnectionInfo()
             .then(i => { if (alive) setInfo(i); })
-            .catch(e => { if (alive) setError(String(e)); });
+            .catch(e => { if (alive) setError(e instanceof Error ? e.message : String(e)); });
         return () => { alive = false; };
-    }, []);
+    }, [t]);
 
     const copy = async (key: string, text: string) => {
         if (await copyText(text)) {
@@ -76,50 +83,42 @@ export function McpModal({ onClose }: { onClose: () => void }) {
 
     return createPortal(
         <div className="modal-backdrop" onClick={handleBackdrop}>
-            <div className="modal mcp-modal" role="dialog" aria-modal="true" aria-label="Connect to Claude">
+            <div className="modal mcp-modal" role="dialog" aria-modal="true" aria-label={t('mcp.short')}>
                 <div className="modal-header">
                     <div className="modal-title">
                         <ClaudeIcon size={16} className="claude-icon claude-icon-glow" />
-                        <span style={{ marginLeft: 8 }}>Connect Otter ETL agent to Claude</span>
+                        <span style={{ marginLeft: 8 }}>{t('mcp.title')}</span>
                     </div>
-                    <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+                    <button type="button" className="modal-close" onClick={onClose} aria-label={t('common.close')}>
                         <X size={16} />
                     </button>
                 </div>
 
                 <div className="modal-body">
                     {error ? (
-                        <p className="mcp-warn">Could not load MCP details: {error}</p>
+                        <p className="mcp-warn">{t('mcp.loadError', { error })}</p>
                     ) : !info ? (
-                        <p className="mcp-muted"><Loader2 size={14} className="spin" /> Preparing the MCP server…</p>
+                        <p className="mcp-muted"><Loader2 size={14} className="spin" /> {t('mcp.preparing')}</p>
                     ) : (
                         <>
-                            <p className="mcp-muted">
-                                Otter ETL agent ships a Model Context Protocol (MCP) server, so Claude can
-                                generate, validate, run and build your pipelines for you - right in
-                                this workspace.
-                            </p>
+                            <p className="mcp-muted">{t('mcp.intro')}</p>
 
                             {!info.bundled && (
                                 <p className="mcp-warn">
-                                    This build does not bundle the MCP server. Build it with
-                                    <code> cargo build -p duckle-mcp --release</code> and point your client at it.
+                                    <Trans i18nKey="mcp.notBundled" components={{ code: <code /> }} />
                                 </p>
                             )}
                             {info.bundled && !info.duckdbFound && (
-                                <p className="mcp-warn">
-                                    The DuckDB engine is not installed yet. The AI can still generate and
-                                    validate pipelines; install the engine (setup screen) to run or build them.
-                                </p>
+                                <p className="mcp-warn">{t('mcp.noDuckdb')}</p>
                             )}
 
                             {msg && (msg.ok ? (
                                 <div className="mcp-ok">
-                                    Added to {msg.label}. Quit and reopen {msg.label}, then ask Claude:
+                                    {t('mcp.added', { client: msg.label })}
                                     <div className="mcp-sample">
-                                        <code className="mcp-code">{SAMPLE_PROMPT}</code>
-                                        <button type="button" className="btn mcp-copy" onClick={() => void copy('sample', SAMPLE_PROMPT)}>
-                                            {copied === 'sample' ? <><Check size={12} /> Copied</> : <><Clipboard size={12} /> Copy</>}
+                                        <code className="mcp-code">{samplePrompt}</code>
+                                        <button type="button" className="btn mcp-copy" onClick={() => void copy('sample', samplePrompt)}>
+                                            {copied === 'sample' ? <><Check size={12} /> {t('mcp.copied')}</> : <><Clipboard size={12} /> {t('mcp.copy')}</>}
                                         </button>
                                     </div>
                                 </div>
@@ -138,22 +137,22 @@ export function McpModal({ onClose }: { onClose: () => void }) {
                                         disabled={!info.bundled || busy !== null}
                                     >
                                         {busy === 'claude_code'
-                                            ? <><Loader2 size={13} className="spin" /> Connecting…</>
-                                            : 'Connect to Claude Code'}
+                                            ? <><Loader2 size={13} className="spin" /> {t('mcp.connecting')}</>
+                                            : t('mcp.connectClaudeCode')}
                                     </button>
                                     <button type="button" className="btn mcp-copy" onClick={() => void copy('cmd', info.claudeCommand)}>
-                                        {copied === 'cmd' ? <><Check size={12} /> Copied</> : <><Clipboard size={12} /> Copy command</>}
+                                        {copied === 'cmd' ? <><Check size={12} /> {t('mcp.copied')}</> : <><Clipboard size={12} /> {t('mcp.copyCommand')}</>}
                                     </button>
                                 </div>
                                 <details className="mcp-disclose">
-                                    <summary>Show command</summary>
+                                    <summary>{t('mcp.showCommand')}</summary>
                                     <code className="mcp-code">{info.claudeCommand}</code>
                                 </details>
                             </div>
 
                             {/* Claude Desktop / Cursor / other */}
                             <div className="mcp-section">
-                                <div className="mcp-section-title">Claude Desktop, Cursor, or any MCP client</div>
+                                <div className="mcp-section-title">{t('mcp.otherClients')}</div>
                                 <div className="mcp-actions">
                                     <button
                                         type="button"
@@ -162,8 +161,8 @@ export function McpModal({ onClose }: { onClose: () => void }) {
                                         disabled={!info.bundled || busy !== null}
                                     >
                                         {busy === 'claude_desktop'
-                                            ? <><Loader2 size={13} className="spin" /> Adding…</>
-                                            : 'Add to Claude Desktop'}
+                                            ? <><Loader2 size={13} className="spin" /> {t('mcp.adding')}</>
+                                            : t('mcp.addTo', { client: 'Claude Desktop' })}
                                     </button>
                                     <button
                                         type="button"
@@ -172,32 +171,32 @@ export function McpModal({ onClose }: { onClose: () => void }) {
                                         disabled={!info.bundled || busy !== null}
                                     >
                                         {busy === 'cursor'
-                                            ? <><Loader2 size={13} className="spin" /> Adding…</>
-                                            : 'Add to Cursor'}
+                                            ? <><Loader2 size={13} className="spin" /> {t('mcp.adding')}</>
+                                            : t('mcp.addTo', { client: 'Cursor' })}
                                     </button>
                                     <button type="button" className="btn mcp-copy" onClick={() => void copy('json', info.configJson)}>
-                                        {copied === 'json' ? <><Check size={12} /> Copied</> : <><Clipboard size={12} /> Copy config</>}
+                                        {copied === 'json' ? <><Check size={12} /> {t('mcp.copied')}</> : <><Clipboard size={12} /> {t('mcp.copyConfig')}</>}
                                     </button>
                                 </div>
-                                <p className="mcp-hint">Adds a "duckle" entry to the client's config. For any other client, copy the config.</p>
+                                <p className="mcp-hint">{t('mcp.hint')}</p>
                                 <details className="mcp-disclose">
-                                    <summary>Show config</summary>
+                                    <summary>{t('mcp.showConfig')}</summary>
                                     <pre className="mcp-code mcp-pre">{info.configJson}</pre>
                                 </details>
                             </div>
 
                             <details className="mcp-paths">
-                                <summary>Resolved paths</summary>
-                                <div className="mcp-kv"><span>MCP server</span><code>{info.mcpPath || '(not bundled)'}</code></div>
-                                <div className="mcp-kv"><span>DuckDB</span><code>{info.duckdbPath || '(not installed)'}</code></div>
-                                <div className="mcp-kv"><span>Runner</span><code>{info.runnerPath || '(not bundled)'}</code></div>
+                                <summary>{t('mcp.resolvedPaths')}</summary>
+                                <div className="mcp-kv"><span>{t('mcp.mcpServer')}</span><code>{info.mcpPath || t('mcp.pathNotBundled')}</code></div>
+                                <div className="mcp-kv"><span>DuckDB</span><code>{info.duckdbPath || t('mcp.pathNotInstalled')}</code></div>
+                                <div className="mcp-kv"><span>{t('mcp.runner')}</span><code>{info.runnerPath || t('mcp.pathNotBundled')}</code></div>
                             </details>
                         </>
                     )}
                 </div>
 
                 <div className="modal-footer">
-                    <button type="button" className="btn" onClick={onClose}>Done</button>
+                    <button type="button" className="btn" onClick={onClose}>{t('mcp.done')}</button>
                 </div>
             </div>
         </div>,
