@@ -45,6 +45,10 @@ Key concepts:
 | Right tool strip | Far right | **Properties** (edit the selected node), **Agent** (AI assistant), **Guide** (this guide) |
 | Bottom panel | Bottom | **Problems** (validation results), **Output** (rows and timing per node), **Console** (execution log) |
 
+![Window overview (numbers map to the table below)](./images/overview.webp)
+
+> The numbered callouts map to the table above: 1 Top bar, 2 Pipeline tab bar, 3 Editor views, 4 Left sidebar, 5 Canvas, 6 Right tool strip, 7 Bottom panel.
+
 ### 2.2 Core features
 
 - **Sources (read)**: files such as CSV, Excel, JSON and Parquet; relational databases such as MySQL, PostgreSQL, SQL Server, Oracle and SQLite; plus cloud warehouses, object storage, REST APIs and hundreds more.
@@ -90,6 +94,8 @@ Key concepts:
 2. Pick a saved connection, or click **+ New connection** and enter the host, port, database and credentials. Click **Test connection** to confirm it works, then **Save and use**.
 3. Choose what the connection is for: **Source database** (the Agent reads from it), **Target database** (the Agent writes to it) or **Both**.
 
+![Pick data sources: 1 click the Data sources button below the input, 2 choose a database type from the list](./images/agent-datasource.webp)
+
 > Connection details are sent to the Agent with your message, but **passwords are never sent to the model**.
 
 **Step 4: Describe what you need and send**
@@ -134,6 +140,8 @@ Click **+** in the tab bar (or right-click Pipelines in the **Project** sidebar 
 | Sample · Join + Group By | Two CSVs joined and aggregated |
 | From SQL | Paste a SELECT statement and get the matching nodes |
 
+![Create a new pipeline: enter a name and choose a template](./images/new-pipeline.webp)
+
 > Pipeline names are converted to lowercase letters, digits, underscores and hyphens.
 
 **Step 2: Add a source**
@@ -144,6 +152,10 @@ Click **+** in the tab bar (or right-click Pipelines in the **Project** sidebar 
    - Databases: pick a saved **connection**, then enter a table name or a query.
 3. On the **Schema** tab, click **Autodetect from source** to read columns and types; check sample rows on the **Preview** tab.
 
+![Components panel: search and add a source component](./images/palette.webp)
+![Schema tab: autodetect columns and types from the source](./images/autodetect.webp)
+![Preview tab: inspect sample rows](./images/preview.webp)
+
 > No saved connection yet? Create one from the **Data sources** menu in the Agent input; it then appears here.
 
 **Step 3: Add transforms and checks**
@@ -152,6 +164,8 @@ Click **+** in the tab bar (or right-click Pipelines in the **Project** sidebar 
 2. **Wire them**: drag from the output port on the right of the upstream node to the input port on the left of the downstream node.
 3. Select a node and configure it in **Properties**. For multi-table joins or complex mappings, click **Open visual mapper**.
 4. To validate data, drag in a check from **Data Quality**. Failing rows leave through the **reject** port; connect a sink to it to keep them for review.
+
+![Canvas wiring: connect an upstream output port to a downstream input port](./images/connect.webp)
 
 **Step 4: Add a sink**
 
@@ -163,6 +177,8 @@ Drag the target component from **Sinks**, connect it to the last transform, fill
 2. Click **Run** (`F5`). Nodes light up in execution order and show their row counts; click **Stop** (`F6`) to cancel a run.
 3. See rows written and time taken per node under **Output**, and the detailed log under **Console**.
 4. Click **Save** (`Ctrl+S`).
+
+![After a successful run: review per-node rows and timing in Output](./images/run-result.webp)
 
 > Tip: **Auto-layout** in the canvas's bottom-left corner tidies the canvas in one click.
 
@@ -180,6 +196,9 @@ When something goes wrong, work through these in order:
 3. **The data**: select a node and look at **Properties → Preview**, walking upstream one node at a time.
 4. **The SQL**: switch to the **Plan** view to see the generated SQL, and run it in your database client to check it on its own.
 5. **Ask the Agent**: send it the error, for example "running xxx failed, please investigate". The Agent can read run logs, check a node's SQL and suggest fixes.
+
+![Configuration issue example: the Problems panel reports missing required fields and validation errors](./images/problems.webp)
+![Run failure example: failed node state plus Console logs help locate the root cause](./images/run-failed.webp)
 
 ### 4.2 Common problems
 
