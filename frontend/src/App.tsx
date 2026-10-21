@@ -123,6 +123,7 @@ import type { DuckleNodeData } from './pipeline-types';
 import { flowTypeForComponent, normalizePipelineForCanvas } from './canvas/normalize-pipeline';
 import {
     DUCKIE_ENABLED,
+    TOPBAR_BRAND_BYLINE,
     TOPBAR_DIVES,
     TOPBAR_ENGINE_SELECTOR,
     TOPBAR_GIT,
@@ -2517,7 +2518,7 @@ export default function App() {
                     <DuckleLogo size={26} className="brand-logo" />
                     <span className="brand-text">
                         <span className="brand-name">Otter ETL agent</span>
-                        <span className="brand-by">by SlothFlowLabs</span>
+                        {TOPBAR_BRAND_BYLINE ? <span className="brand-by">by SlothFlowLabs</span> : null}
                     </span>
                 </div>
                 <div className="topbar-sep" aria-hidden="true" />
@@ -2828,7 +2829,6 @@ export default function App() {
                         onToggleLive={handleToggleLive}
                         onSave={handleSave}
                         onValidate={handleValidate}
-                        onAutoLayout={handleAutoLayout}
                         onCopySql={handleCopySql}
                         onExportJson={handleExportJson}
                         onDeploy={

@@ -18,3 +18,15 @@ export const TOPBAR_TRUST = false;
 export const TOPBAR_GIT = false;
 /** Execution engine picker (DuckDB, ...). The current engine still applies. */
 export const TOPBAR_ENGINE_SELECTOR = false;
+/** "by SlothFlowLabs" under the product name in the top bar. */
+export const TOPBAR_BRAND_BYLINE = false;
+/** Home button in the pipeline toolbar. Home still opens at startup if it is
+ *  set to; the guided tour skips its Home steps while the button is hidden. */
+export const TOOLBAR_HOME = false;
+/** Live preview (lightning) button in the pipeline toolbar. Live mode starts
+ *  off on every launch, so hiding the button leaves it off. */
+export const TOOLBAR_LIVE_PREVIEW = false;
+/** "Deploy to a server…" in the toolbar's More menu. */
+export const MORE_MENU_DEPLOY = false;
+/** "Import Talend job…" in the toolbar's More menu. */
+export const MORE_MENU_IMPORT_TALEND = false;

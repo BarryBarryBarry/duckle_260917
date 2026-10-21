@@ -5,7 +5,6 @@ import {
     Clipboard,
     Download,
     FileCode,
-    LayoutGrid,
     MoreHorizontal,
     Play,
     Plus,
@@ -21,6 +20,7 @@ import {
     ArrowRightToLine,
 } from 'lucide-react';
 import { useContextMenu, type MenuItem } from './ContextMenu';
+import { MORE_MENU_DEPLOY, MORE_MENU_IMPORT_TALEND, TOOLBAR_HOME, TOOLBAR_LIVE_PREVIEW } from '../features';
 
 export type Job = {
     id: string;
@@ -43,7 +43,6 @@ type Props = {
     onToggleLive: () => void;
     onSave: () => void;
     onValidate: () => void;
-    onAutoLayout: () => void;
     onCopySql: () => void;
     onExportJson: () => void;
     /** Undefined in the web editor: deploying goes through a desktop-only command. */
@@ -70,7 +69,6 @@ export default function EditorHeader({
     onToggleLive,
     onSave,
     onValidate,
-    onAutoLayout,
     onCopySql,
     onExportJson,
     onDeploy,
@@ -199,17 +197,21 @@ export default function EditorHeader({
             </div>
 
             <div className="toolbar">
-                <button
-                    type="button"
-                    className="toolbar-icon-button"
-                    data-tour="home"
-                    onClick={onGoHome}
-                    title={t('launcher.goHome', 'Home')}
-                    aria-label={t('launcher.goHome', 'Home')}
-                >
-                    <Home size={14} />
-                </button>
-                <div className="toolbar-sep" />
+                {TOOLBAR_HOME ? (
+                    <>
+                        <button
+                            type="button"
+                            className="toolbar-icon-button"
+                            data-tour="home"
+                            onClick={onGoHome}
+                            title={t('launcher.goHome', 'Home')}
+                            aria-label={t('launcher.goHome', 'Home')}
+                        >
+                            <Home size={14} />
+                        </button>
+                        <div className="toolbar-sep" />
+                    </>
+                ) : null}
                 {isRunning ? (
                     <button
                         type="button"
@@ -233,19 +235,19 @@ export default function EditorHeader({
                     </button>
                 )}
 
-                <button
-                    type="button"
-                    data-tour="live"
-                    className={
-                        'toolbar-icon-button' + (liveMode ? ' is-active' : '')
-                    }
-                    onClick={onToggleLive}
-                    title={liveMode ? t('header.liveOnTooltip') : t('header.liveTooltip')}
-                    aria-label={t('header.live')}
-                    aria-pressed={liveMode}
-                >
-                    <Zap size={14} />
-                </button>
+                {TOOLBAR_LIVE_PREVIEW ? (
+                    <button
+                        type="button"
+                        data-tour="live"
+                        className={'toolbar-icon-button' + (liveMode ? ' is-active' : '')}
+                        onClick={onToggleLive}
+                        title={liveMode ? t('header.liveOnTooltip') : t('header.liveTooltip')}
+                        aria-label={t('header.live')}
+                        aria-pressed={liveMode}
+                    >
+                        <Zap size={14} />
+                    </button>
+                ) : null}
 
                 <div className="toolbar-sep" />
 
@@ -268,16 +270,6 @@ export default function EditorHeader({
                     aria-label={t('header.validate')}
                 >
                     <CircleCheck size={14} />
-                </button>
-
-                <button
-                    type="button"
-                    className="toolbar-icon-button"
-                    onClick={onAutoLayout}
-                    title={t('header.autoLayout')}
-                    aria-label={t('header.autoLayout')}
-                >
-                    <LayoutGrid size={14} />
                 </button>
 
                 <div className="toolbar-more" ref={moreRef}>
@@ -323,7 +315,7 @@ export default function EditorHeader({
                                     </div>
                                 </div>
                             </button>
-                            {onDeploy ? (
+                            {MORE_MENU_DEPLOY && onDeploy ? (
                                 <button
                                     type="button"
                                     role="menuitem"
@@ -370,7 +362,7 @@ export default function EditorHeader({
                                     </div>
                                 </div>
                             </button>
-                            {onImportJob ? (
+                            {MORE_MENU_IMPORT_TALEND && onImportJob ? (
                                 <button
                                     type="button"
                                     role="menuitem"

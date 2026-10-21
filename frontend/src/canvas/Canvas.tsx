@@ -675,6 +675,13 @@ function CanvasInner({
                         {showMinimap ? <MiniMap pannable zoomable /> : null}
                         <Controls>
                             <ControlButton
+                                onClick={() => onPaneAction('auto-layout')}
+                                title={t('header.autoLayout')}
+                                aria-label={t('header.autoLayout')}
+                            >
+                                <LayoutGrid />
+                            </ControlButton>
+                            <ControlButton
                                 onClick={() => onPaneAction('toggle-layout-direction')}
                                 title={directionToggleLabel}
                                 aria-label={directionToggleLabel}

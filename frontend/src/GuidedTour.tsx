@@ -119,6 +119,7 @@ const ALL_STEPS: Step[] = [
         title: 'Live preview',
         body: 'Turn this on and selecting a node, or editing its settings, runs the pipeline up to that node and fills its Preview tab automatically. You see the rows without pressing Run. It stays quiet while the pipeline has errors or a run is already going.',
         placement: 'bottom',
+        requireAnchor: true,
     },
     {
         sel: '[data-tour="bottom"]',

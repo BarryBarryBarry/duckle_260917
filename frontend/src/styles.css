@@ -440,6 +440,7 @@ textarea:focus-visible {
 }
 .brand-name {
     font-weight: 700;
+    white-space: nowrap;
 }
 .brand-by {
     font-family: 'Segoe Script', 'Brush Script MT', cursive;

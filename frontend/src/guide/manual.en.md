@@ -38,10 +38,10 @@ Key concepts:
 | Area | Where | What it does |
 |---|---|---|
 | Top bar | Very top | Settings (gear icon), UI language, account, light / dark theme |
-| Pipeline tab bar | Below the top bar | Open pipeline tabs, **+** new pipeline, Home, **Run**, Live preview (lightning icon), Save, Validate, Auto-layout, More (**…**) |
+| Pipeline tab bar | Below the top bar | Open pipeline tabs, **+** new pipeline, **Run**, Save, Validate, More (**…**) |
 | Editor views | Below the tab bar | **Canvas** (build), **Plan** (generated SQL), **Run** (the current run), **History** (past runs) |
 | Left sidebar | Left | **Project**: pipelines, connections, contexts and more in the workspace; **Components**: everything you can drag onto the canvas |
-| Canvas | Center | Place nodes and draw edges; a minimap sits in the bottom-right corner |
+| Canvas | Center | Place nodes and draw edges; zoom, Auto-layout and layout-direction buttons sit in the bottom-left corner, a minimap in the bottom-right |
 | Right tool strip | Far right | **Properties** (edit the selected node), **Agent** (AI assistant), **Guide** (this guide) |
 | Bottom panel | Bottom | **Problems** (validation results), **Output** (rows and timing per node), **Console** (execution log) |
 
@@ -164,7 +164,7 @@ Drag the target component from **Sinks**, connect it to the last transform, fill
 3. See rows written and time taken per node under **Output**, and the detailed log under **Console**.
 4. Click **Save** (`Ctrl+S`).
 
-> Tip: turn on **Live preview** (the lightning icon) and selecting or editing a node runs the pipeline up to it, so you see results as you work. **Auto-layout** tidies the canvas in one click.
+> Tip: **Auto-layout** in the canvas's bottom-left corner tidies the canvas in one click.
 
 ## 4. Troubleshooting
 
