@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import type { RepoItem, RepoItemType } from '../repo-types';
 import { useContextMenu, type MenuItem } from './ContextMenu';
+import { PROJECT_TREE_IMPORT_TALEND } from '../features';
 
 const ICON_SIZE = 14;
 
@@ -583,7 +584,7 @@ export default function ProjectTree(props: Props) {
                 >
                     <FolderPlus size={13} /> Folder
                 </button>
-                {onImportJob ? (
+                {PROJECT_TREE_IMPORT_TALEND && onImportJob ? (
                     <button
                         type="button"
                         className="repo-action-button"

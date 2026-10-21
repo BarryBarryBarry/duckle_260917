@@ -30,3 +30,5 @@ export const TOOLBAR_LIVE_PREVIEW = false;
 export const MORE_MENU_DEPLOY = false;
 /** "Import Talend job…" in the toolbar's More menu. */
 export const MORE_MENU_IMPORT_TALEND = false;
+/** "Talend" import button above the project tree. */
+export const PROJECT_TREE_IMPORT_TALEND = false;
