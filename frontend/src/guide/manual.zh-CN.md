@@ -60,7 +60,7 @@
 - **Agent 智能助手**：用自然语言描述需求，自动生成、校验、运行、排查 Pipeline，详见 [3.1](#31-使用-agent-完成-pipeline)。
 - **预览与 SQL 透明**：每个节点都可以预览样本数据；**计划**视图展示整条 Pipeline 编译出的 SQL，可在 **…** 菜单中复制或导出。
 - **校验与运行记录**：编辑时实时检查必填项、悬空连线和循环；每次运行都会记录在**历史记录**中。
-- **调度与部署**：在主页中可以为 Pipeline 设置定时调度（Schedules）、按顺序编排多个 Pipeline（Plans），或打包部署到服务器（Build and Deploy）。
+- **调度与部署**：在主页中可以为 Pipeline 设置定时调度（Schedules）、按顺序编排多个 Pipeline（Plans），或打包部署到服务器（Build and Deploy）；当前 Pipeline 也可以通过标签栏 **…** → **Deploy to a server…** 直接部署到服务器。
 
 ## 3. 简易操作流程
 

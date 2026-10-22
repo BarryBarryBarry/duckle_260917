@@ -27,7 +27,7 @@ export const TOOLBAR_HOME = false;
  *  off on every launch, so hiding the button leaves it off. */
 export const TOOLBAR_LIVE_PREVIEW = false;
 /** "Deploy to a server…" in the toolbar's More menu. */
-export const MORE_MENU_DEPLOY = false;
+export const MORE_MENU_DEPLOY = true;
 /** "Import Talend job…" in the toolbar's More menu. */
 export const MORE_MENU_IMPORT_TALEND = false;
 /** "Talend" import button above the project tree. */

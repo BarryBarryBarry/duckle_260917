@@ -60,7 +60,7 @@ Key concepts:
 - **Agent**: describe what you need in plain language and the Agent builds, validates, runs and troubleshoots the pipeline. See [3.1](#31-build-a-pipeline-with-the-agent).
 - **Preview and transparent SQL**: every node can preview sample rows; the **Plan** view shows the SQL the whole pipeline compiles to, which you can copy or export from the **…** menu.
 - **Validation and run history**: required fields, dangling edges and cycles are checked as you edit; every run is recorded in **History**.
-- **Scheduling and deployment**: from Home you can schedule a pipeline (Schedules), run several pipelines in order (Plans), or package one for a server (Build and Deploy).
+- **Scheduling and deployment**: from Home you can schedule a pipeline (Schedules), run several pipelines in order (Plans), or package one for a server (Build and Deploy); the open pipeline can also go straight to a server from **…** → **Deploy to a server…** in the tab bar.
 
 ## 3. Quick start
 
