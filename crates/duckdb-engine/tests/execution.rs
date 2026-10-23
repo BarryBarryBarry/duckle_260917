@@ -5152,18 +5152,20 @@ fn pg_upsert_is_all_or_nothing() {
          CALL postgres_execute('d', 'INSERT INTO public.{table} VALUES (1, ''alice''), (2, ''bob'')');"
     ));
 
-    // Row 1 is flagged for deletion; row 3 is new and has no name.
+    // Row 1 is flagged for deletion; row 3 is new and has no name. The
+    // upstream node's name is this test's own, so its staging table can be
+    // looked for while other tests are upserting beside it.
     let csv = write_file(tmp.path(), "in.csv", "id,name,op\n1,,delete\n3,,\n");
     let r = engine.execute_pipeline(&doc(
         json!([
-            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("atomic_src", "src.csv", json!({ "path": csv, "hasHeader": true })),
             node("w", "snk.postgres", json!({
                 "host": &host, "port": port, "database": &db, "user": &user, "password": &pass,
                 "schemaName": "public", "tableName": &table, "mode": "upsert",
                 "conflictColumns": ["id"], "deleteColumn": "op"
             })),
         ]),
-        json!([main_edge("e", "s", "w")]),
+        json!([main_edge("e", "atomic_src", "w")]),
     ));
     assert_ne!(r.status, "ok", "the insert breaks NOT NULL, so the upsert must fail");
     assert_eq!(
@@ -5171,6 +5173,129 @@ fn pg_upsert_is_all_or_nothing() {
         "1|2",
         "the delete was kept although the insert failed"
     );
+    assert_eq!(
+        pg("SELECT count(*) FROM d.information_schema.tables WHERE table_name LIKE 'duckle_upsert_%atomic_src'"),
+        "0",
+        "the failed upsert left its staging table behind"
+    );
+}
+
+/// An upstream node named in capitals, as an imported `tMap_1` is. DuckDB
+/// creates the staging table with its name quoted, so the capitals stay, and
+/// the upsert itself names it unquoted, which Postgres folds to lower case.
+#[test]
+fn pg_upsert_from_a_node_named_in_capitals() {
+    let engine = engine_or_skip!();
+    let Some((host, port, db, user, pass)) = pg_env() else {
+        eprintln!("skipping: set DUCKLE_PG_HOST to run against PostgreSQL");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let table = format!("duckle_caps_{}", uniq_suffix());
+    let bin = std::env::var("DUCKLE_DUCKDB_BIN").expect("DUCKLE_DUCKDB_BIN set");
+    let pg = |sql: &str| {
+        let out = std::process::Command::new(&bin)
+            .env("DUCKDB_AGENT_MODE", "0")
+            .args([":memory:", "-csv", "-noheader", "-c"])
+            .arg(format!(
+                "LOAD postgres; ATTACH 'host={host} port={port} dbname={db} user={user} password={pass}' AS d (TYPE POSTGRES); {sql}"
+            ))
+            .output()
+            .expect("duckdb runs");
+        assert!(out.status.success(), "{sql}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    pg(&format!(
+        "CALL postgres_execute('d', 'CREATE TABLE public.{table} (id INT PRIMARY KEY, name TEXT)'); \
+         CALL postgres_execute('d', 'INSERT INTO public.{table} VALUES (1, ''alice'')');"
+    ));
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,ada\n2,bob\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("Src_A", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("w", "snk.postgres", json!({
+                "host": &host, "port": port, "database": &db, "user": &user, "password": &pass,
+                "schemaName": "public", "tableName": &table, "mode": "upsert",
+                "conflictColumns": ["id"]
+            })),
+        ]),
+        json!([main_edge("e", "Src_A", "w")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        pg(&format!("SELECT string_agg(id || ':' || name, '|' ORDER BY id) FROM d.public.{table}")),
+        "1:ada|2:bob"
+    );
+}
+
+/// Upserts running at once into one Postgres database each keep their own
+/// rows. An upsert stages its rows in a table in the TARGET database, and that
+/// table was named after the upstream node alone, so every pipeline whose
+/// upstream node is `s` - two runs of one pipeline, or each child of a queued
+/// `ctl.foreach` on a pool of workers - used the same one. One run dropped and
+/// refilled it while another was about to copy it into its own table, and the
+/// second reported ok over another run's rows, or over none.
+#[test]
+fn pg_upserts_at_once_keep_their_own_rows() {
+    let _engine = engine_or_skip!();
+    let Some((host, port, db, user, pass)) = pg_env() else {
+        eprintln!("skipping: set DUCKLE_PG_HOST to run against PostgreSQL");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let bin = std::env::var("DUCKLE_DUCKDB_BIN").expect("DUCKLE_DUCKDB_BIN set");
+    let pg = |sql: &str| {
+        let out = std::process::Command::new(&bin)
+            .env("DUCKDB_AGENT_MODE", "0")
+            .args([":memory:", "-csv", "-noheader", "-c"])
+            .arg(format!(
+                "LOAD postgres; ATTACH 'host={host} port={port} dbname={db} user={user} password={pass}' AS d (TYPE POSTGRES); {sql}"
+            ))
+            .output()
+            .expect("duckdb runs");
+        assert!(out.status.success(), "{sql}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let tag = uniq_suffix();
+    let tables: Vec<String> = (0..6).map(|i| format!("duckle_race_{tag}_{i}")).collect();
+    for t in &tables {
+        pg(&format!(
+            "CALL postgres_execute('d', 'CREATE TABLE public.{t} (id INT PRIMARY KEY, who INT NOT NULL)');"
+        ));
+    }
+
+    // Each run upserts ids 1 to 3, every row signed with the run's number.
+    let runs: Vec<_> = tables
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let csv = write_file(tmp.path(), &format!("in{i}.csv"), &format!("id,who\n1,{i}\n2,{i}\n3,{i}\n"));
+            let d = doc(
+                json!([
+                    node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+                    node("w", "snk.postgres", json!({
+                        "host": &host, "port": port, "database": &db, "user": &user, "password": &pass,
+                        "schemaName": "public", "tableName": t, "mode": "upsert",
+                        "conflictColumns": ["id"]
+                    })),
+                ]),
+                json!([main_edge("e", "s", "w")]),
+            );
+            let bin = bin.clone();
+            std::thread::spawn(move || DuckdbEngine::new(bin.into()).execute_pipeline(&d))
+        })
+        .collect();
+    for r in runs {
+        let r = r.join().unwrap();
+        assert_eq!(r.status, "ok", "{:?}", r.error);
+    }
+    for (i, t) in tables.iter().enumerate() {
+        assert_eq!(
+            pg(&format!("SELECT string_agg(id || ':' || who, '|' ORDER BY id) FROM d.public.{t}")),
+            format!("1:{i}|2:{i}|3:{i}"),
+            "{t} holds another run's rows, or none"
+        );
+    }
 }
 
 #[test]
