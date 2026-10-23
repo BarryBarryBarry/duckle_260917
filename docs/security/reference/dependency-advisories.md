@@ -53,18 +53,21 @@ private-key operations.
 
 ---
 
-## RUSTSEC-2026-0049, -0098, -0099, -0104 - `rustls-webpki` 0.102.8
+## RUSTSEC-2026-0049, -0098, -0099, -0104, -0382 - `rustls-webpki` 0.102.8
 
-**Fix available:** for the crate, yes (0.103.10+). For Duckle, no - see below.
+**Fix available:** for the crate, yes (0.103.10+, and 0.103.16 for -0382). For
+Duckle, no - see below.
 
 Four certificate-path-validation defects: name constraints incorrectly accepted
 for URI names, name constraints accepted for certificates asserting a CN, CRLs
 not treated as authoritative for their distribution point, and a reachable panic
-parsing a certificate revocation list.
+parsing a certificate revocation list. A fifth (-0382, 2026-10-20): a path
+through one of the distrusted emSign intermediates, whose private keys are now
+public, may be accepted.
 
 **Reachability: narrow, and it is not Duckle's own TLS.** Duckle's own TLS - the
 console, HTTPS sources and sinks, the updater - resolves to `rustls-webpki`
-0.103.15, which is unaffected. The vulnerable copy arrives through one
+0.103.16, which is unaffected by all five. The vulnerable copy arrives through one
 connector:
 
 | Path | Reached when |
@@ -78,14 +81,40 @@ that copy.
 So the exposure is: a deployment that uses the IMAP connector, and whose
 certificate chain runs through a CA that issues name constraints, could have a
 chain accepted that a correct implementation would reject. That needs an
-attacker positioned to present such a chain.
+attacker positioned to present such a chain. -0382 is the widest of the five:
+with the emSign intermediates' keys public, an attacker on the network path to
+the mail server could present a chain for it and receive the IMAP login.
 
 **No upgrade exists to take.** `imap` 3.0.0-alpha.15 is the newest published
 version and pins the older `rustls` line. Forcing a newer `rustls` is not
 possible across that semver boundary.
 
-**Removed when:** `imap` publishes a release built on `rustls` 0.23 or later.
-It is watched at the review date above.
+**Removed when:** `imap` publishes a release built on `rustls` 0.23 or later,
+or Duckle opens the IMAP TLS connection itself: `imap::Client::new` takes any
+stream, so the connector can hand it one from Duckle's own `rustls` 0.23 and
+drop imap's `rustls-tls` feature, which takes this copy out of the tree. It is
+watched at the review date above.
+
+---
+
+## RUSTSEC-2026-0346, -0349 - `rustls` 0.22.4
+
+**Fix available:** for the crate, yes (0.23.46). For Duckle, no: the same
+`imap` 3.0.0-alpha.15 → `rustls-connector` 0.19 path as above pins 0.22.
+Duckle's own TLS is on 0.23.46.
+
+**Reachability: none found.**
+
+- **-0346**, `Debug` output of a TLS 1.2 or 1.3 client session value includes
+  its master secret or resumption key. It needs a custom `ClientSessionStore`
+  that formats those values with `Debug`. `rustls-connector` uses rustls's own
+  store, whose `Debug` is redacted, and the IMAP connector formats only error
+  values, with `Display`.
+- **-0349**, a forged ServerHello makes later handshakes to the same name skip
+  the post-quantum hybrid group. `rustls` 0.22 offers no post-quantum group at
+  all, so an IMAP handshake through it is classical whether attacked or not.
+
+**Removed when:** as for `rustls-webpki` 0.102.8 above; both leave together.
 
 ---
 

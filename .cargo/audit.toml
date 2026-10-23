@@ -27,12 +27,24 @@ ignore = [
     # 0.22), the newest published version, so there is no upgrade to take.
     # tiberius was the other path until 0.13 moved SQL Server to rustls 0.23.
     # Duckle's own TLS - the console, the HTTP sources, the updater - is on
-    # rustls-webpki 0.103.15, which is unaffected.
-    # Remove when: imap publishes a release on rustls 0.23+.
+    # rustls-webpki 0.103.16, which is unaffected.
+    # Remove when: imap publishes a release on rustls 0.23+, or Duckle opens
+    # the IMAP TLS connection itself and drops imap's rustls-tls feature.
     "RUSTSEC-2026-0049",
     "RUSTSEC-2026-0098",
     "RUSTSEC-2026-0099",
     "RUSTSEC-2026-0104",
+    # Distrusted emSign intermediates (2026-10-20). The same imap-only copy;
+    # Duckle's own TLS is on 0.103.16, which rejects them.
+    "RUSTSEC-2026-0382",
+
+    # rustls 0.22.4 - the same imap path pins it; Duckle's own TLS is 0.23.46.
+    # NOT REACHABLE: -0346 needs a custom ClientSessionStore that Debug-prints
+    # session values (rustls-connector uses the redacted built-in store);
+    # -0349 strips a post-quantum key share, which rustls 0.22 never offers.
+    # Remove when: as for rustls-webpki 0.102.8 above.
+    "RUSTSEC-2026-0346",
+    "RUSTSEC-2026-0349",
 
     # quick-xml 0.40 - denial of service on hostile XML.
     # Duckle's own XML reading is on quick-xml 0.42, which is past the fix. This
