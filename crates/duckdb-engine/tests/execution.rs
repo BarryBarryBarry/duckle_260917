@@ -3512,6 +3512,32 @@ fn a_truncating_sink_leaves_its_target_alone_when_nothing_arrives() {
     );
 }
 
+/// DuckDB 2.0 writes a new file in a format no 1.x can open. A file the sink
+/// creates stays readable by DuckDB 1.5: the CLI is started with
+/// `-storage-version v1.5.0` (for #150), which sets the version every database
+/// that process creates is written in, the sink's target included.
+#[test]
+fn a_duckdb_file_the_sink_creates_opens_in_duckdb_1_5() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("for_1_5.duckdb").to_string_lossy().replace('\\', "/");
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "snk.duckdb", json!({ "database": target, "tableName": "t" })),
+        ]),
+        json!([main_edge("e", "s", "k")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let version = scalar_string(&format!(
+        "ATTACH '{target}' AS d (READ_ONLY); \
+         SELECT tags['storage_version'] AS v FROM duckdb_databases() WHERE database_name = 'd'"
+    ));
+    assert_eq!(version, "v1.5.0+", "the file's storage version");
+}
+
 #[test]
 fn normalize_explodes_delimited_column() {
     let engine = engine_or_skip!();

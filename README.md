@@ -3935,7 +3935,7 @@ Duckle pins DuckDB 2.0.0 (LTS). Most of what changes is invisible, but these you
 
 | What | On DuckDB 2.0 |
 |---|---|
-| A **new** `.duckdb` file | Written in the 2.0 storage format, which DuckDB 1.x cannot open. A file that already exists keeps its format when Duckle writes to it. |
+| A `.duckdb` file Duckle creates | Unchanged: still written in the 1.5 storage format, so DuckDB 1.5 and newer open it. DuckDB 2.0 on its own writes a format no 1.x can open; Duckle starts the CLI at storage version 1.5. A file that already exists keeps its format. |
 | A **DuckLake** whose catalog is a DuckDB file | The first write upgrades the catalog file, and DuckDB 1.x can no longer attach the lake. Reading it changes nothing. A catalog in PostgreSQL, SQLite or MySQL is not a DuckDB file, so this does not apply to it. Moving the catalog to DuckLake 1.1 stays opt-in: add `AUTOMATIC_MIGRATION` = `true` under Catalog parameters. |
 | The **merge** write mode | A source with two rows for one key fails ("cannot affect the same target row more than once"), where 1.5 kept the first silently. Deduplicate before the sink. |
 | A **PostgreSQL** server that does not answer | The extension tries to connect twice before it gives up, so a failure takes two connect timeouts. |
