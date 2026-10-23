@@ -244,6 +244,8 @@ pub fn run() {
             run_history,
             metrics_runs,
             metrics_pipelines,
+            recent_components_list,
+            recent_components_record,
             watermark_list,
             watermark_set,
             watermark_clear,
@@ -786,6 +788,47 @@ fn metrics_runs_in(workspace: &std::path::Path, bin: &std::path::Path, query: &J
 #[tauri::command]
 fn metrics_pipelines(workspace_path: String) -> JsonValue {
     duckle_duckdb_engine::metrics_query::pipelines(std::path::Path::new(&workspace_path))
+}
+
+/// The Components palette's "Recently used" list for a workspace, newest
+/// first: at most 20, each used in the last 7 days.
+#[tauri::command]
+async fn recent_components_list(
+    workspace_path: String,
+) -> Result<Vec<duckle_duckdb_engine::recent_components::RecentComponent>, String> {
+    with_recent_components(workspace_path, |store| store.list()).await
+}
+
+/// Marks a component as just used (added to a canvas) and returns the list.
+#[tauri::command]
+async fn recent_components_record(
+    workspace_path: String,
+    component_id: String,
+) -> Result<Vec<duckle_duckdb_engine::recent_components::RecentComponent>, String> {
+    with_recent_components(workspace_path, move |store| store.record(&component_id)).await
+}
+
+/// Each call starts a DuckDB CLI process, so it runs off the async runtime.
+async fn with_recent_components<T, F>(workspace_path: String, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(
+            &duckle_duckdb_engine::recent_components::RecentComponents,
+        ) -> Result<T, duckle_duckdb_engine::metrics_store::MetricsError>
+        + Send
+        + 'static,
+{
+    let bin = DUCKDB_BIN.get().cloned().unwrap_or_default();
+    tokio::task::spawn_blocking(move || {
+        let store = duckle_duckdb_engine::recent_components::RecentComponents::open(
+            std::path::Path::new(&workspace_path),
+            &bin,
+        )
+        .map_err(|e| e.to_string())?;
+        f(&store).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Read the run history for a pipeline (newest first).

@@ -489,6 +489,9 @@ const GITIGNORE_SAFETY: &[&str] = &[
     "duckie/",
     // Files attached in the Agent input: the user's data, copied for the agent.
     "pi-agent/attachments/",
+    // The palette's "Recently used" list (plus its WAL and any set-aside copy):
+    // personal, and rewritten every time a component is added.
+    "recent-components.duckdb*",
 ];
 
 /// Ensure `<workspace>/.duckle/.gitignore` excludes everything in [`GITIGNORE_SAFETY`].

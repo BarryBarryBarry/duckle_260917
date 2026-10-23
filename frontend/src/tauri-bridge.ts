@@ -472,6 +472,35 @@ export async function metricsPipelines(workspacePath: string): Promise<MetricsPi
     }
 }
 
+/** A component on the palette's "Recently used" list. */
+export type RecentComponent = { componentId: string; usedAt: number };
+
+/** The workspace's recently used components, newest first. Desktop only:
+ *  null elsewhere, and on any failure (the list is a convenience). */
+export async function recentComponentsList(workspacePath: string): Promise<RecentComponent[] | null> {
+    if (!isTauri()) return null;
+    try {
+        return await invoke<RecentComponent[]>('recent_components_list', { workspacePath });
+    } catch (err) {
+        console.warn('recentComponentsList failed', err);
+        return null;
+    }
+}
+
+/** Marks a component as just used; resolves to the updated list. */
+export async function recentComponentsRecord(
+    workspacePath: string,
+    componentId: string,
+): Promise<RecentComponent[] | null> {
+    if (!isTauri()) return null;
+    try {
+        return await invoke<RecentComponent[]>('recent_components_record', { workspacePath, componentId });
+    } catch (err) {
+        console.warn('recentComponentsRecord failed', err);
+        return null;
+    }
+}
+
 export type CatalogAsset = {
     id: string;
     kind: string;

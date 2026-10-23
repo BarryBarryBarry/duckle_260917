@@ -47,6 +47,7 @@ pub mod metrics_bus;
 pub mod metrics_model;
 pub mod metrics_query;
 pub mod metrics_store;
+pub mod recent_components;
 pub mod subscribe;
 pub mod chunk_exec;
 pub mod chunking;

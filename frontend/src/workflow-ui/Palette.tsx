@@ -6,6 +6,7 @@ import {
     Check,
     ChevronDown,
     ChevronRight,
+    Clock,
     Cloud,
     Code2,
     GitFork,
@@ -24,6 +25,7 @@ import {
     type ComponentDef,
 } from './palette-data';
 import ComponentIcon from './ComponentIcon';
+import { getRecentComponents, RECENT_KEEP_MS, subscribeRecentComponents } from '../recent-components';
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
     sources: <ArrowDownToLine size={13} />,
@@ -36,7 +38,9 @@ const CATEGORY_ICONS: Record<string, React.ReactNode> = {
 };
 
 const DEFAULT_EXPANDED = new Set<string>();
-const ALL_CATEGORY_IDS = PALETTE.map(c => c.id);
+/** The "Recently used" category, shown first. */
+const RECENT_ID = 'recent';
+const ALL_CATEGORY_IDS = [RECENT_ID, ...PALETTE.map(c => c.id)];
 
 // Map palette top-level category IDs to i18n keys under "palette.*".
 const CAT_LABEL_KEY: Record<string, string> = {
@@ -107,6 +111,18 @@ export default function Palette() {
     const external = useSyncExternalStore(subscribeExternalComponents, getExternalComponents);
     const categories = useMemo(() => paletteWith(external), [external]);
 
+    const recent = useSyncExternalStore(subscribeRecentComponents, getRecentComponents);
+    const recentDefs = useMemo(() => {
+        const byId = new Map<string, ComponentDef>();
+        for (const cat of categories) for (const g of cat.groups) for (const c of g.components) byId.set(c.id, c);
+        const since = Date.now() - RECENT_KEEP_MS;
+        // A component the workspace no longer declares drops out.
+        return recent.items.flatMap(r => {
+            const def = r.usedAt >= since ? byId.get(r.componentId) : undefined;
+            return def ? [def] : [];
+        });
+    }, [recent, categories]);
+
     const filtered = useMemo(() => {
         if (!q) return categories;
         return categories.map(cat => ({
@@ -137,6 +153,74 @@ export default function Palette() {
     const onDragStart = (e: DragEvent<HTMLDivElement>, c: ComponentDef) => {
         e.dataTransfer.setData('application/duckle-component', JSON.stringify(c));
         e.dataTransfer.effectAllowed = 'copy';
+    };
+
+    const renderComponent = (c: ComponentDef) => {
+        const availClass =
+            c.availability === 'planned'
+                ? ' is-planned'
+                : c.availability === 'preview'
+                  ? ' is-preview'
+                  : ' is-available';
+        const badgeLabel =
+            c.availability === 'preview'
+                ? 'Preview'
+                : c.availability === 'planned'
+                  ? 'Planned'
+                  : null;
+        const titleParts = [
+            c.summary ?? c.label,
+            c.alternateHint,
+            badgeLabel
+                ? `(${badgeLabel} - not executable on DuckDB engine yet)`
+                : null,
+        ].filter(Boolean);
+        return (
+            <div
+                key={c.id}
+                className={
+                    'palette-component' + availClass
+                }
+                draggable={c.availability === 'available'}
+                onDragStart={
+                    c.availability === 'available'
+                        ? e => onDragStart(e, c)
+                        : undefined
+                }
+                title={titleParts.join(' · ')}
+            >
+                <ComponentIcon
+                    componentId={c.id}
+                    kind={c.kind}
+                    size={15}
+                    className="palette-component-icon"
+                />
+                <span className="palette-component-label">
+                    {c.label}
+                </span>
+                {badgeLabel ? (
+                    <span
+                        className={
+                            'palette-badge palette-badge-' +
+                            c.availability
+                        }
+                    >
+                        {badgeLabel}
+                    </span>
+                ) : c.availability === 'available' ? (
+                    <Check
+                        className="palette-availability palette-availability-yes"
+                        size={12}
+                        aria-label="available"
+                    />
+                ) : (
+                    <span
+                        className="palette-availability palette-availability-no"
+                        aria-label={c.availability}
+                    />
+                )}
+            </div>
+        );
     };
 
     return (
@@ -192,6 +276,34 @@ export default function Palette() {
             </div>
 
             <div className="palette-body">
+                {!q && recent.enabled ? (
+                    <div className="palette-category">
+                        <button
+                            type="button"
+                            className="palette-category-header"
+                            aria-expanded={expanded.has(RECENT_ID)}
+                            onClick={() => toggle(RECENT_ID)}
+                        >
+                            <span className="palette-cat-chevron" aria-hidden="true">
+                                {expanded.has(RECENT_ID) ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                            </span>
+                            <span className="palette-cat-icon" aria-hidden="true">
+                                <Clock size={13} />
+                            </span>
+                            <span className="palette-cat-label">{t('palette.recent')}</span>
+                            <span className="palette-cat-count">{recentDefs.length}</span>
+                        </button>
+                        {expanded.has(RECENT_ID) ? (
+                            <div className="palette-category-body">
+                                {recentDefs.length > 0 ? (
+                                    <div className="palette-group">{recentDefs.map(renderComponent)}</div>
+                                ) : (
+                                    <div className="palette-recent-empty">{t('palette.recentEmpty')}</div>
+                                )}
+                            </div>
+                        ) : null}
+                    </div>
+                ) : null}
                 {filtered.length === 0 ? (
                     <div className="palette-empty">
                         {t('palette.noMatch')} <span className="quote">{query}</span>
@@ -226,73 +338,7 @@ export default function Palette() {
                                         {cat.groups.map(g => (
                                             <div className="palette-group" key={g.id}>
                                                 <div className="palette-group-label">{GROUP_LABEL_KEY[g.label] ? t(GROUP_LABEL_KEY[g.label]) : g.label}</div>
-                                                {g.components.map(c => {
-                                                    const availClass =
-                                                        c.availability === 'planned'
-                                                            ? ' is-planned'
-                                                            : c.availability === 'preview'
-                                                              ? ' is-preview'
-                                                              : ' is-available';
-                                                    const badgeLabel =
-                                                        c.availability === 'preview'
-                                                            ? 'Preview'
-                                                            : c.availability === 'planned'
-                                                              ? 'Planned'
-                                                              : null;
-                                                    const titleParts = [
-                                                        c.summary ?? c.label,
-                                                        c.alternateHint,
-                                                        badgeLabel
-                                                            ? `(${badgeLabel} - not executable on DuckDB engine yet)`
-                                                            : null,
-                                                    ].filter(Boolean);
-                                                    return (
-                                                    <div
-                                                        key={c.id}
-                                                        className={
-                                                            'palette-component' + availClass
-                                                        }
-                                                        draggable={c.availability === 'available'}
-                                                        onDragStart={
-                                                            c.availability === 'available'
-                                                                ? e => onDragStart(e, c)
-                                                                : undefined
-                                                        }
-                                                        title={titleParts.join(' · ')}
-                                                    >
-                                                        <ComponentIcon
-                                                            componentId={c.id}
-                                                            kind={c.kind}
-                                                            size={15}
-                                                            className="palette-component-icon"
-                                                        />
-                                                        <span className="palette-component-label">
-                                                            {c.label}
-                                                        </span>
-                                                        {badgeLabel ? (
-                                                            <span
-                                                                className={
-                                                                    'palette-badge palette-badge-' +
-                                                                    c.availability
-                                                                }
-                                                            >
-                                                                {badgeLabel}
-                                                            </span>
-                                                        ) : c.availability === 'available' ? (
-                                                            <Check
-                                                                className="palette-availability palette-availability-yes"
-                                                                size={12}
-                                                                aria-label="available"
-                                                            />
-                                                        ) : (
-                                                            <span
-                                                                className="palette-availability palette-availability-no"
-                                                                aria-label={c.availability}
-                                                            />
-                                                        )}
-                                                    </div>
-                                                    );
-                                                })}
+                                                {g.components.map(renderComponent)}
                                             </div>
                                         ))}
                                     </div>

@@ -116,7 +116,9 @@
       "devTools": "开发工具",
       "marketing": "营销",
       "communication": "通讯"
-    }
+    },
+    "recent": "最近使用",
+    "recentEmpty": "添加到画布的组件会显示在这里，保留最近 7 天内使用的 20 个。"
   },
   "chat": {
     "title": "Duckie 智能助手",

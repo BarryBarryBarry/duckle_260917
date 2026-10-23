@@ -974,6 +974,13 @@ textarea:focus-visible {
     padding: 4px 8px 2px;
 }
 
+.palette-recent-empty {
+    padding: 6px 8px;
+    color: var(--text-3);
+    font-size: 0.8462rem;
+    line-height: 1.5;
+}
+
 .palette-component {
     display: flex;
     align-items: center;

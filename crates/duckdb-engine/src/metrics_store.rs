@@ -789,7 +789,7 @@ fn require_key(name: &str, value: &str) -> Result<(), MetricsError> {
     Ok(())
 }
 
-fn is_corrupt(msg: &str) -> bool {
+pub(crate) fn is_corrupt(msg: &str) -> bool {
     CORRUPT_MARKERS.iter().any(|m| msg.contains(m))
 }
 
@@ -860,7 +860,7 @@ fn remove_stale_temp(dir: &Path) {
 
 /// One DuckDB CLI process: `sql` on stdin, stdout returned. Deliberately not
 /// `DuckdbEngine::run`, which a run's cancel flag can stop mid-write.
-fn run_cli(bin: &Path, db: &Path, sql: &str, json: bool) -> Result<String, MetricsError> {
+pub(crate) fn run_cli(bin: &Path, db: &Path, sql: &str, json: bool) -> Result<String, MetricsError> {
     let mut cmd = Command::new(bin);
     #[cfg(windows)]
     {

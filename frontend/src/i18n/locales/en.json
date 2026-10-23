@@ -123,7 +123,9 @@
       "devTools": "Dev Tools",
       "marketing": "Marketing",
       "communication": "Communication"
-    }
+    },
+    "recent": "Recently used",
+    "recentEmpty": "Components you add to a canvas show up here: the last 20 used in the past 7 days."
   },
   "chat": {
     "title": "Duckie AI Assistant",

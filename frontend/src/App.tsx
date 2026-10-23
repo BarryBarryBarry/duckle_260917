@@ -67,6 +67,7 @@ import {
     type LayoutDirection,
 } from './canvas/layout';
 import { validatePipeline } from './validation';
+import { loadRecentComponents, recordRecentComponent } from './recent-components';
 import { resolveForRun, discoverParams, builtinVars, buildContextVars, pipelineRunFields } from './run-resolve';
 import type { ParamSpec } from './run-resolve';
 import { livePreviewable } from './live-preview';
@@ -472,6 +473,10 @@ export default function App() {
         if (signedInUser && workspacePathState) rememberWorkspace(signedInUser, workspacePathState);
     }, [signedInUser, workspacePathState]);
     const showAgentPanel = rightTool === 'agent' && !!workspacePathState;
+    // The palette's "Recently used" list belongs to the open workspace.
+    useEffect(() => {
+        void loadRecentComponents(workspacePathState);
+    }, [workspacePathState]);
     const [agentPanelMounted, setAgentPanelMounted] = useState(false);
     useEffect(() => {
         if (showAgentPanel) setAgentPanelMounted(true);
@@ -1892,6 +1897,7 @@ export default function App() {
             setNodes(ns => [...ns, newNode]);
             setSelectedId(id);
             markDirty();
+            void recordRecentComponent(component.id);
 
             // Auto-detect schema for sources / autodetect-capable components
             // so downstream nodes inherit immediately. The mock returns sample

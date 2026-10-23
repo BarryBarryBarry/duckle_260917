@@ -116,7 +116,9 @@
       "devTools": "開發工具",
       "marketing": "市場行銷",
       "communication": "溝通"
-    }
+    },
+    "recent": "最近使用",
+    "recentEmpty": "加入畫布的元件會顯示在這裡，保留最近 7 天內使用的 20 個。"
   },
   "chat": {
     "title": "Duckie AI助手",
