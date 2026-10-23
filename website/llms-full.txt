@@ -13,9 +13,9 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 417 components, 400 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 418 components, 401 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
 - 200 connectors (124 sources / 76 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
-- Transformation: 144 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
+- Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 29 checks, plus 21 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
 - dbt: runs dbt on DuckDB with a GUI, using a fast build engine by default and dbt-core as a fallback.
@@ -301,7 +301,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.xml` XML: Write rows as XML via `quick-xml`. Default shape: `<root><row><col>val</col>...</row>...</root>`. rootElement / rowElement override the wrapper names. Complex (object/array) cell values are JSON-encoded inside CDATA so the file round-trips back through src.xml losslessly
 - `snk.yaml` YAML: Write the upstream rows as a top-level YAML array (`- key: value` per row)
 
-### Transforms (144)
+### Transforms (145)
 
 - `xf.addcol` Add Column: Transforms data with Add Column
 - `xf.aggwin` Window Aggregate: Aggregate over a window, keep every row
@@ -380,6 +380,7 @@ marked [planned] or [preview] are not usable yet.
 - `xf.ip.parse` IP Parse: Extract host / family / netmask / broadcast from IP or CIDR text via the inet extension
 - `xf.join` Join: Inner / left / right / full outer join, chosen by the Type dropdown
 - `xf.join.cross` Cross Join: Transforms data with Cross Join
+- `xf.join.nearest` Nearest Join: Two-input join that pairs each driving row with the k lookup rows whose vectors are closest (cosine, inner product or euclidean), with the score - DuckDB 2.0 NEAREST join, exact or approximate
 - `xf.join.spatial` Spatial Join: Two-input join whose predicate is ST_Intersects / Contains / Within / Touches / Crosses / Overlaps / Equals
 - `xf.jq` jq Filter: Transform a JSON column with a jq program (in-process jaq, no external jq)
 - `xf.json.array_agg` Array Aggregate: Collapse rows into a JSON array per group (json_group_array)

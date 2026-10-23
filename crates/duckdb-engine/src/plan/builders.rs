@@ -338,6 +338,7 @@ pub(crate) fn build_view_sql(
         "xf.count" => build_count(inputs),
         "xf.join.cross" => build_cross_join(inputs),
         "xf.join.spatial" => build_spatial_join(inputs, props),
+        "xf.join.nearest" => build_nearest_join(inputs, props),
         "xf.regex" | "xf.regex.extract" | "xf.regex.match" | "xf.trim" | "xf.case"
         | "xf.length" | "xf.substring" | "xf.concat" | "xf.split" | "xf.format" => {
             build_string(inputs, props, component_id)
@@ -8666,6 +8667,54 @@ fn spatial_relation_fn(props: &JsonValue) -> &'static str {
         "coveredby" => "ST_CoveredBy",
         _ => "ST_Intersects",
     }
+}
+
+/// xf.join.nearest: DuckDB 2.0's NEAREST join. Each driving row is paired with
+/// the `topK` lookup rows whose vectors are closest by `distanceMetric`, and the
+/// pair's score is added as `outputColumn`. Both vector columns are cast to
+/// FLOAT[dimension], as xf.ai.vector_search casts its one. `approx` lets DuckDB
+/// search approximately; `joinType` left keeps a driving row with no match.
+pub(crate) fn build_nearest_join(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let left = inputs.main().ok_or_else(|| missing_input_msg("xf.join.nearest"))?;
+    let right = inputs
+        .first_lookup()
+        .ok_or_else(|| "Nearest Join needs a lookup input: the rows to match against".to_string())?;
+    let column = |key: &str, which: &str| {
+        string_prop(props, key)
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| format!("Nearest Join needs the {which} input's vector column"))
+    };
+    let (left_vec, right_vec) = (column("leftVector", "driving")?, column("rightVector", "lookup")?);
+    let dim = props
+        .get("dimension")
+        .and_then(|v| v.as_u64())
+        .filter(|d| *d > 0)
+        .ok_or_else(|| "Nearest Join needs a positive dimension".to_string())?;
+    let k = props.get("topK").and_then(|v| v.as_u64()).filter(|k| *k > 0).unwrap_or(1);
+    let (func, by) = match string_prop(props, "distanceMetric").as_deref() {
+        Some("l2") | Some("distance") => ("array_distance", "DISTANCE"),
+        Some("inner_product") | Some("dot") => ("array_inner_product", "SIMILARITY"),
+        _ => ("array_cosine_similarity", "SIMILARITY"),
+    };
+    let kind = match string_prop(props, "joinType").as_deref() {
+        Some("left") => "LEFT",
+        _ => "INNER",
+    };
+    let approx = if props.get("approx").and_then(JsonValue::as_bool).unwrap_or(false) { "APPROX " } else { "" };
+    let output = string_prop(props, "outputColumn")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "similarity_score".into());
+    let score = format!(
+        "{func}(CAST(m.{l} AS FLOAT[{dim}]), CAST(r.{r} AS FLOAT[{dim}]))",
+        l = quote_ident(&left_vec),
+        r = quote_ident(&right_vec),
+    );
+    Ok(format!(
+        "SELECT m.*, r.*, {score} AS {out} FROM {lt} m {kind} JOIN {rt} r {approx}NEAREST {k} BY {by} {score}",
+        out = quote_ident(&output),
+        lt = quote_ident(left),
+        rt = quote_ident(right),
+    ))
 }
 
 pub(crate) fn build_spatial_join(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {

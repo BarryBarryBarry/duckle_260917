@@ -315,6 +315,7 @@ export const PALETTE: Category[] = [
                     xf('join', 'Join', 'available', 'Inner / left / right / full outer join, chosen by the Type dropdown'),
                     xf('join.cross', 'Cross Join', 'available'),
                     xf('join.spatial', 'Spatial Join', 'available', 'Two-input join whose predicate is ST_Intersects / Contains / Within / Touches / Crosses / Overlaps / Equals'),
+                    xf('join.nearest', 'Nearest Join', 'available', 'Two-input join that pairs each driving row with the k lookup rows whose vectors are closest (cosine, inner product or euclidean), with the score - DuckDB 2.0 NEAREST join, exact or approximate'),
                     xf('lookup', 'Lookup', 'available'),
                     xf('semi', 'Semi Join', 'available'),
                     xf('anti', 'Anti Join', 'available'),

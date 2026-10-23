@@ -6427,6 +6427,43 @@ function synthJoinTransform(comp: ComponentDef): ComponentManifest {
             },
         ], 'declared');
     }
+    if (comp.id === 'xf.join.nearest') {
+        return base(comp, [
+            {
+                label: 'Nearest join',
+                fields: [
+                    { key: 'leftVector', label: 'Driving vector column', kind: 'text', required: true, placeholder: 'embedding', description: 'The embedding on each driving row: an array of numbers.' },
+                    { key: 'rightVector', label: 'Lookup vector column', kind: 'text', required: true, placeholder: 'embedding', description: 'The embedding on each lookup row, compared against the driving one.' },
+                    { key: 'dimension', label: 'Dimension', kind: 'integer', required: true, placeholder: '384', description: 'The length of every vector. Both columns are read as FLOAT[dimension], so a list of another length fails the run.' },
+                    {
+                        key: 'distanceMetric',
+                        label: 'Closeness',
+                        kind: 'select',
+                        defaultValue: 'cosine',
+                        options: [
+                            { label: 'Cosine similarity (higher is closer)', value: 'cosine' },
+                            { label: 'Inner product (higher is closer)', value: 'inner_product' },
+                            { label: 'Euclidean distance (lower is closer)', value: 'l2' },
+                        ],
+                    },
+                    { key: 'topK', label: 'Matches per row (k)', kind: 'integer', defaultValue: 1, description: 'How many of the closest lookup rows to pair with each driving row.' },
+                    { key: 'approx', label: 'Approximate', kind: 'bool', defaultValue: false, description: 'Let DuckDB find the matches approximately, which is faster on large inputs and may miss the exact closest.' },
+                    {
+                        key: 'joinType',
+                        label: 'Join type',
+                        kind: 'select',
+                        defaultValue: 'inner',
+                        options: [
+                            { label: 'INNER', value: 'inner' },
+                            { label: 'LEFT (keep every driving row)', value: 'left' },
+                        ],
+                    },
+                    { key: 'outputColumn', label: 'Score column', kind: 'text', defaultValue: 'similarity_score', description: 'The closeness of each pair: the similarity, or for euclidean the distance. Columns both inputs share come out with a _1 suffix on the lookup side.' },
+                    { key: 'nearestNote', label: 'Needs DuckDB 2.0', kind: 'note', description: 'NEAREST joins arrived in DuckDB 2.0; an older engine refuses the SQL.' },
+                ],
+            },
+        ], 'declared');
+    }
     // The consolidated 'xf.join' node (#153) drives its kind purely from the
     // joinType dropdown, so it defaults to INNER; the legacy per-type ids
     // (xf.join.left, xf.semi, ...) still seed the dropdown from their suffix.

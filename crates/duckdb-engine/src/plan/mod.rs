@@ -7069,9 +7069,14 @@ fn build_stage(
         // outright has said which they want.
         let stage_owns_its_work =
             memory_limit_mb.is_some() || retry_attempts > 1 || continue_on_failure;
+        // A NEAREST join cannot be stored as a VIEW: the run-db is opened at
+        // storage v1.5.0 (see run()), and DuckDB 2.0 refuses to serialize one
+        // there ("NEAREST BY requires storage version v2.0.0"). Its rows are
+        // stored instead.
         let forced_table =
             matches!(materialize, "table" | "memory" | "disk" | "duckdb" | "duckdbfile")
-                || (stage_owns_its_work && !forced_view);
+                || (stage_owns_its_work && !forced_view)
+                || component_id == "xf.join.nearest";
         let view_ok = |consumers: usize| {
             !uses_dynamic_pivot
                 && !attach_backed

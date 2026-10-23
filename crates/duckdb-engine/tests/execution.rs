@@ -5324,6 +5324,57 @@ fn vector_search_ranks_by_cosine_similarity() {
     assert_eq!(top, "3", "got {}", top);
 }
 
+/// xf.join.nearest pairs each driving row with its k closest lookup rows by
+/// vector (DuckDB 2.0's NEAREST join). Lookup row 40 points the same way as
+/// query 1 but lies far from it, so cosine picks 40 and euclidean picks 10:
+/// the metric is really what decides. The lookup vectors are plain lists, so
+/// the cast to FLOAT[dimension] is exercised too.
+#[test]
+fn nearest_join_pairs_each_row_with_its_closest_by_the_chosen_metric() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let queries = out_path(tmp.path(), "q.parquet");
+    let items = out_path(tmp.path(), "p.parquet");
+    duckdb_exec(
+        ":memory:",
+        &format!(
+            "COPY (SELECT * FROM (VALUES (1, [1.0, 0.0]::FLOAT[2]), (2, [0.0, 1.0]::FLOAT[2])) t(qid, emb)) \
+             TO '{queries}' (FORMAT PARQUET); \
+             COPY (SELECT * FROM (VALUES (10, [0.9, 0.1]), (20, [0.1, 0.9]), (40, [10.0, 0.0])) t(pid, vec)) \
+             TO '{items}' (FORMAT PARQUET);"
+        ),
+    );
+    let pairs = |metric: &str, k: u64, per_stage: bool| -> String {
+        let out = out_path(tmp.path(), &format!("{metric}{k}{per_stage}.csv"));
+        let d = doc(
+            json!([
+                node("q", "src.parquet", json!({ "path": queries })),
+                node("p", "src.parquet", json!({ "path": items })),
+                node("j", "xf.join.nearest", json!({
+                    "leftVector": "emb", "rightVector": "vec", "dimension": 2,
+                    "distanceMetric": metric, "topK": k
+                })),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "q", "j"), lookup_edge("e2", "p", "j"), main_edge("e3", "j", "k")]),
+        );
+        // Naming a target defeats batching, so each stage is its own CLI.
+        let r = if per_stage {
+            engine.execute_pipeline_with_events(&d, Some("k"), None, |_| {})
+        } else {
+            engine.execute_pipeline(&d)
+        };
+        assert_eq!(r.status, "ok", "{metric}: {:?}", r.error);
+        scalar_string(&format!(
+            "SELECT string_agg(qid || '-' || pid, ' ' ORDER BY qid, pid) FROM read_csv_auto('{out}')"
+        ))
+    };
+    assert_eq!(pairs("cosine", 1, false), "1-40 2-20", "cosine: the same direction wins");
+    assert_eq!(pairs("l2", 1, false), "1-10 2-20", "euclidean: the nearest point wins");
+    assert_eq!(pairs("cosine", 2, false), "1-10 1-40 2-10 2-20", "two matches per row");
+    assert_eq!(pairs("cosine", 1, true), "1-40 2-20", "the per-stage path");
+}
+
 #[test]
 fn spatial_source_reads_geojson() {
     // The spatial extension is GDAL-backed (~50 MB); only opt-in CI /
