@@ -21,6 +21,7 @@ import ComponentIcon from '../workflow-ui/ComponentIcon';
 import WindowControls from '../workflow-ui/WindowControls';
 import WindowResizeHandles from '../workflow-ui/WindowResizeHandles';
 import { getWorkspacePath } from '../workspace';
+import { TOPBAR_BRAND_BYLINE } from '../features';
 import { isTauri } from '../tauri-dialog';
 import { copyText } from '../tauri-io';
 import { loadPersisted, savePersisted } from '../persistence';
@@ -221,7 +222,7 @@ function AuthScreen({ children, wide = false, home = false }: { children: ReactN
                     <div className="auth-topbar-brand" data-tauri-drag-region>
                         <DuckleLogo size={26} />
                         <span className="auth-topbar-name">Otter ETL agent</span>
-                        <span className="auth-topbar-by">by SlothFlowLabs</span>
+                        {TOPBAR_BRAND_BYLINE ? <span className="auth-topbar-by">by SlothFlowLabs</span> : null}
                     </div>
                 ) : null}
                 <div className="auth-drag-spacer" data-tauri-drag-region />
@@ -253,7 +254,7 @@ function LandingFrame({ children }: { children: ReactNode }) {
                 {workspaceName ? (
                     <span>{t('launcher.subtitleWs', 'Workspace: {{name}}', { name: workspaceName })}</span>
                 ) : null}
-                <span>© 2026 SlothFlowLabs · Otter ETL agent</span>
+                <span>© 2026 Otter ETL agent</span>
             </footer>
         </div>
     );

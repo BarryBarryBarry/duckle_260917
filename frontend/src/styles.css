@@ -10709,7 +10709,10 @@ select.modal-select:focus {
     padding: clamp(4px, 2vh, 24px) clamp(24px, 5vw, 72px);
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
-    align-items: center;
+    /* The row is as tall as its taller column and sits centred; the card's
+       bottom lines up with the picture's. */
+    align-content: center;
+    align-items: end;
     gap: clamp(32px, 5vw, 88px);
 }
 .auth-landing-main:has(.auth-card-wide) {
