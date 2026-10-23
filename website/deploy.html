@@ -870,7 +870,7 @@ az containerapp update --name duckle --resource-group data \
 
     <div class="warn">
       <b>Run one console replica, not three.</b>
-      <p>The scheduler lives in the <code>serve</code> process and claims each due schedule so nothing else takes it. That claim relies on the filesystem behaving, which local disk does and some network filesystems do not. Two replicas over an NFS mount without working lock support means both believe they won the claim and every schedule runs twice. Keep <code>replicas: 1</code> and add capacity the way below.</p>
+      <p>The scheduler lives in the <code>serve</code> process, and each one decides for itself when a schedule is due. Two replicas on one workspace both fire it: measured on a single machine with working locks, every cron occurrence ran twice and an interval schedule ran twice as often. The run lock only stops two runs of a pipeline overlapping, and a short run is over before the other replica starts its copy. Keep <code>replicas: 1</code> and add capacity the way below.</p>
     </div>
 
     <h3 class="dep-h3">Adding capacity properly</h3>
