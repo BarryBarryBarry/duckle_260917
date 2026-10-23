@@ -2793,6 +2793,7 @@ fn build_stage(
             from_view: from_view.to_string(),
             path,
             create_if_missing: props.get("createIfMissing").and_then(|v| v.as_bool()).unwrap_or(true),
+            partition_by: columns_list(&props, "partitionBy"),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.snowflake" {

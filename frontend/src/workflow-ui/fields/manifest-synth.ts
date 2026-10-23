@@ -2401,6 +2401,30 @@ function synthLakehouseSource(comp: ComponentDef): ComponentManifest {
             },
         ]);
     }
+    if (comp.id === 'src.delta') {
+        return base(comp, [
+            {
+                label: 'Table',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'Table path',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 's3://lake/orders/  or  /var/lakes/orders',
+                        description: 'The Delta table root, the directory holding _delta_log: a local directory or an s3:// URL.',
+                    },
+                ],
+            },
+            {
+                label: 'Time travel',
+                fields: [
+                    { key: 'asOfVersion', label: 'As of version', kind: 'integer', placeholder: 'e.g. 12', description: 'Read the table as of this Delta table version. Leave empty for the latest.' },
+                    { key: 'asOfTimestamp', label: 'As of timestamp', kind: 'text', placeholder: 'YYYY-MM-DD HH:MM:SS', description: 'Read the table as it was at this point in time: the newest version committed at or before it. Read in the session time zone unless it carries an offset, e.g. +00. Used only when no version is set.' },
+                ],
+            },
+        ]);
+    }
     // Iceberg + Delta both take a path to the table location: a local
     // directory containing the metadata + data files, or an `s3://...`
     // URL backed by a cloud SECRET configured under Connections.
@@ -2432,6 +2456,7 @@ function synthLakehouseSink(comp: ComponentDef): ComponentManifest {
                 fields: [
                     { key: 'path', label: 'Table directory', kind: 'text', required: true, placeholder: '/data/lake/orders', description: 'The Delta table directory, the one holding _delta_log. Local paths for now: a table on object storage is refused until writing there has been tested.' },
                     { key: 'createIfMissing', label: 'Create the table if missing', kind: 'bool', defaultValue: true, description: 'Creates the table from the input columns and their types on the first run. Off, a missing table is an error, so a mistyped path cannot quietly start a new table.' },
+                    { key: 'partitionBy', label: 'Partition by columns', kind: 'columns', description: 'For a table this node creates: one directory per value (region=eu/), recorded in the Delta log so readers prune by it. An existing table keeps the partitioning it was made with. At least one column must stay out of the partitioning.' },
                 ],
             },
         ]);

@@ -352,7 +352,7 @@ COMPONENTS = {
     'snk.delta': {
         'kind': 'sink',
         'summary': 'Append to a local Delta Lake table, creating it from the input columns on first use. Columns are matched by name and a mismatch is refused, never dropped or filled with NULL.',
-        'params': ['path', 'createIfMissing'],
+        'params': ['path', 'createIfMissing', 'partitionBy'],
     },
     'snk.dhis2': {
         'kind': 'sink',
@@ -778,7 +778,7 @@ COMPONENTS = {
     'src.delta': {
         'kind': 'source',
         'summary': 'Read Delta Lake tables via DuckDB delta_scan',
-        'params': ['path'],
+        'params': ['path', 'asOfVersion', 'asOfTimestamp'],
     },
     'src.dhis2': {
         'kind': 'source',

@@ -9404,10 +9404,21 @@ pub(crate) fn build_iceberg_source(props: &JsonValue) -> Result<String, String> 
     Ok(format!("SELECT * FROM iceberg_scan('{}')", sql_escape(&path)))
 }
 
-/// Delta Lake source via the DuckDB delta extension's `delta_scan`.
+/// Delta Lake source via the DuckDB delta extension's `delta_scan`, read as of
+/// a table version or a point in time when one is set: the `asOfVersion` /
+/// `asOfTimestamp` pair DuckLake takes, the version winning when both are.
+/// `version =>` reads on DuckDB 1.5.4 and later, `timestamp =>` on 2.0.
 pub(crate) fn build_delta_source(props: &JsonValue) -> String {
     let path = string_prop(props, "path").unwrap_or_default();
-    format!("SELECT * FROM delta_scan('{}')", sql_escape(&path))
+    let version = props
+        .get("asOfVersion")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())));
+    let at = match (version, string_prop(props, "asOfTimestamp").filter(|s| !s.trim().is_empty())) {
+        (Some(v), _) => format!(", version => {v}"),
+        (None, Some(ts)) => format!(", timestamp => '{}'", sql_escape(ts.trim())),
+        (None, None) => String::new(),
+    };
+    format!("SELECT * FROM delta_scan('{}'{})", sql_escape(&path), at)
 }
 
 /// The sheet names in an `.xlsx`, in workbook order.

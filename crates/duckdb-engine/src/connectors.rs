@@ -17658,6 +17658,25 @@ impl DuckdbEngine {
                     unsupported.join(", ")
                 )));
             }
+            // Partition columns are the input's own, and Delta cannot hold a
+            // table whose every column is a partition column.
+            let unknown: Vec<&str> = spec
+                .partition_by
+                .iter()
+                .map(String::as_str)
+                .filter(|p| !input.iter().any(|(n, _)| n == p))
+                .collect();
+            if !unknown.is_empty() {
+                return Err(config(format!(
+                    "partitionBy names {}, which the input does not have",
+                    unknown.join(", ")
+                )));
+            }
+            if !spec.partition_by.is_empty() && input.iter().all(|(n, _)| spec.partition_by.contains(n)) {
+                return Err(config(
+                    "partitionBy names every column; Delta needs at least one that is not a partition column".into(),
+                ));
+            }
             // A naive timestamp is only legal under the timestampNtz table
             // feature, which needs reader 3 / writer 7 to declare it.
             let protocol = if naive_timestamps {
@@ -17670,7 +17689,9 @@ impl DuckdbEngine {
                 "id": uuid::Uuid::new_v4().to_string(),
                 "format": { "provider": "parquet", "options": {} },
                 "schemaString": serde_json::json!({ "type": "struct", "fields": fields }).to_string(),
-                "partitionColumns": [],
+                // The extension's INSERT reads these and writes one directory
+                // per value (DuckDB 2.0; 1.5's stops on an internal assertion).
+                "partitionColumns": spec.partition_by,
                 "configuration": {},
                 "createdTime": chrono::Utc::now().timestamp_millis(),
             } });
