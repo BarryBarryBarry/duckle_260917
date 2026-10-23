@@ -647,6 +647,12 @@ impl DuckdbEngine {
         // (e.g. a `.show` command) pollutes stdout and breaks autodetect,
         // schema inference, and pipeline runs. -no-init suppresses it.
         cmd.arg("-no-init");
+        // DuckDB 2.0's CLI turns on "agent mode" when an AI agent variable
+        // (AI_AGENT) is set and stdout is a pipe, which is how Duckle always
+        // runs it, and often under such an agent. Its errors then arrive as JSON
+        // behind a banner, and the banner was all a run reported. The variable
+        // rather than `-no-agent`, which a 1.5 CLI refuses as an unknown option.
+        cmd.env("DUCKDB_AGENT_MODE", "0");
         if json {
             cmd.arg("-json");
         }
@@ -3642,6 +3648,8 @@ impl DuckdbEngine {
         cmd.arg("-storage-version").arg("v1.5.0");
         // -no-init: ignore ~/.duckdbrc so a user init file cannot pollute output.
         cmd.arg("-no-init");
+        // Agent mode off, as in run(): this path passes no output mode either.
+        cmd.env("DUCKDB_AGENT_MODE", "0");
         if allow_unsigned_extensions() {
             cmd.arg("-unsigned");
         }
@@ -5605,6 +5613,8 @@ pub(crate) fn apply_duckdb_sql(bin: &Path, db: &Path, sql: &str) -> Result<(), E
     cmd.arg("-storage-version").arg("v1.5.0");
     // -no-init: ignore ~/.duckdbrc so a user init file cannot pollute output.
     cmd.arg("-no-init");
+    // Agent mode off, as in run(): no output mode is passed here either.
+    cmd.env("DUCKDB_AGENT_MODE", "0");
     if allow_unsigned_extensions() {
         cmd.arg("-unsigned");
     }
