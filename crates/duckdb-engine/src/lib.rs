@@ -7230,11 +7230,12 @@ pub(crate) fn sql_escape(s: &str) -> String {
 /// DB (through postgres_execute / mysql_execute), reading from the
 /// staging table we just populated via ATTACH. Identifiers are native
 /// to each family: double-quoted for Postgres, backticks for MySQL.
-/// Build the native upsert statements to run on the target DB. Returns one
-/// or more statements: Postgres tolerates a single multi-statement string
-/// (run via postgres_execute), but MySQL's extension can't (it raises
-/// "Commands out of sync"), so the MySQL path returns each statement
-/// separately and the caller issues them one at a time.
+/// Build the native upsert statements to run on the target DB, one per
+/// entry. Neither extension takes a multi-statement string any more: MySQL's
+/// raises "Commands out of sync", and DuckDB 2.0's postgres_execute prepares
+/// its SQL, which Postgres refuses with "cannot insert multiple commands into a
+/// prepared statement" (1.5 sent it as a simple query). The caller keeps the
+/// Postgres statements atomic by running them in one transaction.
 fn build_native_upsert_sql(
     spec: &plan::UpsertSpec,
     set_cols: &[&String],
@@ -7275,13 +7276,16 @@ fn build_native_upsert_sql(
                         .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    vec![format!(
-                        "INSERT INTO {target} ({cols}) SELECT {cols} FROM {staging} {conflict}; DROP TABLE {staging};",
-                        target = target_native,
-                        staging = staging_native,
-                        cols = col_list,
-                        conflict = conflict
-                    )]
+                    vec![
+                        format!(
+                            "INSERT INTO {target} ({cols}) SELECT {cols} FROM {staging} {conflict}",
+                            target = target_native,
+                            staging = staging_native,
+                            cols = col_list,
+                            conflict = conflict
+                        ),
+                        format!("DROP TABLE {staging}", staging = staging_native),
+                    ]
                 }
                 // Delete propagation: the flag column is staged but is not a
                 // target column, so the INSERT lists explicit data columns and
@@ -7294,18 +7298,26 @@ fn build_native_upsert_sql(
                         .map(|c| format!("\"{}\"", c.replace('"', "\"\"")))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    vec![format!(
-                        "DELETE FROM {target} WHERE ({keys}) IN (SELECT {keys} FROM {staging} WHERE {flag} = '{v}'); \
-                         INSERT INTO {target} ({cols}) SELECT {cols} FROM {staging} WHERE ({flag} IS NULL OR {flag} <> '{v}') {conflict}; \
-                         DROP TABLE {staging};",
-                        target = target_native,
-                        staging = staging_native,
-                        keys = key_list,
-                        flag = flag,
-                        v = v,
-                        cols = col_list,
-                        conflict = conflict
-                    )]
+                    vec![
+                        format!(
+                            "DELETE FROM {target} WHERE ({keys}) IN (SELECT {keys} FROM {staging} WHERE {flag} = '{v}')",
+                            target = target_native,
+                            staging = staging_native,
+                            keys = key_list,
+                            flag = flag,
+                            v = v,
+                        ),
+                        format!(
+                            "INSERT INTO {target} ({cols}) SELECT {cols} FROM {staging} WHERE ({flag} IS NULL OR {flag} <> '{v}') {conflict}",
+                            target = target_native,
+                            staging = staging_native,
+                            flag = flag,
+                            v = v,
+                            cols = col_list,
+                            conflict = conflict
+                        ),
+                        format!("DROP TABLE {staging}", staging = staging_native),
+                    ]
                 }
             }
         }

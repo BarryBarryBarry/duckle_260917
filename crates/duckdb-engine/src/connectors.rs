@@ -323,20 +323,26 @@ impl DuckdbEngine {
             plan::UpsertFamily::Postgres => "postgres_execute",
             plan::UpsertFamily::MySql => "mysql_execute",
         };
-        // Run each statement as its own passthrough CALL. Postgres returns a
-        // single (multi-statement) string here so this is one call; MySQL
-        // returns its statements separately because its extension rejects a
-        // multi-statement batch ("Commands out of sync").
+        // Each statement is its own passthrough CALL: neither extension takes a
+        // multi-statement batch (see build_native_upsert_sql).
+        let call = |stmt: &String| {
+            format!("CALL {}('duckle_dst', '{}');", exec_fn, stmt.replace('\'', "''"))
+        };
+        if matches!(spec.family, plan::UpsertFamily::Postgres) {
+            // One transaction, so the delete, the insert and the cleanup land
+            // together or not at all, as the single statement string did. The
+            // postgres extension runs every postgres_execute of a DuckDB
+            // transaction on that transaction's connection.
+            let calls: String = native_stmts.iter().map(call).collect();
+            return self.run(
+                Some(db),
+                &format!("{secret_prefix}{}BEGIN TRANSACTION; {calls}COMMIT;", spec.attach),
+                false,
+            );
+        }
         let mut last = String::new();
         for stmt in &native_stmts {
-            let exec_sql = format!(
-                "{secret}{attach}CALL {fn_name}('duckle_dst', '{sql}');",
-                secret = secret_prefix,
-                attach = spec.attach,
-                fn_name = exec_fn,
-                sql = stmt.replace('\'', "''")
-            );
-            last = self.run(Some(db), &exec_sql, false)?;
+            last = self.run(Some(db), &format!("{secret_prefix}{}{}", spec.attach, call(stmt)), false)?;
         }
         Ok(last)
     }

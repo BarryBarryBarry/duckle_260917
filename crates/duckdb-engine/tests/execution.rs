@@ -5120,6 +5120,59 @@ fn pg_sink_upsert_updates_and_inserts() {
     assert_eq!(updated, "bobby", "got {}", updated);
 }
 
+/// A Postgres upsert lands whole or not at all. With delete propagation it
+/// is a DELETE, an INSERT and a cleanup; each goes to Postgres as its own
+/// statement (DuckDB 2.0's postgres_execute prepares its SQL and refuses a
+/// batch), so they share one transaction. Here the DELETE succeeds and the
+/// INSERT then breaks a NOT NULL: the deleted row must still be there.
+#[test]
+fn pg_upsert_is_all_or_nothing() {
+    let engine = engine_or_skip!();
+    let Some((host, port, db, user, pass)) = pg_env() else {
+        eprintln!("skipping: set DUCKLE_PG_HOST to run against PostgreSQL");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let table = format!("duckle_atomic_{}", uniq_suffix());
+    let bin = std::env::var("DUCKLE_DUCKDB_BIN").expect("DUCKLE_DUCKDB_BIN set");
+    let pg = |sql: &str| {
+        let out = std::process::Command::new(&bin)
+            .env("DUCKDB_AGENT_MODE", "0")
+            .args([":memory:", "-csv", "-noheader", "-c"])
+            .arg(format!(
+                "LOAD postgres; ATTACH 'host={host} port={port} dbname={db} user={user} password={pass}' AS d (TYPE POSTGRES); {sql}"
+            ))
+            .output()
+            .expect("duckdb runs");
+        assert!(out.status.success(), "{sql}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    pg(&format!(
+        "CALL postgres_execute('d', 'CREATE TABLE public.{table} (id INT PRIMARY KEY, name TEXT NOT NULL)'); \
+         CALL postgres_execute('d', 'INSERT INTO public.{table} VALUES (1, ''alice''), (2, ''bob'')');"
+    ));
+
+    // Row 1 is flagged for deletion; row 3 is new and has no name.
+    let csv = write_file(tmp.path(), "in.csv", "id,name,op\n1,,delete\n3,,\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("w", "snk.postgres", json!({
+                "host": &host, "port": port, "database": &db, "user": &user, "password": &pass,
+                "schemaName": "public", "tableName": &table, "mode": "upsert",
+                "conflictColumns": ["id"], "deleteColumn": "op"
+            })),
+        ]),
+        json!([main_edge("e", "s", "w")]),
+    ));
+    assert_ne!(r.status, "ok", "the insert breaks NOT NULL, so the upsert must fail");
+    assert_eq!(
+        pg(&format!("SELECT string_agg(id::VARCHAR, '|' ORDER BY id) FROM d.public.{table}")),
+        "1|2",
+        "the delete was kept although the insert failed"
+    );
+}
+
 #[test]
 fn switch_routes_rows_to_case_outputs() {
     let engine = engine_or_skip!();
