@@ -2142,11 +2142,6 @@ impl DuckdbEngine {
             //     forces a serial collector at the end of every parallel
             //     scan, which can halve wall time on Parquet writes.
             //
-            //   enable_object_cache = true
-            //     Caches Parquet file metadata between reads in the same
-            //     process. Big win when the same source file appears in
-            //     multiple stages, or when read_parquet hits a glob.
-            //
             //   enable_progress_bar = false
             //     Saves a few percent CPU + avoids tearing the CLI output
             //     when we shell out non-interactively.
@@ -3422,7 +3417,7 @@ impl DuckdbEngine {
             .map(|s| s.node_id.as_str())
             .collect();
 
-        // Build the batched SQL: secret prefix, PRAGMA preset (once),
+        // Build the batched SQL: secret prefix, settings preset (once),
         // then per-stage SQL + per-stage markers + per-view previews.
         let mut batched_sql = String::new();
         if !secret_prefix.is_empty() {
@@ -7718,10 +7713,13 @@ pub(crate) fn resource_pragmas(
     stage_memory_mb: Option<u32>,
 ) -> String {
     // Always on. These flip DuckDB defaults that cost ETL throughput.
+    //
+    // SET, never `PRAGMA x=...`: DuckDB 2.0 deprecates that form and prints a
+    // warning on stdout, ahead of the results, for each one. SET reads the same
+    // on 1.5. enable_object_cache is gone: a no-op since 1.5, retired in 2.0.
     let mut p = String::from(
-        "PRAGMA preserve_insertion_order=false;\n\
-         PRAGMA enable_object_cache=true;\n\
-         PRAGMA enable_progress_bar=false;\n",
+        "SET preserve_insertion_order=false;\n\
+         SET enable_progress_bar=false;\n",
     );
     // #290: where the policy restricts the network, take DuckDB off it too.
     // First, so nothing in the run can get a request out ahead of it.
@@ -7738,12 +7736,12 @@ pub(crate) fn resource_pragmas(
         .map(|mb| format!("{}MB", mb))
         .or_else(|| env("DUCKLE_MEMORY_LIMIT"));
     if let Some(m) = mem {
-        p.push_str(&format!("PRAGMA memory_limit='{}';\n", m.replace('\'', "''")));
+        p.push_str(&format!("SET memory_limit='{}';\n", m.replace('\'', "''")));
     }
     if let Some(t) = env("DUCKLE_THREADS") {
         if let Ok(n) = t.parse::<u32>() {
             if n > 0 {
-                p.push_str(&format!("PRAGMA threads={};\n", n));
+                p.push_str(&format!("SET threads={};\n", n));
             }
         }
     }
@@ -7753,7 +7751,7 @@ pub(crate) fn resource_pragmas(
     // between one slow pipeline and an outage.
     if let Some(sz) = env("DUCKLE_MAX_TEMP_DIR_SIZE") {
         p.push_str(&format!(
-            "PRAGMA max_temp_directory_size='{}';\n",
+            "SET max_temp_directory_size='{}';\n",
             sz.replace('\'', "''")
         ));
     }
@@ -7772,7 +7770,7 @@ pub(crate) fn resource_pragmas(
             None => d.clone(),
         };
         p.push_str(&format!(
-            "PRAGMA temp_directory='{}';\n",
+            "SET temp_directory='{}';\n",
             target.replace('\'', "''").replace('\\', "/")
         ));
     }
@@ -9378,6 +9376,50 @@ network:
         assert!(!resource_pragmas(None, None).contains("disabled_filesystems"));
     }
 
+    /// DuckDB 2.0 deprecates the `PRAGMA x=...` form of a setting and says so on
+    /// STDOUT, ahead of the results, once per setting; it is also retiring
+    /// `enable_object_cache`, a no-op since 1.5, which will then stop every run.
+    /// The preset goes in front of every stage, so run it through the pinned CLI
+    /// with every knob set, and DuckDB must have nothing to say about it.
+    #[test]
+    fn duckdb_takes_the_preset_without_a_word() {
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN")
+            .ok()
+            .filter(|b| std::path::Path::new(b).exists())
+        else {
+            eprintln!("skipping: set DUCKLE_DUCKDB_BIN to run");
+            return;
+        };
+        let _g = guard();
+        let tmp = tempfile::tempdir().unwrap();
+        let knobs = [
+            ("DUCKLE_MEMORY_LIMIT", "1GB"),
+            ("DUCKLE_THREADS", "2"),
+            ("DUCKLE_MAX_TEMP_DIR_SIZE", "10GB"),
+        ];
+        for (k, v) in knobs {
+            std::env::set_var(k, v);
+        }
+        std::env::set_var("DUCKLE_TEMP_DIR", tmp.path());
+        let preset = resource_pragmas(Some(&tmp.path().join("run.duckdb")), None);
+        for (k, _) in knobs {
+            std::env::remove_var(k);
+        }
+        std::env::remove_var("DUCKLE_TEMP_DIR");
+
+        let out = std::process::Command::new(&bin)
+            .env("DUCKDB_AGENT_MODE", "0")
+            .args(["-csv", "-noheader", ":memory:", "-c"])
+            .arg(format!("{preset}SELECT current_setting('threads');"))
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{stderr}");
+        assert_eq!(stdout.trim(), "2", "DuckDB said more than the answer:\n{stdout}{stderr}");
+        assert!(!stderr.contains("deprecated"), "{stderr}");
+    }
+
     /// The preset is unconditional, so a pipeline with no resource settings
     /// still gets the throughput defaults.
     #[test]
@@ -9385,7 +9427,6 @@ network:
         let _g = guard();
         let p = resource_pragmas(None, None);
         assert!(p.contains("preserve_insertion_order=false"));
-        assert!(p.contains("enable_object_cache=true"));
         assert!(p.contains("enable_progress_bar=false"));
         // Nothing configured means nothing capped - DuckDB's own defaults.
         assert!(!p.contains("memory_limit"));
@@ -9401,7 +9442,7 @@ network:
         std::env::set_var("DUCKLE_MAX_TEMP_DIR_SIZE", "300GB");
         let p = resource_pragmas(None, None);
         assert!(
-            p.contains("PRAGMA max_temp_directory_size='300GB'"),
+            p.contains("SET max_temp_directory_size='300GB'"),
             "spill would be capped at 90% of the disk instead: {p}"
         );
         std::env::remove_var("DUCKLE_MAX_TEMP_DIR_SIZE");

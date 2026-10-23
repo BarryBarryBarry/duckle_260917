@@ -3856,7 +3856,7 @@ Every node has an **Advanced** tab with fields the engine honours at run time:
 |---|---|
 | **Retry attempts** | Total tries on failure (1 = no retry). Sleeps `backoff * attempt` ms between attempts. |
 | **Retry backoff (ms)** | Inter-attempt sleep, linearly scaled by attempt index. |
-| **Memory limit (MB)** | `PRAGMA memory_limit` applied to this stage only. |
+| **Memory limit (MB)** | `SET memory_limit` applied to this stage only. |
 | **Log row count** | When the run finishes, add a line with this node's final row count to the run's messages and its NDJSON log, on either execution path. |
 
 ### Orchestration and workspace
@@ -4360,7 +4360,7 @@ A few knobs you can set without touching code.
 | **Active context** | Topbar context dropdown | Switches which context variables resolve at run time |
 | **AI Assistant baseURL** | `xf.ai.llm` / `xf.ai.embed` / `xf.ai.classify` props | Point at any OpenAI-compatible endpoint (default: Duckie's local llama-server) |
 | **Per-stage retry** | Properties panel -> Advanced tab | Total attempts + linear-scaled backoff per stage |
-| **Per-stage memory cap** | Properties panel -> Advanced tab | `PRAGMA memory_limit` applied just to that stage |
+| **Per-stage memory cap** | Properties panel -> Advanced tab | `SET memory_limit` applied just to that stage |
 | **Per-stage materialize** | Properties panel -> Basic tab | `auto`, `view` (lazy), `memory` (read once, table in RAM), or `disk` (read once, streamed via a temp Parquet file for huge intermediates) |
 | **DuckDB extensions** | Pre-fetched at install; lazy-loaded for `spatial` | See [First-launch extension pre-fetch](#first-launch-extension-pre-fetch) |
 | **Env var `RUST_LOG`** | Before launching the binary | `RUST_LOG=debug duckle.exe` to see verbose engine logs |

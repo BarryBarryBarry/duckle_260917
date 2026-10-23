@@ -134,7 +134,7 @@ pub struct Stage {
     /// only decides whether the stages after it are attempted.
     pub continue_on_failure: bool,
     pub retry_backoff_ms: u64,
-    /// PRAGMA memory_limit prepended to the stage SQL when set. Lets a
+    /// SET memory_limit prepended to the stage SQL when set. Lets a
     /// user cap a heavy aggregation without touching the whole pipeline.
     pub memory_limit_mb: Option<u32>,
     /// True when this is a duck-family source the user set to Materialize=View.
