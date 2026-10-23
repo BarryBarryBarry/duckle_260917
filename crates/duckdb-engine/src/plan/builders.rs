@@ -1663,7 +1663,15 @@ pub(crate) fn build_numeric(inputs: &NodeInputs, props: &JsonValue, component_id
             )
         }
         "xf.num.abs" => format!("abs({})", col),
-        "xf.num.mod" => format!("{} % {}", col, arg.ok_or("Modulo needs a divisor argument")?),
+        "xf.num.mod" => {
+            let divisor = arg.ok_or("Modulo needs a divisor argument")?;
+            // No data makes a divisor of 0 right: DuckDB 1.5 nulled every row
+            // and 2.0 fails the run with "Division by zero".
+            if divisor.trim().parse::<f64>().is_ok_and(|d| d == 0.0) {
+                return Err("Modulo needs a divisor other than 0".into());
+            }
+            format!("{} % {}", col, divisor)
+        }
         "xf.num.power" => format!("power({}, {})", col, arg.unwrap_or_else(|| "2".into())),
         "xf.num.sqrt" => format!("sqrt({})", col),
         "xf.num.log" => match arg {
@@ -2417,7 +2425,9 @@ fn mask_replacement(column: &str, mode: &str, salt: Option<&str>, show_last: i64
     let q = quote_ident(column);
     let cv = format!("CAST({} AS VARCHAR)", q);
     let expr = match mode {
-        "null" => "NULL".to_string(),
+        // Always NULL, typed as the column: a bare NULL has no type, which
+        // DuckDB 2.0 keeps as the "NULL" type and 1.5 made INTEGER.
+        "null" => format!("CASE WHEN false THEN {} END", q),
         "constant" => format!("'{}'", sql_escape(value.unwrap_or(""))),
         "hash" => match salt.filter(|s| !s.trim().is_empty()) {
             Some(s) => format!("md5('{}' || {})", sql_escape(s), cv),
@@ -9519,7 +9529,7 @@ pub(crate) fn build_excel_source(
             (true, Some(s)) => format!("SELECT *, '{}' AS sheet_name", sql_escape(s)),
             // Without a named sheet read_xlsx takes the first one, and its name
             // is not something this query knows.
-            (true, None) => "SELECT *, NULL AS sheet_name".to_string(),
+            (true, None) => "SELECT *, NULL::VARCHAR AS sheet_name".to_string(),
             _ => "SELECT *".to_string(),
         };
         format!("{} FROM read_xlsx({})", select, args.join(", "))

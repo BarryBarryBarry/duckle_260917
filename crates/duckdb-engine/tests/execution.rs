@@ -3888,12 +3888,30 @@ fn connection_test_gives_up_on_a_host_that_never_answers() {
     };
     let refused = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     probe("127.0.0.1", refused); // any first-use install happens here
-    let overhead = probe("127.0.0.1", refused);
+    // What one ATTACH of the same host costs the engine itself, with the 10 s
+    // connect timeout the test injects. DuckDB 2.0's postgres extension makes
+    // two connection attempts before it gives up, where 1.5 made one, so a
+    // fixed bound measured the extension rather than the test.
+    let bare = {
+        let bin = std::env::var("DUCKLE_DUCKDB_BIN").unwrap();
+        let started = std::time::Instant::now();
+        let out = std::process::Command::new(bin)
+            .env("DUCKDB_AGENT_MODE", "0")
+            .args([":memory:", "-no-init", "-bail", "-c"])
+            .arg("LOAD postgres; ATTACH 'host=10.255.255.1 port=5432 dbname=postgres user=u password=p connect_timeout=10' AS d (TYPE postgres, READ_ONLY);")
+            .output()
+            .expect("duckdb runs");
+        assert!(!out.status.success(), "the ATTACH reached a host that should not answer");
+        started.elapsed()
+    };
     let took = probe("10.255.255.1", 5432);
-    let waited = took.saturating_sub(overhead);
-    eprintln!("a host that never answers took {took:?}, {waited:?} beyond a refused port's {overhead:?}");
-    // One 10 s connect timeout, not two.
-    assert!(waited < std::time::Duration::from_secs(13), "waited {waited:?} beyond {overhead:?}");
+    eprintln!("a host that never answers took {took:?}; one bare ATTACH of it takes {bare:?}");
+    // One probe's worth of connect timeout, not two: the ping fails, and the
+    // listing is never tried. A second probe would add at least another 10 s.
+    assert!(
+        took < bare + std::time::Duration::from_secs(5),
+        "took {took:?}, against {bare:?} for one ATTACH"
+    );
 }
 
 #[test]
@@ -4953,6 +4971,35 @@ fn excel_source_reads_xlsx() {
         out
     ));
     assert_eq!(name, "bob", "got {}", name);
+}
+
+/// The sheet-name column is text even when no sheet is named and its value is
+/// unknown. As a bare NULL it had no type: "NULL" on DuckDB 2.0, INTEGER once
+/// 1.5 stored it.
+#[test]
+fn excel_sheet_column_is_text_when_no_sheet_is_named() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let xlsx = out_path(tmp.path(), "in.xlsx");
+    duckdb_exec(
+        ":memory:",
+        &format!(
+            "INSTALL excel; LOAD excel; COPY (SELECT 1 AS id) TO '{}' (FORMAT 'xlsx', HEADER true)",
+            xlsx
+        ),
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("r", "src.excel", json!({ "path": xlsx, "hasHeader": true, "sheetColumn": true })),
+            node("t", "code.sql", json!({ "sql": "SELECT typeof(sheet_name) AS t FROM r" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "r", "t"), main_edge("e2", "t", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "excel read failed: {:?}", result.error);
+    assert_eq!(scalar_string(&format!("SELECT t FROM read_csv_auto('{}')", out)), "VARCHAR");
 }
 
 #[test]
@@ -13317,6 +13364,30 @@ fn mask_anonymizes_columns_live() {
     let e1 = scalar_string(&format!("SELECT email FROM read_csv_auto('{}') WHERE id = 1", out));
     assert!(!e1.contains('@'), "email should be hashed, got {}", e1);
     assert_eq!(e1.len(), 32, "md5 hex is 32 chars, got {}", e1);
+}
+
+/// qa.mask `null` empties a column and keeps its type. A bare NULL took none:
+/// DuckDB 1.5 typed it INTEGER and 2.0 types it "NULL", so a masked text
+/// column became one a later append of real text could not go into.
+#[test]
+fn mask_to_null_keeps_the_columns_type() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,alice\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("m", "qa.mask", json!({ "masks": [{ "column": "name", "mode": "null" }] })),
+            node("t", "code.sql", json!({ "sql": "SELECT typeof(name) AS t, name IS NULL AS emptied FROM m" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "m"), main_edge("e2", "m", "t"), main_edge("e3", "t", "k")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "ok", "qa.mask failed: {:?}", r.error);
+    let got = scalar_string(&format!("SELECT t || ',' || emptied FROM read_csv_auto('{}')", out));
+    assert_eq!(got, "VARCHAR,true", "the masked column's type and value");
 }
 
 /// Whole-pipeline lineage: a projected column traces across stages back to its
