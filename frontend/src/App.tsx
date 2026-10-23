@@ -2811,7 +2811,6 @@ export default function App() {
                     onBackfillPipeline={handleBackfillPipeline}
                     onBuildPipeline={handleBuildPipeline}
                     onDeployPipeline={isInTauri() ? setDeployModalPipelineId : undefined}
-                    onOpenRunMetrics={() => setShowRunMetrics(true)}
                     hidden={sidebarHidden}
                 />
                 <section className="canvas-shell" data-tour="canvas">
@@ -2838,6 +2837,7 @@ export default function App() {
                         onImportJson={handleImportJson}
                         onImportJob={isInTauri() ? handleImportJob : undefined}
                         onGoHome={() => setShowHome(true)}
+                        onOpenRunMetrics={() => setShowRunMetrics(true)}
                     />
                     <EditorTabs
                         engine={engine}

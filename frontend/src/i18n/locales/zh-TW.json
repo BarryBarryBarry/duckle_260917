@@ -55,7 +55,8 @@
     "exportJson": "匯出為.duckle.json",
     "exportJsonDesc": "將節點+邊緣下載為可攜式JSON",
     "importJson": "匯入.duckle.json...",
-    "importJsonDesc": "開啟可攜式JSON作為新管線"
+    "importJsonDesc": "開啟可攜式JSON作為新管線",
+    "runMetricsDesc": "依時間、pipeline 和狀態檢視所有執行"
   },
   "palette": {
     "sources": "來源",
@@ -916,5 +917,8 @@
         "body": "從「專案」分頁開啟一個內建範例，看看可運作的管道，或自己畫一條。這裡的一切都能從「設定」重新播放，你剛才看到的所有功能也都不需要帳號或雲端服務。"
       }
     }
+  },
+  "metrics": {
+    "title": "執行指標"
   }
 }

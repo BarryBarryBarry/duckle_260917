@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { openExternal } from './tauri-io';
+import { REVIEW_PROMPT } from './features';
 
 /**
  * After ~30s of use, a small bottom-right card invites the user to review Duckle
@@ -15,6 +16,9 @@ import { openExternal } from './tauri-io';
  *
  * Preview: set localStorage 'duckle.previewReviewPrompt' = '1' to force it on
  * immediately (for UI review without waiting / clearing state).
+ *
+ * Off in this build (REVIEW_PROMPT in features.ts): the card never shows, the
+ * preview switch included, so REVIEW_URL is never opened.
  */
 const REVIEW_URL =
     'https://www.g2.com/contributor/duckle-review-collection-f6b8caf5-1e07-4156-a98a-3025d47e64a3';
@@ -24,11 +28,13 @@ const DELAY_MS = 30_000;
 
 export function ReviewPrompt() {
     const [show, setShow] = useState(
-        typeof window !== 'undefined' &&
+        REVIEW_PROMPT &&
+            typeof window !== 'undefined' &&
             window.localStorage?.getItem('duckle.previewReviewPrompt') === '1',
     );
 
     useEffect(() => {
+        if (!REVIEW_PROMPT) return;
         const settled =
             window.localStorage?.getItem(STATE_KEY) === 'done' ||
             window.localStorage?.getItem(STATE_KEY) === 'dismissed';

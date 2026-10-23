@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+    Activity,
     CircleCheck,
     Clipboard,
     Download,
@@ -53,6 +54,8 @@ type Props = {
     onImportJob?: () => void;
     /** Reopen the Home launcher. */
     onGoHome: () => void;
+    /** Runs across the workspace, by time, pipeline and status. */
+    onOpenRunMetrics?: () => void;
 };
 
 export default function EditorHeader({
@@ -76,6 +79,7 @@ export default function EditorHeader({
     onImportJson,
     onImportJob,
     onGoHome,
+    onOpenRunMetrics,
 }: Props) {
     const { t } = useTranslation();
     const [moreOpen, setMoreOpen] = useState(false);
@@ -287,6 +291,22 @@ export default function EditorHeader({
                     </button>
                     {moreOpen ? (
                         <div className="toolbar-more-menu" role="menu">
+                            {onOpenRunMetrics ? (
+                                <button
+                                    type="button"
+                                    role="menuitem"
+                                    className="toolbar-more-item"
+                                    onClick={fire(onOpenRunMetrics)}
+                                >
+                                    <Activity size={13} />
+                                    <div>
+                                        <div>{t('metrics.title')}</div>
+                                        <div className="toolbar-more-desc">
+                                            {t('header.runMetricsDesc')}
+                                        </div>
+                                    </div>
+                                </button>
+                            ) : null}
                             <button
                                 type="button"
                                 role="menuitem"

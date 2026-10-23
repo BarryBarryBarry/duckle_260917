@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { Bug } from 'lucide-react';
 import type { EngineId } from './EngineSelector';
 import { openExternal } from '../tauri-io';
+import { STATUSBAR_REPORT_BUG } from '../features';
 
 const DISCORD_INVITE = 'https://discord.com/invite/rUeAStJbWb';
 
@@ -71,16 +72,20 @@ export default function StatusBar({
                 <span className="statusbar-label">{t('status.runtimeLabel')}</span>
                 <span className={'statusbar-runtime statusbar-runtime-' + runtime}>{runtime}</span>
             </div>
-            <div className="statusbar-sep" />
-            <button
-                type="button"
-                className="statusbar-support"
-                title={t('status.support', { defaultValue: 'Report a bug or get help on our Discord' })}
-                onClick={() => void openExternal(DISCORD_INVITE)}
-            >
-                <Bug size={11} aria-hidden="true" />
-                {t('status.reportBug', { defaultValue: 'Report a bug' })}
-            </button>
+            {STATUSBAR_REPORT_BUG ? (
+                <>
+                    <div className="statusbar-sep" />
+                    <button
+                        type="button"
+                        className="statusbar-support"
+                        title={t('status.support', { defaultValue: 'Report a bug or get help on our Discord' })}
+                        onClick={() => void openExternal(DISCORD_INVITE)}
+                    >
+                        <Bug size={11} aria-hidden="true" />
+                        {t('status.reportBug', { defaultValue: 'Report a bug' })}
+                    </button>
+                </>
+            ) : null}
         </footer>
     );
 }

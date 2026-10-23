@@ -55,7 +55,8 @@
     "exportJson": "导出为.duckle.json文件",
     "exportJsonDesc": "将节点和边下载为可移植的JSON文件",
     "importJson": "导入.duckle.json文件",
-    "importJsonDesc": "打开可移植的JSON文件作为新管道"
+    "importJsonDesc": "打开可移植的JSON文件作为新管道",
+    "runMetricsDesc": "按时间、pipeline 和状态查看所有运行"
   },
   "palette": {
     "sources": "数据源",

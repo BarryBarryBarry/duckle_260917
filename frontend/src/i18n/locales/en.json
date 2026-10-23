@@ -62,7 +62,8 @@
     "importJson": "Import .duckle.json...",
     "importJsonDesc": "Open a portable JSON as a new pipeline",
     "importJob": "Import Talend job...",
-    "importJobDesc": "Translate a Talend .item job into a pipeline"
+    "importJobDesc": "Translate a Talend .item job into a pipeline",
+    "runMetricsDesc": "Every pipeline's runs, by time, pipeline and status"
   },
   "palette": {
     "sources": "Sources",

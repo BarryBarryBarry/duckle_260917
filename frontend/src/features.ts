@@ -32,3 +32,7 @@ export const MORE_MENU_DEPLOY = true;
 export const MORE_MENU_IMPORT_TALEND = false;
 /** "Talend" import button above the project tree. */
 export const PROJECT_TREE_IMPORT_TALEND = false;
+/** "Report a bug" (Discord) at the right end of the status bar. */
+export const STATUSBAR_REPORT_BUG = false;
+/** The card that asks for a review on G2 after ~30s of use. */
+export const REVIEW_PROMPT = false;
