@@ -3567,7 +3567,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **File Geodatabase** | Esri File Geodatabase (`.gdb`) feature classes via `ST_Read` with a per-layer selector | Available (lazy-loaded) |
 | **Hugging Face** | Hugging Face Hub datasets over `hf://` (Parquet / CSV / JSON, globs, revisions); token for private or gated datasets | Available |
 | **Geospatial** | Read GeoJSON / Shapefile / GeoPackage / KML / GPX / Esri File Geodatabase; write those plus **GeoParquet**; CRS-aware measurement, reprojection, spatial joins and predicates | Available |
-| **Lakehouse table formats** | Apache Iceberg (a table directory, or a table in an **Iceberg REST catalog** - Polaris, Lakekeeper, Nessie, Gravitino - with OAuth2 client credentials or a bearer token, and S3 credentials for the data files when the catalog does not vend them), Delta Lake, DuckLake (catalog in a local file or a `postgres:` / `mysql:` / `sqlite:` DSN, with the catalog schema and `META_*` parameters - including `META_SECRET` - settable on the node) | Available |
+| **Lakehouse table formats** | Apache Iceberg (a table directory, or a table in an **Iceberg REST catalog** - Polaris, Lakekeeper, Nessie, Gravitino - with OAuth2 client credentials or a bearer token, and S3 credentials for the data files when the catalog does not vend them), Delta Lake (read as of a table version or a point in time), DuckLake (catalog in a local file or a `postgres:` / `mysql:` / `sqlite:` DSN, with the catalog schema and `META_*` parameters - including `META_SECRET` - settable on the node) | Available |
 | **Embedded databases** | SQLite (read tables), DuckDB (read tables or run a query) | Available |
 | **Microsoft Access** | `.accdb` / `.mdb`: a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver (Office, or the free Access Database Engine) with each column's own type and a database password if set; Linux and macOS read a table through mdbtools, which reads a zero-length text as NULL | Available |
 | **Network relational DBs** | PostgreSQL, MySQL, MariaDB, CockroachDB | Available (live CI for PG + MySQL) |
@@ -3586,7 +3586,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **Vector / AI databases** | pgvector (postgres ATTACH), Qdrant (`/points/scroll`), Weaviate (`/v1/objects`), Milvus (`/v1/vector/query`) | Available |
 | **Vector / AI databases** | Pinecone (no list-all-vectors API), Chroma, LanceDB | Preview |
 | **File transfer** | FTP / FTPS (pure-Rust `suppaftp`) and SFTP (SSH, pure-Rust `russh` + `russh-sftp` on the ring backend; password or private-key auth) - one File Transfer component, pick the protocol. Glob filter, base64 content per file. **Host keys are verified**: pin a SHA256 fingerprint to accept only that key, or leave it empty and the first key seen for a host is recorded in `<workspace>/.duckle/known_hosts`, after which a different key is refused. A host that presents an OpenSSH certificate is accepted only when it certifies the key you pinned. `DUCKLE_SFTP_HOST_KEY_POLICY=accept-any` opts out for a host whose key changes per connection | Available |
-| **Mailbox** | IMAP (rustls TLS, `mail-parser`) - basic auth today, OAuth (gmail / o365) on the roadmap | Available |
+| **Mailbox** | IMAP (`mail-parser`) over Duckle's own TLS, so it trusts what the HTTP connectors trust, `DUCKLE_CA_CERT` included. TLS from the start on port 993, STARTTLS on any other, and a server that offers no STARTTLS is refused before the password is sent. Basic auth today, OAuth (gmail / o365) on the roadmap | Available |
 | **Webhook listener** | Binds `127.0.0.1:port`, collects N inbound HTTP requests with a timeout, parses JSON-object / JSON-array bodies into rows | Available |
 | **Desktop** | System clipboard (pure-Rust `arboard`, auto-detects JSON-array shape) | Available |
 | **Repos** | Git (commit log or file tree from a local working copy; shells out to system `git` CLI) | Available |
@@ -3597,14 +3597,14 @@ For JSON sources, a **Format** selector picks how the file is read (auto / array
 
 ### Transforms
 
-**144 transforms available today.**
+**145 transforms available today.**
 
 | Group | Operations |
 |---|---|
-| **Fields** | Map (visual mapper: joins a main input to up to 3 lookup inputs with inner / left joins and per-output expressions + filter), Project / Select, Cast, Rename, Add / Drop / Reorder Column, Coalesce, UUID v4 |
+| **Fields** | Map (visual mapper: joins a main input to up to 3 lookup inputs with inner / left joins and per-output expressions + filter), Project / Select, Cast (to `variant` too: JSON text parsed into DuckDB 2.0's VARIANT, which Parquet stores shredded), Rename, Add / Drop / Reorder Column, Coalesce, UUID v4 |
 | **Rows** | Filter (visual or raw SQL, with reject port), Distinct, Sample, Top N / Limit, Sort, Skip, Top N per Group, Forward Fill, Backward Fill, Constant Fill |
 | **Aggregate** | Group By, Rollup, Cube, Count, Window Aggregate, Cumulative, Approx Quantile (t-digest), Approx Count Distinct (HyperLogLog) |
-| **Join** | Inner, Left, Right, Full Outer, Cross, Lookup, Semi, Anti, Spatial Join (Intersects, Contains, Within, Touches, Crosses, Overlaps, Equals, Covers, Covered by; fails naming both systems when the two geometry columns use different CRS, rather than returning zero rows) |
+| **Join** | Inner, Left, Right, Full Outer, Cross, Lookup, Semi, Anti, Nearest Join (each row paired with its k closest lookup rows by vector: cosine, inner product or euclidean, exact or approximate - DuckDB 2.0's NEAREST join), Spatial Join (Intersects, Contains, Within, Touches, Crosses, Overlaps, Equals, Covers, Covered by; fails naming both systems when the two geometry columns use different CRS, rather than returning zero rows) |
 | **Set operations** | Union, Union All, Intersect, Except / Minus |
 | **Window** | Row Number, Rank, Dense Rank, Lead, Lag, First Value, Last Value, NTile |
 | **Strings** | Regex Replace, Regex Extract, Regex Match, Split, Concat, Trim, Case Change, Length, Substring, Format, Hash (md5 / sha1 / sha256), IP Parse, URL Parse, Text Similarity (Levenshtein / Jaro-Winkler / Jaccard), Base64, Pad, Text Match |
@@ -3682,7 +3682,7 @@ Validators split their input: passing rows continue on the main port, failures r
 | **Files** | CSV, TSV, Parquet (ZSTD), JSON, JSONL / NDJSON, Excel (.xlsx), YAML, TOML, XML (configurable wrappers), Avro (schema inferred from first row). Parquet + CSV support Hive-partitioned writes. TSV and JSON write gzip or zstd when **Compression** says so, whatever the file is called; with None, a name ending `.gz` or `.zst` still compresses it. CSV, TSV, JSON Lines and JSON (not the array format) can **append**: the run's rows are written to a staging file, then added to the end of the destination, so a failed run leaves it as it was. The header is written only when the append makes the file, and rows whose header is not the file's are refused rather than added under the wrong columns. A compressed, partitioned or remote path cannot be appended to, and neither can Parquet, whose files cannot be added to in place: write one file per run and read the directory with a glob | Available |
 | **Geospatial files** | GeoJSON, GeoPackage, Shapefile, KML, GPX via GDAL | Available (lazy-loaded) |
 | **Lakehouse** | Apache Iceberg (full table layout, or into an **Iceberg REST catalog**: the namespace and table are created when missing, **append** matches columns by name and **overwrite** drops and recreates, as two catalog commits because the catalog cannot replace a table in one; DuckDB 1.5.5's iceberg extension leaves an empty `data` folder in the working directory after such a write, which is harmless and upstream), DuckLake - modes: **overwrite**, **append**, **truncate**, **upsert** (set-based delete-by-key + re-insert), **merge** (partial-column `MERGE INTO` that preserves columns the source omits) with optional CDC delete propagation, plus **publish groups** - several DuckLake sinks sharing a group name commit as one snapshot, so readers see all of their tables update together or none of them, and a run that cannot honour the group is refused rather than publishing part of it | Available |
-| **Delta Lake** | Append to a local Delta table (`snk.delta`), creating it from the input's columns and types on the first run (naive timestamps under the `timestampNtz` feature). Columns are matched by name, and a column missing on either side is refused by name rather than dropped or written as NULL. Append only: the DuckDB extension cannot replace a table. Object-storage paths are refused until writing there has been tested | Available (local) |
+| **Delta Lake** | Append to a local Delta table (`snk.delta`), creating it from the input's columns and types on the first run (naive timestamps under the `timestampNtz` feature), partitioned by the columns you name. Columns are matched by name, and a column missing on either side is refused by name rather than dropped or written as NULL. Append only: the DuckDB extension cannot replace a table. Object-storage paths are refused until writing there has been tested | Available (local) |
 | **Microsoft Access** | `.accdb` / `.mdb`, Windows only (Microsoft Access ODBC driver): the file and the table are created when missing; **append** or **overwrite** in one transaction, so a failed load leaves the table as it was; an upstream that produced no rows leaves the table alone; values are bound as typed parameters, so accents, quotes and the machine's decimal separator cannot change what lands | Available |
 | **Embedded databases** | SQLite, DuckDB - modes: **overwrite**, **append**, **upsert** (set-based delete-by-key + re-insert, no PK required), **merge** (partial-column `MERGE INTO` that preserves columns the source omits) with optional CDC delete propagation | Available |
 | **Network relational DBs** | PostgreSQL, MySQL, MariaDB, CockroachDB - modes: **overwrite**, **append**, **truncate**, **upsert** (ON CONFLICT / ON DUPLICATE KEY) with optional CDC delete propagation | Available (live CI for PG + MySQL) |
@@ -3858,7 +3858,7 @@ Every node has an **Advanced** tab with fields the engine honours at run time:
 |---|---|
 | **Retry attempts** | Total tries on failure (1 = no retry). Sleeps `backoff * attempt` ms between attempts. |
 | **Retry backoff (ms)** | Inter-attempt sleep, linearly scaled by attempt index. |
-| **Memory limit (MB)** | `PRAGMA memory_limit` applied to this stage only. |
+| **Memory limit (MB)** | `SET memory_limit` applied to this stage only. |
 | **Log row count** | When the run finishes, add a line with this node's final row count to the run's messages and its NDJSON log, on either execution path. |
 
 ### Orchestration and workspace
@@ -3920,7 +3920,7 @@ Duckle ships a thin shell and installs its engines on first launch.
 
 | Engine | Role | Status |
 |---|---|---|
-| **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. Tracking **v1.5.5** (latest stable). A lock-free single-SELECT read (`Engine::query`) powers dives. | Working |
+| **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. Tracking **v2.0.0** (LTS, latest stable). A lock-free single-SELECT read (`Engine::query`) powers dives. | Working |
 | **Duckie AI Assistant** | Local chat assistant via **llama.cpp** + **Qwen 2.5 Coder 1.5B GGUF**. Downloads ~1.1 GB and needs no network once installed, or point it at your own OpenAI-compatible endpoint and skip the download entirely. Managed as a `llama-server` subprocess exposing an OpenAI-compatible API on `127.0.0.1`. | Installable |
 | **SlothDB** | Alternate embedded analytical engine ([SouravRoy-ETL/slothdb](https://github.com/SouravRoy-ETL/slothdb)), installed the same way and selectable per pipeline. | Installable |
 | **Native** | In-process Rust streaming / incremental engine. | Planned |
@@ -3930,6 +3930,22 @@ Duckle ships a thin shell and installs its engines on first launch.
 When the installer downloads the DuckDB CLI it also pre-fetches the extensions Duckle uses, with per-extension progress, so the first time you touch a Postgres source or an Iceberg table there is no surprise network hop mid-pipeline:
 
 `httpfs` (S3 / GCS / HTTP), `azure` (Azure Blob native), `sqlite`, `postgres`, `mysql`, `excel`, `iceberg`, `delta`, `ducklake`, `vss`, `fts`.
+
+### Moving to DuckDB 2.0
+
+Duckle pins DuckDB 2.0.0 (LTS). Most of what changes is invisible, but these you may notice, each measured against 1.5.5:
+
+| What | On DuckDB 2.0 |
+|---|---|
+| A `.duckdb` file Duckle creates | Unchanged: still written in the 1.5 storage format, so DuckDB 1.5 and newer open it. DuckDB 2.0 on its own writes a format no 1.x can open; Duckle starts the CLI at storage version 1.5. A file that already exists keeps its format. |
+| A **DuckLake** whose catalog is a DuckDB file | The first write upgrades the catalog file, and DuckDB 1.x can no longer attach the lake. Reading it changes nothing. A catalog in PostgreSQL, SQLite or MySQL is not a DuckDB file, so this does not apply to it. Moving the catalog to DuckLake 1.1 stays opt-in: add `AUTOMATIC_MIGRATION` = `true` under Catalog parameters. |
+| The **merge** write mode | A source with two rows for one key fails ("cannot affect the same target row more than once"), where 1.5 kept the first silently. Deduplicate before the sink. |
+| A **Quack** server still on DuckDB 1.5 | Not reachable: the protocol changed in both directions (a 2.0 client gets HTTP 500 from a 1.5 server, and a 1.5 client cannot read a 2.0 server's reply). Upgrade the server along with Duckle. Against a 2.0 server, reading, writing and token checks work as before. |
+| A **PostgreSQL** server that does not answer | The extension tries to connect twice before it gives up, so a failure takes two connect timeouts. |
+| An **Intel Mac** | DuckDB 2.0 builds no community extensions for Intel Macs, where 1.5.5 did. The SQL Server sink's Bulk write loads one (`mssql`), so on an Intel Mac untick Bulk write, which writes through Duckle's own SQL Server driver instead; a SQL node's `loadExtensions` cannot name one there either. Every core extension is still published for it. |
+| **Your own SQL** (SQL nodes, custom SQL) | `x -> x + 1` lambdas are refused: write `lambda x: x + 1`. `~` and `!~` match anywhere in the string; use `regexp_full_match` for a whole-string match. `//` and `%` by zero raise an error. An untyped `NULL` column keeps the `"NULL"` type. A `NEAREST` join in a SQL node needs Materialize set to Memory (or another option that reads once): Duckle keeps its run database in the 1.5 format, where DuckDB 2.0 cannot store one as a view (the Nearest Join node does this itself). |
+
+The CLI's new "agent mode", which changes its output when an AI agent runs it, is turned off for Duckle's own runs, so nothing changes when Duckle itself runs under one.
 
 `spatial` is lazy-loaded (~50 MB GDAL bundle) - it installs on first use of a geospatial source/sink to keep the initial download small.
 
@@ -4243,7 +4259,7 @@ identity it already has where it runs:
 - **Azure Blob:** a managed or workload identity, an Azure CLI login or
   `AZURE_*` variables. Name the storage account; there is no key to give.
 
-GCS stays on HMAC keys: DuckDB 1.5.5 has no Google credential chain.
+GCS stays on HMAC keys: DuckDB 2.0.0 has no Google credential chain.
 
 The S3 path is tested live: the same node fails with no identity in the
 environment and reads the object once one is there. The Azure path is checked
@@ -4351,7 +4367,7 @@ A few knobs you can set without touching code.
 | **Active context** | Topbar context dropdown | Switches which context variables resolve at run time |
 | **AI Assistant baseURL** | `xf.ai.llm` / `xf.ai.embed` / `xf.ai.classify` props | Point at any OpenAI-compatible endpoint (default: Duckie's local llama-server) |
 | **Per-stage retry** | Properties panel -> Advanced tab | Total attempts + linear-scaled backoff per stage |
-| **Per-stage memory cap** | Properties panel -> Advanced tab | `PRAGMA memory_limit` applied just to that stage |
+| **Per-stage memory cap** | Properties panel -> Advanced tab | `SET memory_limit` applied just to that stage |
 | **Per-stage materialize** | Properties panel -> Basic tab | `auto`, `view` (lazy), `memory` (read once, table in RAM), or `disk` (read once, streamed via a temp Parquet file for huge intermediates) |
 | **DuckDB extensions** | Pre-fetched at install; lazy-loaded for `spatial` | See [First-launch extension pre-fetch](#first-launch-extension-pre-fetch) |
 | **Env var `RUST_LOG`** | Before launching the binary | `RUST_LOG=debug duckle.exe` to see verbose engine logs |

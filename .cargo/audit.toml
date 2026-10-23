@@ -22,18 +22,6 @@ ignore = [
     # Remove when: the rsa crate publishes a constant-time release.
     "RUSTSEC-2023-0071",
 
-    # rustls-webpki 0.102.8 - certificate path validation defects.
-    # Pulled in by imap 3.0.0-alpha.15 (via rustls-connector 0.19 and rustls
-    # 0.22), the newest published version, so there is no upgrade to take.
-    # tiberius was the other path until 0.13 moved SQL Server to rustls 0.23.
-    # Duckle's own TLS - the console, the HTTP sources, the updater - is on
-    # rustls-webpki 0.103.15, which is unaffected.
-    # Remove when: imap publishes a release on rustls 0.23+.
-    "RUSTSEC-2026-0049",
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-    "RUSTSEC-2026-0104",
-
     # quick-xml 0.40 - denial of service on hostile XML.
     # Duckle's own XML reading is on quick-xml 0.42, which is past the fix. This
     # copy comes only through the optional duckle-lance sidecar, inside

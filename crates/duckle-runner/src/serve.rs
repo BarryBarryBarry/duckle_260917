@@ -305,7 +305,7 @@ fn new_run_id(pipeline_id: &str) -> String {
 /// reached `${workspace}`, and DuckDB read `\\?\C:\...` as the RELATIVE path
 /// `?\C:\...`: a pipeline whose DuckDB sink was `${workspace}/out/x.duckdb`
 /// ran in the editor and failed on the server with "Cannot open file".
-fn plain_workspace(path: &Path) -> PathBuf {
+pub(crate) fn plain_workspace(path: &Path) -> PathBuf {
     let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let s = canon.to_string_lossy().to_string();
     match s.strip_prefix(r"\\?\") {
@@ -1424,8 +1424,8 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
                 "required": true,
                 "installed": true,
                 "outdated": false,
-                "version": "1.5.5",
-                "target_version": "1.5.5",
+                "version": "2.0.0",
+                "target_version": "2.0.0",
                 "path": state.duckdb.to_string_lossy(),
                 "available": true,
             }]),
@@ -5692,7 +5692,7 @@ mod tests {
             return;
         };
         let tmp = tempfile::tempdir().unwrap();
-        let ws = tmp.path().canonicalize().unwrap();
+        let ws = super::plain_workspace(tmp.path());
         std::fs::create_dir_all(ws.join("pipelines")).unwrap();
         std::fs::create_dir_all(ws.join("out")).unwrap();
         std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
@@ -5730,7 +5730,7 @@ mod tests {
             return;
         };
         let tmp = tempfile::tempdir().unwrap();
-        let ws = tmp.path().canonicalize().unwrap();
+        let ws = super::plain_workspace(tmp.path());
         std::fs::create_dir_all(ws.join("pipelines")).unwrap();
         std::fs::create_dir_all(ws.join("out")).unwrap();
         std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
@@ -5777,7 +5777,7 @@ mod tests {
             return;
         };
         let tmp = tempfile::tempdir().unwrap();
-        let ws = tmp.path().canonicalize().unwrap();
+        let ws = super::plain_workspace(tmp.path());
         std::fs::create_dir_all(ws.join("out")).unwrap();
         std::fs::write(ws.join("in.csv"), "id\n1\n").unwrap();
         deploy_into(&ws, &serde_json::json!({ "name": "report", "pipeline": serde_json::json!({
@@ -7365,7 +7365,7 @@ mod tests {
             return;
         };
         let tmp = tempfile::tempdir().unwrap();
-        let ws = tmp.path().canonicalize().unwrap();
+        let ws = super::plain_workspace(tmp.path());
         std::fs::write(ws.join("orders.csv"), "id\n1\n").unwrap();
         std::fs::write(ws.join("repository.json"), r#"[{"type":"context","id":"c","name":"Default"}]"#).unwrap();
         std::fs::create_dir_all(ws.join("contexts")).unwrap();
@@ -7647,7 +7647,7 @@ mod tests {
     #[test]
     fn an_editor_run_is_held_to_the_pipelines_parameter_contract() {
         let tmp = tempfile::tempdir().unwrap();
-        let ws = tmp.path().canonicalize().unwrap();
+        let ws = super::plain_workspace(tmp.path());
         let duckdb = std::env::var("DUCKLE_DUCKDB_BIN").ok().filter(|b| std::path::Path::new(b).exists());
         let state = WebState {
             workspace: ws.clone(),

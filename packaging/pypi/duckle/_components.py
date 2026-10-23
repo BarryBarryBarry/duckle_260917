@@ -352,7 +352,7 @@ COMPONENTS = {
     'snk.delta': {
         'kind': 'sink',
         'summary': 'Append to a local Delta Lake table, creating it from the input columns on first use. Columns are matched by name and a mismatch is refused, never dropped or filled with NULL.',
-        'params': ['path', 'createIfMissing'],
+        'params': ['path', 'createIfMissing', 'partitionBy'],
     },
     'snk.dhis2': {
         'kind': 'sink',
@@ -778,7 +778,7 @@ COMPONENTS = {
     'src.delta': {
         'kind': 'source',
         'summary': 'Read Delta Lake tables via DuckDB delta_scan',
-        'params': ['path'],
+        'params': ['path', 'asOfVersion', 'asOfTimestamp'],
     },
     'src.dhis2': {
         'kind': 'source',
@@ -1690,6 +1690,11 @@ COMPONENTS = {
         'kind': 'transform',
         'summary': '',
         'params': ['leftKey', 'rightKey', 'multipleKeys'],
+    },
+    'xf.join.nearest': {
+        'kind': 'transform',
+        'summary': 'Two-input join that pairs each driving row with the k lookup rows whose vectors are closest (cosine, inner product or euclidean), with the score - DuckDB 2.0 NEAREST join, exact or approximate',
+        'params': ['leftVector', 'rightVector', 'dimension', 'distanceMetric', 'topK', 'approx', 'joinType', 'outputColumn'],
     },
     'xf.join.spatial': {
         'kind': 'transform',

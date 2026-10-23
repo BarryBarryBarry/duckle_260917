@@ -3548,6 +3548,32 @@ fn a_truncating_sink_leaves_its_target_alone_when_nothing_arrives() {
     );
 }
 
+/// DuckDB 2.0 writes a new file in a format no 1.x can open. A file the sink
+/// creates stays readable by DuckDB 1.5: the CLI is started with
+/// `-storage-version v1.5.0` (for #150), which sets the version every database
+/// that process creates is written in, the sink's target included.
+#[test]
+fn a_duckdb_file_the_sink_creates_opens_in_duckdb_1_5() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let target = tmp.path().join("for_1_5.duckdb").to_string_lossy().replace('\\', "/");
+    let csv = write_file(tmp.path(), "in.csv", "id\n1\n");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("k", "snk.duckdb", json!({ "database": target, "tableName": "t" })),
+        ]),
+        json!([main_edge("e", "s", "k")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let version = scalar_string(&format!(
+        "ATTACH '{target}' AS d (READ_ONLY); \
+         SELECT tags['storage_version'] AS v FROM duckdb_databases() WHERE database_name = 'd'"
+    ));
+    assert_eq!(version, "v1.5.0+", "the file's storage version");
+}
+
 #[test]
 fn normalize_explodes_delimited_column() {
     let engine = engine_or_skip!();
@@ -3924,12 +3950,30 @@ fn connection_test_gives_up_on_a_host_that_never_answers() {
     };
     let refused = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     probe("127.0.0.1", refused); // any first-use install happens here
-    let overhead = probe("127.0.0.1", refused);
+    // What one ATTACH of the same host costs the engine itself, with the 10 s
+    // connect timeout the test injects. DuckDB 2.0's postgres extension makes
+    // two connection attempts before it gives up, where 1.5 made one, so a
+    // fixed bound measured the extension rather than the test.
+    let bare = {
+        let bin = std::env::var("DUCKLE_DUCKDB_BIN").unwrap();
+        let started = std::time::Instant::now();
+        let out = std::process::Command::new(bin)
+            .env("DUCKDB_AGENT_MODE", "0")
+            .args([":memory:", "-no-init", "-bail", "-c"])
+            .arg("LOAD postgres; ATTACH 'host=10.255.255.1 port=5432 dbname=postgres user=u password=p connect_timeout=10' AS d (TYPE postgres, READ_ONLY);")
+            .output()
+            .expect("duckdb runs");
+        assert!(!out.status.success(), "the ATTACH reached a host that should not answer");
+        started.elapsed()
+    };
     let took = probe("10.255.255.1", 5432);
-    let waited = took.saturating_sub(overhead);
-    eprintln!("a host that never answers took {took:?}, {waited:?} beyond a refused port's {overhead:?}");
-    // One 10 s connect timeout, not two.
-    assert!(waited < std::time::Duration::from_secs(13), "waited {waited:?} beyond {overhead:?}");
+    eprintln!("a host that never answers took {took:?}; one bare ATTACH of it takes {bare:?}");
+    // One probe's worth of connect timeout, not two: the ping fails, and the
+    // listing is never tried. A second probe would add at least another 10 s.
+    assert!(
+        took < bare + std::time::Duration::from_secs(5),
+        "took {took:?}, against {bare:?} for one ATTACH"
+    );
 }
 
 #[test]
@@ -5076,6 +5120,35 @@ fn excel_source_reads_xlsx() {
     assert_eq!(name, "bob", "got {}", name);
 }
 
+/// The sheet-name column is text even when no sheet is named and its value is
+/// unknown. As a bare NULL it had no type: "NULL" on DuckDB 2.0, INTEGER once
+/// 1.5 stored it.
+#[test]
+fn excel_sheet_column_is_text_when_no_sheet_is_named() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let xlsx = out_path(tmp.path(), "in.xlsx");
+    duckdb_exec(
+        ":memory:",
+        &format!(
+            "INSTALL excel; LOAD excel; COPY (SELECT 1 AS id) TO '{}' (FORMAT 'xlsx', HEADER true)",
+            xlsx
+        ),
+    );
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("r", "src.excel", json!({ "path": xlsx, "hasHeader": true, "sheetColumn": true })),
+            node("t", "code.sql", json!({ "sql": "SELECT typeof(sheet_name) AS t FROM r" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "r", "t"), main_edge("e2", "t", "k")]),
+    );
+    let result = engine.execute_pipeline(&d);
+    assert_eq!(result.status, "ok", "excel read failed: {:?}", result.error);
+    assert_eq!(scalar_string(&format!("SELECT t FROM read_csv_auto('{}')", out)), "VARCHAR");
+}
+
 #[test]
 fn pg_sink_upsert_updates_and_inserts() {
     // Live PG test: overwrite (3 rows), then upsert a new batch where
@@ -5166,6 +5239,59 @@ fn pg_sink_upsert_updates_and_inserts() {
         out
     ));
     assert_eq!(updated, "bobby", "got {}", updated);
+}
+
+/// A Postgres upsert lands whole or not at all. With delete propagation it
+/// is a DELETE, an INSERT and a cleanup; each goes to Postgres as its own
+/// statement (DuckDB 2.0's postgres_execute prepares its SQL and refuses a
+/// batch), so they share one transaction. Here the DELETE succeeds and the
+/// INSERT then breaks a NOT NULL: the deleted row must still be there.
+#[test]
+fn pg_upsert_is_all_or_nothing() {
+    let engine = engine_or_skip!();
+    let Some((host, port, db, user, pass)) = pg_env() else {
+        eprintln!("skipping: set DUCKLE_PG_HOST to run against PostgreSQL");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let table = format!("duckle_atomic_{}", uniq_suffix());
+    let bin = std::env::var("DUCKLE_DUCKDB_BIN").expect("DUCKLE_DUCKDB_BIN set");
+    let pg = |sql: &str| {
+        let out = std::process::Command::new(&bin)
+            .env("DUCKDB_AGENT_MODE", "0")
+            .args([":memory:", "-csv", "-noheader", "-c"])
+            .arg(format!(
+                "LOAD postgres; ATTACH 'host={host} port={port} dbname={db} user={user} password={pass}' AS d (TYPE POSTGRES); {sql}"
+            ))
+            .output()
+            .expect("duckdb runs");
+        assert!(out.status.success(), "{sql}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    pg(&format!(
+        "CALL postgres_execute('d', 'CREATE TABLE public.{table} (id INT PRIMARY KEY, name TEXT NOT NULL)'); \
+         CALL postgres_execute('d', 'INSERT INTO public.{table} VALUES (1, ''alice''), (2, ''bob'')');"
+    ));
+
+    // Row 1 is flagged for deletion; row 3 is new and has no name.
+    let csv = write_file(tmp.path(), "in.csv", "id,name,op\n1,,delete\n3,,\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("w", "snk.postgres", json!({
+                "host": &host, "port": port, "database": &db, "user": &user, "password": &pass,
+                "schemaName": "public", "tableName": &table, "mode": "upsert",
+                "conflictColumns": ["id"], "deleteColumn": "op"
+            })),
+        ]),
+        json!([main_edge("e", "s", "w")]),
+    ));
+    assert_ne!(r.status, "ok", "the insert breaks NOT NULL, so the upsert must fail");
+    assert_eq!(
+        pg(&format!("SELECT string_agg(id::VARCHAR, '|' ORDER BY id) FROM d.public.{table}")),
+        "1|2",
+        "the delete was kept although the insert failed"
+    );
 }
 
 #[test]
@@ -5317,6 +5443,57 @@ fn vector_search_ranks_by_cosine_similarity() {
         out
     ));
     assert_eq!(top, "3", "got {}", top);
+}
+
+/// xf.join.nearest pairs each driving row with its k closest lookup rows by
+/// vector (DuckDB 2.0's NEAREST join). Lookup row 40 points the same way as
+/// query 1 but lies far from it, so cosine picks 40 and euclidean picks 10:
+/// the metric is really what decides. The lookup vectors are plain lists, so
+/// the cast to FLOAT[dimension] is exercised too.
+#[test]
+fn nearest_join_pairs_each_row_with_its_closest_by_the_chosen_metric() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let queries = out_path(tmp.path(), "q.parquet");
+    let items = out_path(tmp.path(), "p.parquet");
+    duckdb_exec(
+        ":memory:",
+        &format!(
+            "COPY (SELECT * FROM (VALUES (1, [1.0, 0.0]::FLOAT[2]), (2, [0.0, 1.0]::FLOAT[2])) t(qid, emb)) \
+             TO '{queries}' (FORMAT PARQUET); \
+             COPY (SELECT * FROM (VALUES (10, [0.9, 0.1]), (20, [0.1, 0.9]), (40, [10.0, 0.0])) t(pid, vec)) \
+             TO '{items}' (FORMAT PARQUET);"
+        ),
+    );
+    let pairs = |metric: &str, k: u64, per_stage: bool| -> String {
+        let out = out_path(tmp.path(), &format!("{metric}{k}{per_stage}.csv"));
+        let d = doc(
+            json!([
+                node("q", "src.parquet", json!({ "path": queries })),
+                node("p", "src.parquet", json!({ "path": items })),
+                node("j", "xf.join.nearest", json!({
+                    "leftVector": "emb", "rightVector": "vec", "dimension": 2,
+                    "distanceMetric": metric, "topK": k
+                })),
+                node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ]),
+            json!([main_edge("e1", "q", "j"), lookup_edge("e2", "p", "j"), main_edge("e3", "j", "k")]),
+        );
+        // Naming a target defeats batching, so each stage is its own CLI.
+        let r = if per_stage {
+            engine.execute_pipeline_with_events(&d, Some("k"), None, |_| {})
+        } else {
+            engine.execute_pipeline(&d)
+        };
+        assert_eq!(r.status, "ok", "{metric}: {:?}", r.error);
+        scalar_string(&format!(
+            "SELECT string_agg(qid || '-' || pid, ' ' ORDER BY qid, pid) FROM read_csv_auto('{out}')"
+        ))
+    };
+    assert_eq!(pairs("cosine", 1, false), "1-40 2-20", "cosine: the same direction wins");
+    assert_eq!(pairs("l2", 1, false), "1-10 2-20", "euclidean: the nearest point wins");
+    assert_eq!(pairs("cosine", 2, false), "1-10 1-40 2-10 2-20", "two matches per row");
+    assert_eq!(pairs("cosine", 1, true), "1-40 2-20", "the per-stage path");
 }
 
 #[test]
@@ -13440,6 +13617,30 @@ fn mask_anonymizes_columns_live() {
     assert_eq!(e1.len(), 32, "md5 hex is 32 chars, got {}", e1);
 }
 
+/// qa.mask `null` empties a column and keeps its type. A bare NULL took none:
+/// DuckDB 1.5 typed it INTEGER and 2.0 types it "NULL", so a masked text
+/// column became one a later append of real text could not go into.
+#[test]
+fn mask_to_null_keeps_the_columns_type() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,name\n1,alice\n");
+    let out = out_path(tmp.path(), "out.csv");
+    let d = doc(
+        json!([
+            node("s", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("m", "qa.mask", json!({ "masks": [{ "column": "name", "mode": "null" }] })),
+            node("t", "code.sql", json!({ "sql": "SELECT typeof(name) AS t, name IS NULL AS emptied FROM m" })),
+            node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
+        ]),
+        json!([main_edge("e1", "s", "m"), main_edge("e2", "m", "t"), main_edge("e3", "t", "k")]),
+    );
+    let r = engine.execute_pipeline(&d);
+    assert_eq!(r.status, "ok", "qa.mask failed: {:?}", r.error);
+    let got = scalar_string(&format!("SELECT t || ',' || emptied FROM read_csv_auto('{}')", out));
+    assert_eq!(got, "VARCHAR,true", "the masked column's type and value");
+}
+
 /// Whole-pipeline lineage: a projected column traces across stages back to its
 /// root source column. src.csv(a,b,c) -> xf.project(a,b) -> snk.csv.
 #[test]
@@ -16791,6 +16992,35 @@ fn inspect_parquet_regression_still_selects() {
         "got {:?}",
         names
     );
+}
+
+/// DuckDB 2.0's VARIANT. xf.cast to `variant` parses JSON text into one - a
+/// plain cast would keep the text as a string inside the variant - a Parquet
+/// sink stores it as VARIANT, and Duckle reads such a column as
+/// semi-structured (json) rather than as text.
+#[test]
+fn json_text_casts_to_variant_and_parquet_keeps_it() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = write_file(tmp.path(), "in.json", "{\"id\": 1, \"payload\": \"{\\\"a\\\": 1, \\\"b\\\": [1, 2]}\"}\n");
+    let pq = out_path(tmp.path(), "out.parquet");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.json", json!({ "path": ndjson })),
+            node("c", "xf.cast", json!({ "casts": [{ "column": "payload", "targetType": "variant" }] })),
+            node("k", "snk.parquet", json!({ "path": pq })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        scalar_string(&format!("SELECT variant_typeof(payload) FROM read_parquet('{pq}')")),
+        "OBJECT(a, b)",
+        "the JSON was parsed, not kept as text"
+    );
+    let insp = engine.inspect("parquet", json!({ "path": pq })).expect("parquet inspect");
+    let payload = insp.schema.iter().find(|c| c.name == "payload").expect("payload column");
+    assert_eq!(payload.data_type, duckle_duckdb_engine::DataType::Json);
 }
 
 // --- snk.salesforce (sObject Collections) ------------------------------------

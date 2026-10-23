@@ -199,11 +199,12 @@ jaq-json = "2.0"
 regex = "1"
 # Ownership rules are globs over asset names. Already in the workspace lock.
 glob = "0.3"
-# IMAP client for src.email. 3.x alpha is what we need for rustls
-# support - the 2.x stable line only supports native-tls (OpenSSL on
-# Linux which would break the self-contained build promise). The
-# accompanying mail-parser decodes RFC 822 envelopes + MIME bodies.
-imap = { version = "=3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
+# IMAP client for src.email, with none of its TLS features: the stream is
+# opened on Duckle's own rustls (connectors.rs imap_connect) and handed in.
+# Its rustls-tls feature carried a second, older rustls that read only the OS
+# trust store. The accompanying mail-parser decodes RFC 822 envelopes + MIME
+# bodies.
+imap = { version = "=3.0.0-alpha.15", default-features = false }
 mail-parser = "0.11"
 rustls-connector = { version = "0.23", default-features = false, features = ["rustls--ring"] }
 # SMTP client for snk.email. Pure Rust with rustls-tls. Symmetric
@@ -289,6 +290,9 @@ wat = "1"
 # (Content-Encoding: gzip), reproducing the real SQL API partition
 # format that GitHub #24 was choking on.
 flate2 = "1"
+# Mints a CA and a server certificate at test time for the src.email tests, so
+# no private key is committed as a fixture. Default features: ring, as above.
+rcgen = "0.14"
 
 # flock(2) for the cross-process run lock. Windows uses a share-mode open,
 # which is in std, so this is unix-only. Already in the tree transitively.

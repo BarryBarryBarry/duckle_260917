@@ -339,6 +339,7 @@ pub(crate) fn build_view_sql(
         "xf.count" => build_count(inputs),
         "xf.join.cross" => build_cross_join(inputs),
         "xf.join.spatial" => build_spatial_join(inputs, props),
+        "xf.join.nearest" => build_nearest_join(inputs, props),
         "xf.regex" | "xf.regex.extract" | "xf.regex.match" | "xf.trim" | "xf.case"
         | "xf.length" | "xf.substring" | "xf.concat" | "xf.split" | "xf.format" => {
             build_string(inputs, props, component_id)
@@ -1664,7 +1665,15 @@ pub(crate) fn build_numeric(inputs: &NodeInputs, props: &JsonValue, component_id
             )
         }
         "xf.num.abs" => format!("abs({})", col),
-        "xf.num.mod" => format!("{} % {}", col, arg.ok_or("Modulo needs a divisor argument")?),
+        "xf.num.mod" => {
+            let divisor = arg.ok_or("Modulo needs a divisor argument")?;
+            // No data makes a divisor of 0 right: DuckDB 1.5 nulled every row
+            // and 2.0 fails the run with "Division by zero".
+            if divisor.trim().parse::<f64>().is_ok_and(|d| d == 0.0) {
+                return Err("Modulo needs a divisor other than 0".into());
+            }
+            format!("{} % {}", col, divisor)
+        }
         "xf.num.power" => format!("power({}, {})", col, arg.unwrap_or_else(|| "2".into())),
         "xf.num.sqrt" => format!("sqrt({})", col),
         "xf.num.log" => match arg {
@@ -2418,7 +2427,9 @@ fn mask_replacement(column: &str, mode: &str, salt: Option<&str>, show_last: i64
     let q = quote_ident(column);
     let cv = format!("CAST({} AS VARCHAR)", q);
     let expr = match mode {
-        "null" => "NULL".to_string(),
+        // Always NULL, typed as the column: a bare NULL has no type, which
+        // DuckDB 2.0 keeps as the "NULL" type and 1.5 made INTEGER.
+        "null" => format!("CASE WHEN false THEN {} END", q),
         "constant" => format!("'{}'", sql_escape(value.unwrap_or(""))),
         "hash" => match salt.filter(|s| !s.trim().is_empty()) {
             Some(s) => format!("md5('{}' || {})", sql_escape(s), cv),
@@ -4187,6 +4198,18 @@ fn cast_with_format(cast_fn: &str, column: &str, target_lc: &str, fmt: &str) -> 
     )
 }
 
+/// The SQL casting `column` to a Cast target. `variant` goes through JSON:
+/// DuckDB 2.0 keeps text cast straight to VARIANT as a string, so JSON text has
+/// to be parsed on the way for its objects and arrays to arrive as such.
+fn cast_expr(cast_fn: &str, column: &str, target: &str) -> String {
+    let col = quote_ident(column);
+    if target.eq_ignore_ascii_case("variant") {
+        format!("{cast_fn}({cast_fn}({col} AS JSON) AS VARIANT)")
+    } else {
+        format!("{cast_fn}({col} AS {})", duckle_type_to_duckdb(target))
+    }
+}
+
 pub(crate) fn build_cast(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
     let upstream = inputs.main().ok_or_else(|| "missing main input".to_string())?;
     let casts = props
@@ -4256,13 +4279,7 @@ pub(crate) fn build_cast(inputs: &NodeInputs, props: &JsonValue) -> Result<Strin
         if let (Some(fmt), true) = (fmt, target_lc == "date" || target_lc.starts_with("timestamp")) {
             replacements.push(cast_with_format(cast_fn, column, &target_lc, fmt));
         } else {
-            replacements.push(format!(
-                "{}({} AS {}) AS {}",
-                cast_fn,
-                quote_ident(column),
-                duckle_type_to_duckdb(target),
-                quote_ident(column)
-            ));
+            replacements.push(format!("{} AS {}", cast_expr(cast_fn, column, target), quote_ident(column)));
         }
     }
     // The Cast form is single-column: { column, targetType, format }.
@@ -4280,13 +4297,7 @@ pub(crate) fn build_cast(inputs: &NodeInputs, props: &JsonValue) -> Result<Strin
             {
                 replacements.push(cast_with_format(cast_fn, column, &target_lc, fmt));
             } else {
-                replacements.push(format!(
-                    "{}({} AS {}) AS {}",
-                    cast_fn,
-                    quote_ident(column),
-                    duckle_type_to_duckdb(&target),
-                    quote_ident(column)
-                ));
+                replacements.push(format!("{} AS {}", cast_expr(cast_fn, column, &target), quote_ident(column)));
             }
         }
     }
@@ -8659,6 +8670,54 @@ fn spatial_relation_fn(props: &JsonValue) -> &'static str {
     }
 }
 
+/// xf.join.nearest: DuckDB 2.0's NEAREST join. Each driving row is paired with
+/// the `topK` lookup rows whose vectors are closest by `distanceMetric`, and the
+/// pair's score is added as `outputColumn`. Both vector columns are cast to
+/// FLOAT[dimension], as xf.ai.vector_search casts its one. `approx` lets DuckDB
+/// search approximately; `joinType` left keeps a driving row with no match.
+pub(crate) fn build_nearest_join(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
+    let left = inputs.main().ok_or_else(|| missing_input_msg("xf.join.nearest"))?;
+    let right = inputs
+        .first_lookup()
+        .ok_or_else(|| "Nearest Join needs a lookup input: the rows to match against".to_string())?;
+    let column = |key: &str, which: &str| {
+        string_prop(props, key)
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| format!("Nearest Join needs the {which} input's vector column"))
+    };
+    let (left_vec, right_vec) = (column("leftVector", "driving")?, column("rightVector", "lookup")?);
+    let dim = props
+        .get("dimension")
+        .and_then(|v| v.as_u64())
+        .filter(|d| *d > 0)
+        .ok_or_else(|| "Nearest Join needs a positive dimension".to_string())?;
+    let k = props.get("topK").and_then(|v| v.as_u64()).filter(|k| *k > 0).unwrap_or(1);
+    let (func, by) = match string_prop(props, "distanceMetric").as_deref() {
+        Some("l2") | Some("distance") => ("array_distance", "DISTANCE"),
+        Some("inner_product") | Some("dot") => ("array_inner_product", "SIMILARITY"),
+        _ => ("array_cosine_similarity", "SIMILARITY"),
+    };
+    let kind = match string_prop(props, "joinType").as_deref() {
+        Some("left") => "LEFT",
+        _ => "INNER",
+    };
+    let approx = if props.get("approx").and_then(JsonValue::as_bool).unwrap_or(false) { "APPROX " } else { "" };
+    let output = string_prop(props, "outputColumn")
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "similarity_score".into());
+    let score = format!(
+        "{func}(CAST(m.{l} AS FLOAT[{dim}]), CAST(r.{r} AS FLOAT[{dim}]))",
+        l = quote_ident(&left_vec),
+        r = quote_ident(&right_vec),
+    );
+    Ok(format!(
+        "SELECT m.*, r.*, {score} AS {out} FROM {lt} m {kind} JOIN {rt} r {approx}NEAREST {k} BY {by} {score}",
+        out = quote_ident(&output),
+        lt = quote_ident(left),
+        rt = quote_ident(right),
+    ))
+}
+
 pub(crate) fn build_spatial_join(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
     let left = inputs
         .main()
@@ -9395,10 +9454,21 @@ pub(crate) fn build_iceberg_source(props: &JsonValue) -> Result<String, String> 
     Ok(format!("SELECT * FROM iceberg_scan('{}')", sql_escape(&path)))
 }
 
-/// Delta Lake source via the DuckDB delta extension's `delta_scan`.
+/// Delta Lake source via the DuckDB delta extension's `delta_scan`, read as of
+/// a table version or a point in time when one is set: the `asOfVersion` /
+/// `asOfTimestamp` pair DuckLake takes, the version winning when both are.
+/// `version =>` reads on DuckDB 1.5.4 and later, `timestamp =>` on 2.0.
 pub(crate) fn build_delta_source(props: &JsonValue) -> String {
     let path = string_prop(props, "path").unwrap_or_default();
-    format!("SELECT * FROM delta_scan('{}')", sql_escape(&path))
+    let version = props
+        .get("asOfVersion")
+        .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())));
+    let at = match (version, string_prop(props, "asOfTimestamp").filter(|s| !s.trim().is_empty())) {
+        (Some(v), _) => format!(", version => {v}"),
+        (None, Some(ts)) => format!(", timestamp => '{}'", sql_escape(ts.trim())),
+        (None, None) => String::new(),
+    };
+    format!("SELECT * FROM delta_scan('{}'{})", sql_escape(&path), at)
 }
 
 /// The sheet names in an `.xlsx`, in workbook order.
@@ -9520,7 +9590,7 @@ pub(crate) fn build_excel_source(
             (true, Some(s)) => format!("SELECT *, '{}' AS sheet_name", sql_escape(s)),
             // Without a named sheet read_xlsx takes the first one, and its name
             // is not something this query knows.
-            (true, None) => "SELECT *, NULL AS sheet_name".to_string(),
+            (true, None) => "SELECT *, NULL::VARCHAR AS sheet_name".to_string(),
             _ => "SELECT *".to_string(),
         };
         format!("{} FROM read_xlsx({})", select, args.join(", "))

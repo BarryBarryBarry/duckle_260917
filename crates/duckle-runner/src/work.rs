@@ -218,8 +218,10 @@ pub fn run() -> Result<i32, String> {
     if let Some((ws, key)) = probe {
         return Ok(lock_probe(Path::new(&ws), &key));
     }
-    let workspace = std::fs::canonicalize(&workspace)
+    std::fs::canonicalize(&workspace)
         .map_err(|e| format!("workspace {}: {e}", workspace.display()))?;
+    // Without Windows' `\\?\`: this becomes DUCKLE_WORKSPACE and `${workspace}`.
+    let workspace = crate::serve::plain_workspace(&workspace);
 
     match verb.as_str() {
         "" => {}

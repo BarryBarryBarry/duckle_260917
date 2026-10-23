@@ -1627,6 +1627,33 @@
         }
     }
 
+    /// Modulo by 0 is a setting no data can make right. DuckDB 1.5 gave every
+    /// row NULL and 2.0 fails the run with "Division by zero", so the same
+    /// node meant two things; the planner refuses it on both.
+    #[test]
+    fn modulo_by_zero_is_refused() {
+        for zero in ["0", "0.0", "-0"] {
+            let p = pipeline_from_json(&format!(
+                r#"{{
+                  "nodes": [
+                    {{"id":"s","position":{{"x":0,"y":0}},"data":{{
+                      "label":"CSV","componentId":"src.csv",
+                      "properties":{{"path":"/tmp/x.csv","hasHeader":true}}}}}},
+                    {{"id":"n","position":{{"x":0,"y":0}},"data":{{
+                      "label":"Mod","componentId":"xf.num.mod",
+                      "properties":{{"column":"v","argument":"{}"}}}}}}
+                  ],
+                  "edges": [
+                    {{"id":"e1","source":"s","target":"n","data":{{"connectionType":"main"}}}}
+                  ]
+                }}"#,
+                zero
+            ));
+            let err = compile(&p).err().map(|e| e.to_string()).unwrap_or_default();
+            assert!(err.contains("divisor"), "modulo by '{zero}' should be refused, got: {err:?}");
+        }
+    }
+
     #[test]
     fn addcol_typed_expr_defaults_to_try_cast() {
         // audit B5: a typed Add-Column should TRY_CAST by default so one
@@ -1803,7 +1830,7 @@
         assert!(sql.starts_with("SELECT * REPLACE ("), "got: {}", sql);
         assert!(sql.contains("right(CAST(\"ssn\" AS VARCHAR), 4)"), "got: {}", sql);
         assert!(sql.contains("md5('s7' || CAST(\"email\" AS VARCHAR)) AS \"email\""), "got: {}", sql);
-        assert!(sql.contains("NULL AS \"name\""), "got: {}", sql);
+        assert!(sql.contains("CASE WHEN false THEN \"name\" END AS \"name\""), "got: {}", sql);
         assert!(sql.contains("'X' AS \"note\""), "got: {}", sql);
         assert!(sql.contains("FROM \"up\""), "got: {}", sql);
         // hash without salt is unsalted md5; unknown mode is a loud error.

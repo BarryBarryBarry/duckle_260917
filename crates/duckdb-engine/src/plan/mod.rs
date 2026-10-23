@@ -134,7 +134,7 @@ pub struct Stage {
     /// only decides whether the stages after it are attempted.
     pub continue_on_failure: bool,
     pub retry_backoff_ms: u64,
-    /// PRAGMA memory_limit prepended to the stage SQL when set. Lets a
+    /// SET memory_limit prepended to the stage SQL when set. Lets a
     /// user cap a heavy aggregation without touching the whole pipeline.
     pub memory_limit_mb: Option<u32>,
     /// True when this is a duck-family source the user set to Materialize=View.
@@ -2886,6 +2886,7 @@ fn build_stage(
             from_view: from_view.to_string(),
             path,
             create_if_missing: props.get("createIfMissing").and_then(|v| v.as_bool()).unwrap_or(true),
+            partition_by: columns_list(&props, "partitionBy"),
         });
         (String::new(), StageKind::Sink, Some(from_view.to_string()))
     } else if component_id == "snk.snowflake" {
@@ -7204,9 +7205,14 @@ fn build_stage(
         // outright has said which they want.
         let stage_owns_its_work =
             memory_limit_mb.is_some() || retry_attempts > 1 || continue_on_failure;
+        // A NEAREST join cannot be stored as a VIEW: the run-db is opened at
+        // storage v1.5.0 (see run()), and DuckDB 2.0 refuses to serialize one
+        // there ("NEAREST BY requires storage version v2.0.0"). Its rows are
+        // stored instead.
         let forced_table =
             matches!(materialize, "table" | "memory" | "disk" | "duckdb" | "duckdbfile")
-                || (stage_owns_its_work && !forced_view);
+                || (stage_owns_its_work && !forced_view)
+                || component_id == "xf.join.nearest";
         let view_ok = |consumers: usize| {
             !uses_dynamic_pivot
                 && !attach_backed

@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 419,
+  "componentCount": 420,
   "components": [
     {
       "id": "src.csv",
@@ -1347,7 +1347,7 @@
                     "value": "flushInlined"
                   }
                 ],
-                "description": "Each one is a single DuckLake function, so what it does follows the installed DuckLake rather than anything Duckle decides. Its result rows become the output of this node, which is what lets a quality check or an alert read a compaction like any other relation."
+                "description": "Each one is a single DuckLake function, so what it does follows the installed DuckLake rather than anything Otter ETL agent decides. Its result rows become the output of this node, which is what lets a quality check or an alert read a compaction like any other relation."
               },
               {
                 "key": "dryRun",
@@ -2112,7 +2112,7 @@
                 "label": "Next-page link",
                 "kind": "text",
                 "placeholder": "a.next",
-                "description": "A CSS selector for the link to the next page. Duckle follows it, then the one that page names, until a page names none - so server-rendered pagination needs no loop. Relative links are resolved the way a browser does, against the page URL or a <base href> if the document sets one. Leave blank to read one page. Ignored when documents are wired in from upstream, since that list already names every page it wants."
+                "description": "A CSS selector for the link to the next page. Otter ETL agent follows it, then the one that page names, until a page names none - so server-rendered pagination needs no loop. Relative links are resolved the way a browser does, against the page URL or a <base href> if the document sets one. Leave blank to read one page. Ignored when documents are wired in from upstream, since that list already names every page it wants."
               },
               {
                 "key": "nextPageAttribute",
@@ -2126,7 +2126,7 @@
                 "label": "Max pages",
                 "kind": "integer",
                 "defaultValue": 100,
-                "description": "A safety cap. A next link written by someone else can point back at page 1, which is a cycle rather than a long list; Duckle also stops on its own if a URL repeats."
+                "description": "A safety cap. A next link written by someone else can point back at page 1, which is a cycle rather than a long list; Otter ETL agent also stops on its own if a URL repeats."
               }
             ]
           },
@@ -4614,7 +4614,7 @@
                 "accepts": [
                   "s3"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below.",
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input.",
                 "visibleWhen": {
                   "key": "catalog",
                   "equals": "rest"
@@ -4769,7 +4769,26 @@
                 "kind": "text",
                 "required": true,
                 "placeholder": "s3://lake/orders/  or  /var/lakes/orders",
-                "description": "The Iceberg / Delta table root: a local directory or an s3:// URL."
+                "description": "The Delta table root, the directory holding _delta_log: a local directory or an s3:// URL."
+              }
+            ]
+          },
+          {
+            "label": "Time travel",
+            "fields": [
+              {
+                "key": "asOfVersion",
+                "label": "As of version",
+                "kind": "integer",
+                "placeholder": "e.g. 12",
+                "description": "Read the table as of this Delta table version. Leave empty for the latest."
+              },
+              {
+                "key": "asOfTimestamp",
+                "label": "As of timestamp",
+                "kind": "text",
+                "placeholder": "YYYY-MM-DD HH:MM:SS",
+                "description": "Read the table as it was at this point in time: the newest version committed at or before it. Read in the session time zone unless it carries an offset, e.g. +00. Used only when no version is set."
               }
             ]
           }
@@ -5158,7 +5177,7 @@
                 "accepts": [
                   "postgres"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -5383,7 +5402,7 @@
                 "accepts": [
                   "postgres"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -5525,7 +5544,7 @@
                 "label": "Publication",
                 "kind": "text",
                 "placeholder": "<slot>_pub",
-                "description": "Defaults to the slot name with _pub. The one Duckle creates publishes insert, update and delete for this table only."
+                "description": "Defaults to the slot name with _pub. The one Otter ETL agent creates publishes insert, update and delete for this table only."
               },
               {
                 "key": "createIfMissing",
@@ -5608,7 +5627,7 @@
                 "accepts": [
                   "mysql"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -5751,7 +5770,7 @@
                 "accepts": [
                   "mariadb"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -5894,7 +5913,7 @@
                 "accepts": [
                   "sqlserver"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -6013,7 +6032,7 @@
                 "accepts": [
                   "oracle"
                 ],
-                "description": "Pick a saved connection to supply the fields below. Database connections are created from the 数据源 (data source) menu in the Agent input."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "connect",
@@ -6085,7 +6104,7 @@
                 "key": "oracleRuntimeNote",
                 "label": "Heads-up",
                 "kind": "note",
-                "description": "Oracle support is built into Duckle. Users only need Oracle Instant Client (libclntsh.so / OCI.dll / libclntsh.dylib) on the library path at runtime. If it is missing the executor surfaces a clear loader error."
+                "description": "Oracle support is built into Otter ETL agent. Users only need Oracle Instant Client (libclntsh.so / OCI.dll / libclntsh.dylib) on the library path at runtime. If it is missing the executor surfaces a clear loader error."
               }
             ]
           }
@@ -6816,7 +6835,7 @@
                 "accepts": [
                   "postgres"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -7268,7 +7287,7 @@
                 "accepts": [
                   "jdbc"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -7609,7 +7628,7 @@
                 "accepts": [
                   "redshift"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -7910,7 +7929,7 @@
                 "accepts": [
                   "sqlserver"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -10370,7 +10389,7 @@
                     "value": "SCRAM-SHA-512"
                   }
                 ],
-                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
+                "description": "Only these three are implemented by the Kafka client Otter ETL agent uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
@@ -10562,7 +10581,7 @@
                     "value": "SCRAM-SHA-512"
                   }
                 ],
-                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
+                "description": "Only these three are implemented by the Kafka client Otter ETL agent uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
@@ -10740,7 +10759,7 @@
                     "value": "SCRAM-SHA-512"
                   }
                 ],
-                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
+                "description": "Only these three are implemented by the Kafka client Otter ETL agent uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
@@ -11176,7 +11195,7 @@
                     "value": "SCRAM-SHA-512"
                   }
                 ],
-                "description": "Only these three are implemented by the Kafka client Duckle uses. Anything else fails the run rather than connecting unauthenticated."
+                "description": "Only these three are implemented by the Kafka client Otter ETL agent uses. Anything else fails the run rather than connecting unauthenticated."
               },
               {
                 "key": "saslUsername",
@@ -11486,7 +11505,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -11968,7 +11987,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -12298,7 +12317,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -12763,7 +12782,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -13185,7 +13204,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -13650,7 +13669,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -14086,7 +14105,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -14522,7 +14541,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -15764,7 +15783,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -16338,7 +16357,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -16983,7 +17002,7 @@
                 "accepts": [
                   "pgvector"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -17183,7 +17202,7 @@
                 "accepts": [
                   "pinecone"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               }
             ]
           },
@@ -17274,7 +17293,7 @@
                 "accepts": [
                   "qdrant"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "clusterUrl",
@@ -17362,7 +17381,7 @@
                 "accepts": [
                   "weaviate"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "endpoint",
@@ -17469,7 +17488,7 @@
                 "accepts": [
                   "chroma"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               }
             ]
           },
@@ -17560,7 +17579,7 @@
                 "accepts": [
                   "milvus"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "endpoint",
@@ -17633,7 +17652,7 @@
       "label": "Pixeltable",
       "kind": "source",
       "availability": "available",
-      "summary": "Read a Pixeltable table (#223), the multimodal AI data store. Exchanges through Parquet: Pixeltable exports the table (or a filtered/limited subset) and Duckle ingests it with read_parquet, so no rows cross one at a time. Supports versioned reads via table:N. Needs a Python with pixeltable installed; the desktop app provisions one on first use.",
+      "summary": "Read a Pixeltable table (#223), the multimodal AI data store. Exchanges through Parquet: Pixeltable exports the table (or a filtered/limited subset) and Otter ETL agent ingests it with read_parquet, so no rows cross one at a time. Supports versioned reads via table:N. Needs a Python with pixeltable installed; the desktop app provisions one on first use.",
       "ports": {
         "inputs": [],
         "outputs": [
@@ -17648,7 +17667,7 @@
         "id": "src.pixeltable",
         "kind": "source",
         "label": "Pixeltable",
-        "description": "Read a Pixeltable table (#223), the multimodal AI data store. Exchanges through Parquet: Pixeltable exports the table (or a filtered/limited subset) and Duckle ingests it with read_parquet, so no rows cross one at a time. Supports versioned reads via table:N. Needs a Python with pixeltable installed; the desktop app provisions one on first use.",
+        "description": "Read a Pixeltable table (#223), the multimodal AI data store. Exchanges through Parquet: Pixeltable exports the table (or a filtered/limited subset) and Otter ETL agent ingests it with read_parquet, so no rows cross one at a time. Supports versioned reads via table:N. Needs a Python with pixeltable installed; the desktop app provisions one on first use.",
         "schemaSource": "upstream",
         "sections": [
           {
@@ -20297,6 +20316,156 @@
               "label": "unmatched",
               "type": "reject",
               "optional": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "xf.join.nearest",
+      "label": "Nearest Join",
+      "kind": "transform",
+      "availability": "available",
+      "summary": "Two-input join that pairs each driving row with the k lookup rows whose vectors are closest (cosine, inner product or euclidean), with the score - DuckDB 2.0 NEAREST join, exact or approximate",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "driving",
+            "type": "main"
+          },
+          {
+            "id": "lookup",
+            "label": "lookup",
+            "type": "lookup"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "matched",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "xf.join.nearest",
+        "kind": "transform",
+        "label": "Nearest Join",
+        "description": "Two-input join that pairs each driving row with the k lookup rows whose vectors are closest (cosine, inner product or euclidean), with the score - DuckDB 2.0 NEAREST join, exact or approximate",
+        "schemaSource": "declared",
+        "sections": [
+          {
+            "label": "Nearest join",
+            "fields": [
+              {
+                "key": "leftVector",
+                "label": "Driving vector column",
+                "kind": "text",
+                "required": true,
+                "placeholder": "embedding",
+                "description": "The embedding on each driving row: an array of numbers."
+              },
+              {
+                "key": "rightVector",
+                "label": "Lookup vector column",
+                "kind": "text",
+                "required": true,
+                "placeholder": "embedding",
+                "description": "The embedding on each lookup row, compared against the driving one."
+              },
+              {
+                "key": "dimension",
+                "label": "Dimension",
+                "kind": "integer",
+                "required": true,
+                "placeholder": "384",
+                "description": "The length of every vector. Both columns are read as FLOAT[dimension], so a list of another length fails the run."
+              },
+              {
+                "key": "distanceMetric",
+                "label": "Closeness",
+                "kind": "select",
+                "defaultValue": "cosine",
+                "options": [
+                  {
+                    "label": "Cosine similarity (higher is closer)",
+                    "value": "cosine"
+                  },
+                  {
+                    "label": "Inner product (higher is closer)",
+                    "value": "inner_product"
+                  },
+                  {
+                    "label": "Euclidean distance (lower is closer)",
+                    "value": "l2"
+                  }
+                ]
+              },
+              {
+                "key": "topK",
+                "label": "Matches per row (k)",
+                "kind": "integer",
+                "defaultValue": 1,
+                "description": "How many of the closest lookup rows to pair with each driving row."
+              },
+              {
+                "key": "approx",
+                "label": "Approximate",
+                "kind": "bool",
+                "defaultValue": false,
+                "description": "Let DuckDB find the matches approximately, which is faster on large inputs and may miss the exact closest."
+              },
+              {
+                "key": "joinType",
+                "label": "Join type",
+                "kind": "select",
+                "defaultValue": "inner",
+                "options": [
+                  {
+                    "label": "INNER",
+                    "value": "inner"
+                  },
+                  {
+                    "label": "LEFT (keep every driving row)",
+                    "value": "left"
+                  }
+                ]
+              },
+              {
+                "key": "outputColumn",
+                "label": "Score column",
+                "kind": "text",
+                "defaultValue": "similarity_score",
+                "description": "The closeness of each pair: the similarity, or for euclidean the distance. Columns both inputs share come out with a _1 suffix on the lookup side."
+              },
+              {
+                "key": "nearestNote",
+                "label": "Needs DuckDB 2.0",
+                "kind": "note",
+                "description": "NEAREST joins arrived in DuckDB 2.0; an older engine refuses the SQL."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "driving",
+              "type": "main"
+            },
+            {
+              "id": "lookup",
+              "label": "lookup",
+              "type": "lookup"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "matched",
+              "type": "main"
             }
           ]
         }
@@ -32628,7 +32797,7 @@
                 "accepts": [
                   "s3"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below.",
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input.",
                 "visibleWhen": {
                   "key": "catalog",
                   "equals": "rest"
@@ -32958,6 +33127,12 @@
                 "kind": "bool",
                 "defaultValue": true,
                 "description": "Creates the table from the input columns and their types on the first run. Off, a missing table is an error, so a mistyped path cannot quietly start a new table."
+              },
+              {
+                "key": "partitionBy",
+                "label": "Partition by columns",
+                "kind": "columns",
+                "description": "For a table this node creates: one directory per value (region=eu/), recorded in the Delta log so readers prune by it. An existing table keeps the partitioning it was made with. At least one column must stay out of the partitioning."
               }
             ]
           }
@@ -33007,7 +33182,7 @@
                 "accepts": [
                   "postgres"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -33267,7 +33442,7 @@
                 "accepts": [
                   "postgres"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -33527,7 +33702,7 @@
                 "accepts": [
                   "mysql"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -33712,7 +33887,7 @@
                 "accepts": [
                   "mariadb"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -33897,7 +34072,7 @@
                 "accepts": [
                   "sqlserver"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -34107,7 +34282,7 @@
                 "accepts": [
                   "oracle"
                 ],
-                "description": "Pick a saved connection to supply the fields below. Database connections are created from the 数据源 (data source) menu in the Agent input."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "connect",
@@ -34205,7 +34380,7 @@
                 "key": "oracleRuntimeNote",
                 "label": "Heads-up",
                 "kind": "note",
-                "description": "Oracle support is built into Duckle. Users only need Oracle Instant Client (libclntsh.so / OCI.dll / libclntsh.dylib) on the library path at runtime. If it is missing the executor surfaces a clear loader error."
+                "description": "Oracle support is built into Otter ETL agent. Users only need Oracle Instant Client (libclntsh.so / OCI.dll / libclntsh.dylib) on the library path at runtime. If it is missing the executor surfaces a clear loader error."
               }
             ]
           }
@@ -35387,7 +35562,7 @@
                 "accepts": [
                   "jdbc"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -36271,7 +36446,7 @@
                 "accepts": [
                   "redshift"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -36674,7 +36849,7 @@
                 "accepts": [
                   "sqlserver"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -36884,7 +37059,7 @@
                 "accepts": [
                   "salesforce"
                 ],
-                "description": "Pick a saved Salesforce connection (Connections folder). Resolved and decrypted at run time; inline auth fields hide while one is set."
+                "description": "Pick a saved Salesforce connection. Resolved and decrypted at run time; inline auth fields hide while one is set."
               },
               {
                 "key": "authMode",
@@ -37291,7 +37466,7 @@
                 "accepts": [
                   "salesforce"
                 ],
-                "description": "Pick a saved Salesforce connection (Connections folder). Resolved and decrypted at run time; inline auth fields hide while one is set."
+                "description": "Pick a saved Salesforce connection. Resolved and decrypted at run time; inline auth fields hide while one is set."
               },
               {
                 "key": "authMode",
@@ -41123,7 +41298,7 @@
                 "accepts": [
                   "pgvector"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "host",
@@ -41601,7 +41776,7 @@
                 "accepts": [
                   "chroma"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               }
             ]
           },
@@ -41773,7 +41948,7 @@
       "label": "Pixeltable",
       "kind": "sink",
       "availability": "available",
-      "summary": "Write rows into a Pixeltable table (#223). Duckle COPYs the upstream rows to Parquet and Pixeltable inserts the file directly. Insert appends to an existing table; Create builds one from the incoming rows. Needs a Python with pixeltable installed; the desktop app provisions one on first use.",
+      "summary": "Write rows into a Pixeltable table (#223). Otter ETL agent COPYs the upstream rows to Parquet and Pixeltable inserts the file directly. Insert appends to an existing table; Create builds one from the incoming rows. Needs a Python with pixeltable installed; the desktop app provisions one on first use.",
       "ports": {
         "inputs": [
           {
@@ -41788,7 +41963,7 @@
         "id": "snk.pixeltable",
         "kind": "sink",
         "label": "Pixeltable",
-        "description": "Write rows into a Pixeltable table (#223). Duckle COPYs the upstream rows to Parquet and Pixeltable inserts the file directly. Insert appends to an existing table; Create builds one from the incoming rows. Needs a Python with pixeltable installed; the desktop app provisions one on first use.",
+        "description": "Write rows into a Pixeltable table (#223). Otter ETL agent COPYs the upstream rows to Parquet and Pixeltable inserts the file directly. Insert appends to an existing table; Create builds one from the incoming rows. Needs a Python with pixeltable installed; the desktop app provisions one on first use.",
         "schemaSource": "autodetect",
         "sections": [
           {
@@ -47319,7 +47494,7 @@
                 "accepts": [
                   "salesforce"
                 ],
-                "description": "Pick a saved Salesforce connection (Connections folder). Resolved and decrypted at run time; inline auth fields hide while one is set."
+                "description": "Pick a saved Salesforce connection. Resolved and decrypted at run time; inline auth fields hide while one is set."
               },
               {
                 "key": "transportRef",
@@ -47693,7 +47868,7 @@
                 "accepts": [
                   "salesforce"
                 ],
-                "description": "Pick a saved Salesforce connection (Connections folder). Resolved and decrypted at run time; inline auth fields hide while one is set."
+                "description": "Pick a saved Salesforce connection. Resolved and decrypted at run time; inline auth fields hide while one is set."
               },
               {
                 "key": "authMode",
@@ -47967,7 +48142,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -48403,7 +48578,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -48839,7 +49014,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -49275,7 +49450,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -49711,7 +49886,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -50147,7 +50322,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -50583,7 +50758,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -51019,7 +51194,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -51455,7 +51630,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -51891,7 +52066,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -52327,7 +52502,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -52763,7 +52938,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -53199,7 +53374,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -53792,7 +53967,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -54122,7 +54297,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -54511,7 +54686,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -54906,7 +55081,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -55342,7 +55517,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -55761,7 +55936,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -56097,7 +56272,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -56533,7 +56708,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -56969,7 +57144,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -57405,7 +57580,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -57841,7 +58016,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -58277,7 +58452,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -58713,7 +58888,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",
@@ -59149,7 +59324,7 @@
                 "accepts": [
                   "rest"
                 ],
-                "description": "Pick a connection from the Connections folder to auto-fill the fields below."
+                "description": "Pick a saved connection to supply the fields below. Database connections are created from the Data sources menu in the Agent input."
               },
               {
                 "key": "transportRef",

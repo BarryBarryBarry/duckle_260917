@@ -180,7 +180,7 @@ const writeModeField = (componentId?: string): Field => ({
 
 // How a cloud storage node signs in: the keys typed here, or, for S3, the
 // S3-compatible stores and Azure, whatever identity the run has where it runs,
-// with no key in the pipeline. GCS stays keys only: DuckDB 1.5.5 reads it with
+// with no key in the pipeline. GCS stays keys only: DuckDB 2.0.0 reads it with
 // HMAC keys and has no Google credential chain (its "chain" for GCS is AWS's).
 // Azure's secret is made from an account name and key (lib.rs secret_statement),
 // which is what this offers it; the access/secret pair it used to get was never read.
@@ -2405,6 +2405,30 @@ function synthLakehouseSource(comp: ComponentDef): ComponentManifest {
             },
         ]);
     }
+    if (comp.id === 'src.delta') {
+        return base(comp, [
+            {
+                label: 'Table',
+                fields: [
+                    {
+                        key: 'path',
+                        label: 'Table path',
+                        kind: 'text',
+                        required: true,
+                        placeholder: 's3://lake/orders/  or  /var/lakes/orders',
+                        description: 'The Delta table root, the directory holding _delta_log: a local directory or an s3:// URL.',
+                    },
+                ],
+            },
+            {
+                label: 'Time travel',
+                fields: [
+                    { key: 'asOfVersion', label: 'As of version', kind: 'integer', placeholder: 'e.g. 12', description: 'Read the table as of this Delta table version. Leave empty for the latest.' },
+                    { key: 'asOfTimestamp', label: 'As of timestamp', kind: 'text', placeholder: 'YYYY-MM-DD HH:MM:SS', description: 'Read the table as it was at this point in time: the newest version committed at or before it. Read in the session time zone unless it carries an offset, e.g. +00. Used only when no version is set.' },
+                ],
+            },
+        ]);
+    }
     // Iceberg + Delta both take a path to the table location: a local
     // directory containing the metadata + data files, or an `s3://...`
     // URL backed by a cloud SECRET configured under Connections.
@@ -2436,6 +2460,7 @@ function synthLakehouseSink(comp: ComponentDef): ComponentManifest {
                 fields: [
                     { key: 'path', label: 'Table directory', kind: 'text', required: true, placeholder: '/data/lake/orders', description: 'The Delta table directory, the one holding _delta_log. Local paths for now: a table on object storage is refused until writing there has been tested.' },
                     { key: 'createIfMissing', label: 'Create the table if missing', kind: 'bool', defaultValue: true, description: 'Creates the table from the input columns and their types on the first run. Off, a missing table is an error, so a mistyped path cannot quietly start a new table.' },
+                    { key: 'partitionBy', label: 'Partition by columns', kind: 'columns', description: 'For a table this node creates: one directory per value (region=eu/), recorded in the Delta log so readers prune by it. An existing table keeps the partitioning it was made with. At least one column must stay out of the partitioning.' },
                 ],
             },
         ]);
@@ -6452,6 +6477,43 @@ function synthJoinTransform(comp: ComponentDef): ComponentManifest {
                             { label: 'LEFT', value: 'left' },
                         ],
                     },
+                ],
+            },
+        ], 'declared');
+    }
+    if (comp.id === 'xf.join.nearest') {
+        return base(comp, [
+            {
+                label: 'Nearest join',
+                fields: [
+                    { key: 'leftVector', label: 'Driving vector column', kind: 'text', required: true, placeholder: 'embedding', description: 'The embedding on each driving row: an array of numbers.' },
+                    { key: 'rightVector', label: 'Lookup vector column', kind: 'text', required: true, placeholder: 'embedding', description: 'The embedding on each lookup row, compared against the driving one.' },
+                    { key: 'dimension', label: 'Dimension', kind: 'integer', required: true, placeholder: '384', description: 'The length of every vector. Both columns are read as FLOAT[dimension], so a list of another length fails the run.' },
+                    {
+                        key: 'distanceMetric',
+                        label: 'Closeness',
+                        kind: 'select',
+                        defaultValue: 'cosine',
+                        options: [
+                            { label: 'Cosine similarity (higher is closer)', value: 'cosine' },
+                            { label: 'Inner product (higher is closer)', value: 'inner_product' },
+                            { label: 'Euclidean distance (lower is closer)', value: 'l2' },
+                        ],
+                    },
+                    { key: 'topK', label: 'Matches per row (k)', kind: 'integer', defaultValue: 1, description: 'How many of the closest lookup rows to pair with each driving row.' },
+                    { key: 'approx', label: 'Approximate', kind: 'bool', defaultValue: false, description: 'Let DuckDB find the matches approximately, which is faster on large inputs and may miss the exact closest.' },
+                    {
+                        key: 'joinType',
+                        label: 'Join type',
+                        kind: 'select',
+                        defaultValue: 'inner',
+                        options: [
+                            { label: 'INNER', value: 'inner' },
+                            { label: 'LEFT (keep every driving row)', value: 'left' },
+                        ],
+                    },
+                    { key: 'outputColumn', label: 'Score column', kind: 'text', defaultValue: 'similarity_score', description: 'The closeness of each pair: the similarity, or for euclidean the distance. Columns both inputs share come out with a _1 suffix on the lookup side.' },
+                    { key: 'nearestNote', label: 'Needs DuckDB 2.0', kind: 'note', description: 'NEAREST joins arrived in DuckDB 2.0; an older engine refuses the SQL.' },
                 ],
             },
         ], 'declared');

@@ -55,7 +55,9 @@ pub fn split(ast: &JsonValue) -> Result<Split, String> {
         .map(|m| {
             m.iter()
                 .filter_map(|e| {
-                    Some((e.get("key")?.as_str()?.to_string(), e.pointer("/value/query/node")?.clone()))
+                    // 1.5 wraps the body as `query.node`; 2.0 serializes it as `query_node`.
+                    let body = e.pointer("/value/query/node").or_else(|| e.pointer("/value/query_node"))?;
+                    Some((e.get("key")?.as_str()?.to_string(), body.clone()))
                 })
                 .collect()
         })
@@ -310,6 +312,23 @@ mod tests {
         // A step is named for the CTE it was, so the SQL after it reads it unchanged.
         let paid = doc["nodes"].as_array().unwrap().iter().find(|n| n["id"] == "step_paid").unwrap();
         assert_eq!(paid["data"]["alias"], "paid");
+    }
+
+    /// DuckDB 2.0 serializes a CTE's body as `value.query_node`, where 1.5
+    /// wrapped it as `value.query.node`. Both must split the same way.
+    #[test]
+    fn a_cte_serialized_by_duckdb_2_is_a_step_too() {
+        let ast = json!({ "error": false, "statements": [{ "node": {
+            "type": "SELECT_NODE",
+            "cte_map": { "map": [
+                { "key": "paid", "value": { "query_node": { "type": "SELECT_NODE", "from_table": base("orders") } } }
+            ] },
+            "from_table": base("paid")
+        } }] });
+        let s = split(&ast).unwrap();
+        let names: Vec<Option<&str>> = s.parts.iter().map(|p| p.name.as_deref()).collect();
+        assert_eq!(names, vec![Some("paid"), None]);
+        assert_eq!(s.parts[0].reads.iter().cloned().collect::<Vec<_>>(), vec!["orders"]);
     }
 
     #[test]

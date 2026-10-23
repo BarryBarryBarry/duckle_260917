@@ -61,8 +61,8 @@ fn read(bin: &str, sql: &str) -> Vec<Value> {
 }
 
 /// A missing table is created from the input's schema, and later runs append.
-/// DuckDB's delta extension can append but cannot create a table, so the sink
-/// writes the first commit itself; that it is a real Delta table is proved by
+/// DuckDB 1.5's delta extension can append but cannot create a table, so the
+/// sink writes the first commit itself; that it is a real Delta table is proved by
 /// the kernel reading it back, typed.
 #[test]
 fn a_delta_sink_creates_the_table_then_appends_to_it() {
@@ -193,4 +193,88 @@ fn a_remote_path_is_refused_for_now() {
     let r = engine.execute_pipeline(&pipeline(&csv, "s3://bucket/orders", json!({})));
     assert_ne!(r.status, "ok");
     assert!(r.error.unwrap_or_default().contains("local"));
+}
+
+/// src.delta reads a table as it was: at a version (`asOfVersion`), or at a
+/// point in time (`asOfTimestamp`, DuckDB 2.0). The sink's first commit
+/// creates the table and each run appends one more, so versions 1 and 2 hold
+/// one row and two.
+#[test]
+fn a_delta_source_reads_the_table_as_of_a_version_or_a_time() {
+    let (engine, bin) = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write(tmp.path(), "in.csv", "id\n1\n");
+    let table = path(tmp.path(), "t");
+    let now_utc = || {
+        read(&bin, "SELECT strftime(now() AT TIME ZONE 'UTC', '%Y-%m-%d %H:%M:%S.%f') || '+00' AS t")[0]["t"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(engine.execute_pipeline(&pipeline(&csv, &table, json!({}))).status, "ok");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let between = now_utc();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    assert_eq!(engine.execute_pipeline(&pipeline(&csv, &table, json!({}))).status, "ok");
+
+    let rows_as_of = |travel: Value| -> i64 {
+        let out = path(tmp.path(), "out.csv");
+        let mut props = json!({ "path": table });
+        props.as_object_mut().unwrap().extend(travel.as_object().unwrap().clone());
+        let doc: PipelineDoc = serde_json::from_value(json!({
+            "nodes": [
+                node("r", "src.delta", props),
+                node("w", "snk.csv", json!({ "path": out, "hasHeader": true })),
+            ],
+            "edges": [{ "id": "e", "source": "r", "target": "w" }]
+        }))
+        .unwrap();
+        let r = engine.execute_pipeline(&doc);
+        assert_eq!(r.status, "ok", "{travel}: {:?}", r.error);
+        read(&bin, &format!("SELECT count(*) AS n FROM read_csv('{out}')"))[0]["n"].as_i64().unwrap()
+    };
+    assert_eq!(rows_as_of(json!({})), 2, "the latest version");
+    assert_eq!(rows_as_of(json!({ "asOfVersion": 1 })), 1, "as of version 1");
+    assert_eq!(rows_as_of(json!({ "asOfTimestamp": between })), 1, "as of {between}");
+}
+
+/// `partitionBy` lays out a table the sink creates by those columns, the way
+/// Delta records it: a `region=<value>` directory per value, and each file's
+/// add action carrying its value, which is what the kernel reads back.
+/// DuckDB 2.0's delta extension writes partitioned; 1.5's stops on an
+/// internal assertion.
+#[test]
+fn a_delta_sink_partitions_a_table_it_creates() {
+    let (engine, bin) = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write(tmp.path(), "in.csv", "id,region\n1,eu\n2,us\n3,eu\n");
+    let table = path(tmp.path(), "t");
+    let r = engine.execute_pipeline(&pipeline(&csv, &table, json!({ "partitionBy": ["region"] })));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    for dir in ["region=eu", "region=us"] {
+        assert!(Path::new(&table).join(dir).is_dir(), "no {dir} directory");
+    }
+    let got = read(
+        &bin,
+        &format!("SELECT region, count(*) AS n FROM delta_scan('{table}') GROUP BY ALL ORDER BY ALL"),
+    );
+    assert_eq!(got, vec![json!({ "region": "eu", "n": 2 }), json!({ "region": "us", "n": 1 })]);
+}
+
+/// A partition column must be one of the input's, and Delta cannot hold a
+/// table whose every column is a partition column. Both are refused before
+/// anything is written.
+#[test]
+fn a_partitioning_delta_cannot_hold_is_refused_at_create() {
+    let (engine, _) = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write(tmp.path(), "in.csv", "id,region\n1,eu\n");
+    for (cols, says) in [(json!(["nope"]), "nope"), (json!(["id", "region"]), "every column")] {
+        let table = path(tmp.path(), "t");
+        let r = engine.execute_pipeline(&pipeline(&csv, &table, json!({ "partitionBy": cols })));
+        assert_ne!(r.status, "ok", "{cols} was accepted");
+        let err = r.error.unwrap_or_default();
+        assert!(err.contains(says), "{cols}: {err}");
+        assert!(!Path::new(&table).join("_delta_log").exists(), "{cols}: a table was started");
+    }
 }

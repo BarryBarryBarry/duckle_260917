@@ -13,9 +13,9 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 417 components, 400 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 200 connectors (124 sources / 76 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
-- Transformation: 144 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
+- 420 components, 403 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 202 connectors (125 sources / 77 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
 - Data quality: 29 checks, plus 21 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
 - dbt: runs dbt on DuckDB with a GUI, using a fast build engine by default and dbt-core as a fallback.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (133)
+### Sources (read) (134)
 
 - `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
@@ -129,6 +129,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.graphql` GraphQL: POST a GraphQL query to an endpoint and walk the response data path. Rides snk.rest/src.rest infrastructure; auth via Bearer / API-Key
 - `src.grpc` gRPC [planned]: Reads data from gRPC
 - `src.gsheets` Google Sheets [planned]: Reads data from Google Sheets
+- `src.hana` SAP HANA: Read SAP HANA - on-premise or SAP HANA Cloud - through a pure-Rust driver built in (no SAP HANA Client to install). Host / port / user / password, TLS on by default as HANA Cloud requires (port 443; on-premise 3<instance>15). Whole-table read or custom SQL; each column keeps the type HANA reports
 - `src.html` HTML: Rows out of an HTML page, by CSS selector. Point it at a local file or an http(s) URL, give a row selector, and either name a column per sub-selector (with an optional attribute, so a link href or a data- value is readable) or leave the columns empty and let a table become a table: the th cells name the columns and each tr is a row. Parsed with a tolerant HTML parser, so the unclosed tags and unquoted attributes that real pages carry - and that the strict XML reader rejects outright - are fine
 - `src.http` HTTP: Read CSV / Parquet / JSON from any HTTP(S) URL via httpfs
 - `src.hubspot` HubSpot: HubSpot REST. Bearer auth via a Private App access token. Cursor pagination on `paging.next.after` (cursorNextPath /paging/next/after, cursorParam `after`). responsePath /results
@@ -166,7 +167,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.pgvector` pgvector (Postgres): Read embeddings + metadata via DuckDB postgres ATTACH (server must have CREATE EXTENSION vector)
 - `src.pinecone` Pinecone [preview]: Fetch or similarity-search vectors (Pinecone has no list-all-vectors endpoint; the proper shape is a query node, on the roadmap)
 - `src.pipedrive` Pipedrive: Pipedrive REST. URL ?api_token=... or Bearer auth. Cursor pagination on `additional_data.pagination.next_start` (start parameter). responsePath /data
-- `src.pixeltable` Pixeltable: Read a Pixeltable table (#223), the multimodal AI data store. Exchanges through Parquet: Pixeltable exports the table (or a filtered/limited subset) and Duckle ingests it with read_parquet, so no rows cross one at a time. Supports versioned reads via table:N. Needs a Python with pixeltable installed; the desktop app provisions one on first use
+- `src.pixeltable` Pixeltable: Read a Pixeltable table (#223), the multimodal AI data store. Exchanges through Parquet: Pixeltable exports the table (or a filtered/limited subset) and Otter ETL agent ingests it with read_parquet, so no rows cross one at a time. Supports versioned reads via table:N. Needs a Python with pixeltable installed; the desktop app provisions one on first use
 - `src.postgres` PostgreSQL: Read from PostgreSQL via the DuckDB postgres extension
 - `src.postgres.cdc` PostgreSQL CDC: Log-based change data capture: every insert, update and delete from a table, in commit order, read from a replication slot through the built-in pgoutput plugin. No JVM, no Kafka, nothing to install on the server. The position is saved only when the run succeeds, so a failed run re-delivers instead of losing changes
 - `src.pubsub` GCP Pub/Sub: Pull messages via the Pub/Sub REST API (POST /v1/projects/{p}/subscriptions/{s}:pull) - sidesteps the gRPC build dependency. Auto-acks the batch. Auth via a pre-fetched OAuth2 Bearer access token (mint with `gcloud auth print-access-token`). Emits {message_id, publish_time, data} rows
@@ -217,7 +218,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.yaml` YAML: Read a YAML file as a table. Top-level YAML arrays become one row per element; non-array docs become a single row. Suits config-data ETL (Helm values, GitHub Actions matrices) not bulk logs
 - `src.zendesk` Zendesk: Zendesk Support REST. Basic auth (email/token + API token). Cursor pagination via `meta.after_cursor` + `page[after]` param. responsePath /tickets (or whatever resource)
 
-### Destinations (write) (81)
+### Destinations (write) (82)
 
 - `snk.access` Microsoft Access: Write a table into an Access database (.accdb / .mdb), creating the file and the table when missing. Append or overwrite in one transaction; an empty upstream leaves the table alone. Windows only, through the Microsoft Access ODBC driver
 - `snk.avro` Avro: Write rows as an Apache Avro container file via the pure-Rust `apache-avro` crate. Schema is inferred from the first row's column types (long / double / string / boolean) - or supply a JSON Avro schema via the schemaJson field to override. recordName names the inferred record (default `Row`)
@@ -243,6 +244,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.gcs` Google Cloud Storage: Write via DuckDB httpfs
 - `snk.gizmosql` GizmoSQL: Write rows to a table on a GizmoSQL (Arrow Flight SQL) server via CREATE + batched INSERT over the clean-room pure-Rust Flight SQL client. Append or overwrite; TLS optional
 - `snk.graphql` GraphQL Mutation: POST a GraphQL mutation per upstream row. The mutation body can reference row fields via ${field} substitution
+- `snk.hana` SAP HANA: Write to SAP HANA - on-premise or SAP HANA Cloud - through a pure-Rust driver built in. Creates a missing target as a column table, then inserts in batches through a prepared statement; truncate + insert, or upsert on key columns (UPSERT ... WHERE) with optional delete propagation
 - `snk.huggingface` Hugging Face dataset: Push the pipeline output to a Hugging Face Hub dataset repo. The engine materializes a Parquet and commits it over the Hub API (create-repo -> preupload -> git-LFS -> commit). Needs a write-scoped token; the repo is created if it does not exist
 - `snk.iceberg` Apache Iceberg: Write a full Iceberg table (data/ + metadata/) via DuckDB v1.5
 - `snk.jdbc` Generic JDBC [planned]: Writes data to Generic JDBC
@@ -267,7 +269,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.parquet` Parquet: Write columnar Parquet files
 - `snk.pgvector` pgvector (Postgres): Write embeddings to a Postgres table (server must have CREATE EXTENSION vector)
 - `snk.pinecone` Pinecone: Upsert vectors to a Pinecone index via /vectors/upsert with Api-Key auth
-- `snk.pixeltable` Pixeltable: Write rows into a Pixeltable table (#223). Duckle COPYs the upstream rows to Parquet and Pixeltable inserts the file directly. Insert appends to an existing table; Create builds one from the incoming rows. Needs a Python with pixeltable installed; the desktop app provisions one on first use
+- `snk.pixeltable` Pixeltable: Write rows into a Pixeltable table (#223). Otter ETL agent COPYs the upstream rows to Parquet and Pixeltable inserts the file directly. Insert appends to an existing table; Create builds one from the incoming rows. Needs a Python with pixeltable installed; the desktop app provisions one on first use
 - `snk.postgres` PostgreSQL: Write to PostgreSQL via the DuckDB postgres extension
 - `snk.pubsub` GCP Pub/Sub: Publish messages via the Pub/Sub REST API (POST /v1/projects/{p}/topics/{t}:publish). Each upstream row -> one base64-encoded message. Auth via OAuth2 Bearer access token. Batched at 100 messages per request (Pub/Sub max)
 - `snk.pulsar` Apache Pulsar [planned]: Writes data to Apache Pulsar
@@ -301,7 +303,7 @@ marked [planned] or [preview] are not usable yet.
 - `snk.xml` XML: Write rows as XML via `quick-xml`. Default shape: `<root><row><col>val</col>...</row>...</root>`. rootElement / rowElement override the wrapper names. Complex (object/array) cell values are JSON-encoded inside CDATA so the file round-trips back through src.xml losslessly
 - `snk.yaml` YAML: Write the upstream rows as a top-level YAML array (`- key: value` per row)
 
-### Transforms (144)
+### Transforms (145)
 
 - `xf.addcol` Add Column: Transforms data with Add Column
 - `xf.aggwin` Window Aggregate: Aggregate over a window, keep every row
@@ -380,6 +382,7 @@ marked [planned] or [preview] are not usable yet.
 - `xf.ip.parse` IP Parse: Extract host / family / netmask / broadcast from IP or CIDR text via the inet extension
 - `xf.join` Join: Inner / left / right / full outer join, chosen by the Type dropdown
 - `xf.join.cross` Cross Join: Transforms data with Cross Join
+- `xf.join.nearest` Nearest Join: Two-input join that pairs each driving row with the k lookup rows whose vectors are closest (cosine, inner product or euclidean), with the score - DuckDB 2.0 NEAREST join, exact or approximate
 - `xf.join.spatial` Spatial Join: Two-input join whose predicate is ST_Intersects / Contains / Within / Touches / Crosses / Overlaps / Equals
 - `xf.jq` jq Filter: Transform a JSON column with a jq program (in-process jaq, no external jq)
 - `xf.json.array_agg` Array Aggregate: Collapse rows into a JSON array per group (json_group_array)

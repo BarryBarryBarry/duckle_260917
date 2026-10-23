@@ -53,42 +53,6 @@ private-key operations.
 
 ---
 
-## RUSTSEC-2026-0049, -0098, -0099, -0104 - `rustls-webpki` 0.102.8
-
-**Fix available:** for the crate, yes (0.103.10+). For Duckle, no - see below.
-
-Four certificate-path-validation defects: name constraints incorrectly accepted
-for URI names, name constraints accepted for certificates asserting a CN, CRLs
-not treated as authoritative for their distribution point, and a reachable panic
-parsing a certificate revocation list.
-
-**Reachability: narrow, and it is not Duckle's own TLS.** Duckle's own TLS - the
-console, HTTPS sources and sinks, the updater - resolves to `rustls-webpki`
-0.103.15, which is unaffected. The vulnerable copy arrives through one
-connector:
-
-| Path | Reached when |
-| :--- | :--- |
-| `imap` 3.0.0-alpha.15 → `rustls-connector` 0.19 → `rustls` 0.22 → `rustls-webpki` 0.102.8 | Connecting to an IMAP server over TLS |
-
-SQL Server was the second path, through `tiberius` 0.12.3 and `rustls` 0.21
-(`rustls-webpki` 0.101.7). `tiberius` 0.13 moved to `rustls` 0.23, which removed
-that copy.
-
-So the exposure is: a deployment that uses the IMAP connector, and whose
-certificate chain runs through a CA that issues name constraints, could have a
-chain accepted that a correct implementation would reject. That needs an
-attacker positioned to present such a chain.
-
-**No upgrade exists to take.** `imap` 3.0.0-alpha.15 is the newest published
-version and pins the older `rustls` line. Forcing a newer `rustls` is not
-possible across that semver boundary.
-
-**Removed when:** `imap` publishes a release built on `rustls` 0.23 or later.
-It is watched at the review date above.
-
----
-
 ## RUSTSEC-2026-0194, -0195 - `quick-xml` 0.40.1
 
 **Severity as published:** denial of service. **Fix available:** 0.41.0+, and
