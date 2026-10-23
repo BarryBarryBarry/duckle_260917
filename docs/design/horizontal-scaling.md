@@ -57,6 +57,7 @@ What two processes on one workspace share, and what keeps them from tripping ove
 | Queued batch items | `batches/`, claimed with `try_acquire_nested` (`runlock.rs:288`), ledger written after success | Exclusive lock per item; `work.rs:85` refuses storage whose locks do not exclude | Yes, at least once, on lock-capable storage |
 | "Is that run still alive" | A pid, judged against this machine's processes (`runlock.rs:233-240`) | None across hosts | **No** across hosts (#360): a live run on another machine reads as dead |
 | Concurrent runs | `RunGate`, per process (`serve.rs:119-139`) | Per replica | Yes. N replicas is N times `DUCKLE_MAX_CONCURRENT_RUNS`, which is the point |
+| An upsert's staging table | In the TARGET Postgres or MySQL database (`crates/duckdb-engine/src/connectors.rs`, `run_upsert`) | Named per execution since `a610577` | Yes since then. Before, it was named after the upstream node alone, so concurrent upserts whose upstream nodes shared an id (any two workers running one child pipeline) emptied each other's staging rows and reported ok |
 
 ## What DuckDB 2.0 adds, and what it does not
 
@@ -133,3 +134,7 @@ What several replicas need beyond the claim:
   stage, on stdout; `enable_object_cache` (a no-op since 1.5) is gone.
 - `c5cb57a` `DUCKLE_ASYNC_THREADS` and `DUCKLE_READ_AHEAD_DEPTH` (E5).
 - `f29d613` the second server's `database is locked` at start (E1b).
+- `a610577` each upsert stages in a table of its own: six concurrent upserts whose upstream
+  nodes shared an id failed with "relation already exists", and CI had caught the silent
+  form, an upsert that reported ok and wrote nothing. An upstream node with a capital letter
+  could not upsert into Postgres at all.
