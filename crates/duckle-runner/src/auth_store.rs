@@ -91,8 +91,20 @@ impl AuthStore {
         // WAL so a reader is never blocked by the writer, and a busy timeout so two
         // processes contend rather than fail. This is the whole reason for using a
         // database here instead of a file and a lock.
-        conn.pragma_update(None, "journal_mode", "WAL").map_err(|e| e.to_string())?;
         conn.busy_timeout(std::time::Duration::from_secs(5)).map_err(|e| e.to_string())?;
+        // The timeout cannot help the switch to WAL itself. Two processes opening a
+        // store at once each hold a read lock and want the write lock, and SQLite
+        // answers one of them BUSY at once rather than wait on a deadlock: the
+        // second server started on a workspace died with "database is locked". A
+        // fresh attempt lets go of the read lock, so the loser tries again.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while let Err(e) = conn.pragma_update(None, "journal_mode", "WAL") {
+            let busy = e.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy);
+            if !busy || std::time::Instant::now() >= deadline {
+                return Err(e.to_string());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         let store = Self { conn };
         store.migrate()?;
         Ok(store)
@@ -338,6 +350,30 @@ mod tests {
 
     fn store() -> AuthStore {
         AuthStore::in_memory().expect("opens")
+    }
+
+    /// Two servers started together on one workspace: the second died with
+    /// "database is locked" before it served a request. Switching the journal to
+    /// WAL takes an exclusive lock, and it ran before the busy timeout was set,
+    /// so the loser of that race failed at once instead of waiting its turn.
+    #[test]
+    fn processes_opening_the_store_together_all_get_in() {
+        for _ in 0..20 {
+            let dir = tempfile::tempdir().unwrap();
+            let start = std::sync::Arc::new(std::sync::Barrier::new(6));
+            let opens: Vec<_> = (0..6)
+                .map(|_| {
+                    let (ws, start) = (dir.path().to_path_buf(), start.clone());
+                    std::thread::spawn(move || {
+                        start.wait();
+                        AuthStore::open(&ws).map(|_| ())
+                    })
+                })
+                .collect();
+            for open in opens {
+                open.join().unwrap().expect("a second opener was turned away");
+            }
+        }
     }
 
     #[test]

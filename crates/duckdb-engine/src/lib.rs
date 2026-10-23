@@ -7763,6 +7763,8 @@ pub fn effective_resource_limits() -> std::collections::BTreeMap<String, String>
         ("DUCKLE_THREADS", "threads"),
         ("DUCKLE_TEMP_DIR", "tempDirectory"),
         ("DUCKLE_MAX_TEMP_DIR_SIZE", "maxTempDirectorySize"),
+        ("DUCKLE_ASYNC_THREADS", "asyncThreads"),
+        ("DUCKLE_READ_AHEAD_DEPTH", "readAheadDepth"),
     ] {
         if let Some(v) = std::env::var(env).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty()) {
             out.insert(key.to_string(), v);
@@ -7807,6 +7809,16 @@ pub(crate) fn resource_pragmas(
                 p.push_str(&format!("SET threads={};\n", n));
             }
         }
+    }
+    // DuckDB 2.0 reads object storage and HTTP on a pool of I/O threads of its
+    // own (4 x cores by default, up to 256) with a read-ahead budget, and
+    // neither follows `threads`. Sent only when asked for: 1.5 refuses both.
+    // Ranges are DuckDB's to police, so a bad depth fails the run by name.
+    if let Some(n) = env("DUCKLE_ASYNC_THREADS").and_then(|t| t.parse::<u32>().ok()) {
+        p.push_str(&format!("SET async_threads={};\n", n));
+    }
+    if let Some(n) = env("DUCKLE_READ_AHEAD_DEPTH").and_then(|t| t.parse::<i64>().ok()) {
+        p.push_str(&format!("SET read_ahead_depth={};\n", n));
     }
     // Without this DuckDB's default cap is "90% of available disk space", so
     // one unexpectedly large join can fill the volume the OS is on and take
@@ -9390,6 +9402,8 @@ mod resource_pragma_tests {
             "DUCKLE_THREADS",
             "DUCKLE_TEMP_DIR",
             "DUCKLE_MAX_TEMP_DIR_SIZE",
+            "DUCKLE_ASYNC_THREADS",
+            "DUCKLE_READ_AHEAD_DEPTH",
             // The policy pair is cleared here too, because this mutex only
             // serialises THIS module: the rest of the suite runs beside it, and
             // a leaked DUCKLE_POLICY_FILE makes an unrelated test think it is in
@@ -9513,6 +9527,59 @@ network:
         assert!(out.status.success(), "{stderr}");
         assert_eq!(stdout.trim(), "2", "DuckDB said more than the answer:\n{stdout}{stderr}");
         assert!(!stderr.contains("deprecated"), "{stderr}");
+    }
+
+    /// DuckDB 2.0 reads object storage on a pool of I/O threads of its own, with
+    /// a read-ahead budget, and neither follows `threads`: SET threads=4 on a
+    /// 20-core machine leaves 80 of them and an HTTP pool as large. Both can be
+    /// bounded and are recorded when they are, and are never sent unasked,
+    /// because 1.5 has neither setting and refuses both.
+    #[test]
+    fn async_io_is_bounded_only_when_asked() {
+        let _g = guard();
+        let p = resource_pragmas(None, None);
+        assert!(
+            !p.contains("async_threads") && !p.contains("read_ahead_depth"),
+            "sent unasked, which a 1.5 engine refuses: {p}"
+        );
+
+        std::env::set_var("DUCKLE_ASYNC_THREADS", "6");
+        std::env::set_var("DUCKLE_READ_AHEAD_DEPTH", "0");
+        let p = resource_pragmas(None, None);
+        let limits = super::effective_resource_limits();
+        std::env::remove_var("DUCKLE_ASYNC_THREADS");
+        std::env::remove_var("DUCKLE_READ_AHEAD_DEPTH");
+        assert_eq!(limits.get("asyncThreads").map(String::as_str), Some("6"), "{limits:?}");
+        assert_eq!(limits.get("readAheadDepth").map(String::as_str), Some("0"), "{limits:?}");
+
+        let Some(bin) = std::env::var("DUCKLE_DUCKDB_BIN")
+            .ok()
+            .filter(|b| std::path::Path::new(b).exists())
+        else {
+            eprintln!("skipping the engine half: set DUCKLE_DUCKDB_BIN to run it");
+            return;
+        };
+        let ask = |sql: String| {
+            let out = std::process::Command::new(&bin)
+                .env("DUCKDB_AGENT_MODE", "0")
+                .args(["-csv", "-noheader", ":memory:", "-c"])
+                .arg(sql)
+                .output()
+                .unwrap();
+            let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            (text, String::from_utf8_lossy(&out.stderr).into_owned())
+        };
+        let (has, _) = ask(
+            "SELECT count(*) FROM duckdb_settings() WHERE name = 'async_threads';".into(),
+        );
+        if has != "1" {
+            eprintln!("skipping the engine half: this DuckDB has no asynchronous I/O");
+            return;
+        }
+        let (got, err) = ask(format!(
+            "{p}SELECT current_setting('async_threads'), current_setting('read_ahead_depth');"
+        ));
+        assert_eq!(got, "6,0", "{err}");
     }
 
     /// The preset is unconditional, so a pipeline with no resource settings

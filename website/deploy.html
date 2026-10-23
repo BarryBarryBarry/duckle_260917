@@ -483,6 +483,8 @@ duckle-runner serve --host 0.0.0.0 --port 8080 --workspace /srv/duckle</code></p
       <tr><th>Variable</th><th>Meaning</th></tr>
       <tr><td><code>DUCKLE_CONSOLE_TOKEN</code></td><td>Shared sign-in token. Required for any non-loopback bind unless you have created accounts.</td></tr>
       <tr><td><code>DUCKLE_THREADS</code></td><td>Caps engine parallelism. Unset means every core on the box, which is usually what you want.</td></tr>
+      <tr><td><code>DUCKLE_ASYNC_THREADS</code></td><td>DuckDB 2.0 only. Caps the I/O threads object storage is read on, which <code>DUCKLE_THREADS</code> does not. Unset means 4 per core.</td></tr>
+      <tr><td><code>DUCKLE_READ_AHEAD_DEPTH</code></td><td>DuckDB 2.0 only. How far ahead object storage is read: <code>0</code> off, <code>-1</code> automatic (the default), or a number of scan jobs.</td></tr>
       <tr><td><code>DUCKLE_MAX_CONCURRENT_RUNS</code></td><td>How many pipelines run at once. Defaults to 1, so an unattended server stays predictable.</td></tr>
       <tr><td><code>DUCKLE_TICK_INTERVAL</code></td><td>Scheduler poll cadence in seconds. Default 15.</td></tr>
       <tr><td><code>DUCKLE_TEMP_DIR</code></td><td>Spill directory for queries larger than memory. Point it at fast local disk.</td></tr>
@@ -868,7 +870,7 @@ az containerapp update --name duckle --resource-group data \
 
     <div class="warn">
       <b>Run one console replica, not three.</b>
-      <p>The scheduler lives in the <code>serve</code> process and claims each due schedule so nothing else takes it. That claim relies on the filesystem behaving, which local disk does and some network filesystems do not. Two replicas over an NFS mount without working lock support means both believe they won the claim and every schedule runs twice. Keep <code>replicas: 1</code> and add capacity the way below.</p>
+      <p>The scheduler lives in the <code>serve</code> process, and each one decides for itself when a schedule is due. Two replicas on one workspace both fire it: measured on a single machine with working locks, every cron occurrence ran twice and an interval schedule ran twice as often. The run lock only stops two runs of a pipeline overlapping, and a short run is over before the other replica starts its copy. Keep <code>replicas: 1</code> and add capacity the way below.</p>
     </div>
 
     <h3 class="dep-h3">Adding capacity properly</h3>

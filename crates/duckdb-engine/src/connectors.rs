@@ -283,18 +283,28 @@ impl DuckdbEngine {
             .copied()
             .collect();
 
-        // Sanitized staging table name (suffix from upstream node id).
+        // The staging table is named for this execution, not just for the
+        // upstream node. It lives in the TARGET database, which other runs
+        // share, and named after the node alone every pipeline whose upstream
+        // is `s` staged through one table: two runs of a pipeline, or the
+        // children of a queued ctl.foreach on several workers, emptied and
+        // refilled each other's rows and reported ok. The random part comes
+        // first so Postgres's 63-character limit can only cut the readable
+        // part, and the name is lower case because the upsert below names it
+        // unquoted, which Postgres folds: `Src_A` was staged and never found.
         let suffix: String = spec
             .from_view
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' })
+            .take(24)
             .collect();
         let target_native = spec
             .target
             .strip_prefix("duckle_dst.")
             .unwrap_or(&spec.target)
             .to_string();
-        let staging_unqualified = format!("duckle_upsert_staging_{}", suffix);
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        let staging_unqualified = format!("duckle_upsert_{}_{}", &token[..16], suffix);
 
         // Step 1: stage the rows in the target DB (via ATTACH).
         // Default schema differs per family (public for PG/Cockroach;
@@ -305,15 +315,13 @@ impl DuckdbEngine {
         };
         let staging_duckle = format!("duckle_dst.{}", staging_native);
         let stage_sql = format!(
-            "{secret}{attach}DROP TABLE IF EXISTS {sd}; \
-             CREATE TABLE {sd} AS SELECT * FROM {from} WHERE 1=0; \
+            "{secret}{attach}CREATE TABLE {sd} AS SELECT * FROM {from} WHERE 1=0; \
              INSERT INTO {sd} SELECT * FROM {from};",
             secret = secret_prefix,
             attach = spec.attach,
             sd = staging_duckle,
             from = plan::quote_ident(&spec.from_view)
         );
-        self.run(Some(db), &stage_sql, false)?;
 
         // Step 2: assemble the real upsert SQL, run it on the native
         // connection so the constraint check sees the real schema.
@@ -328,23 +336,34 @@ impl DuckdbEngine {
         let call = |stmt: &String| {
             format!("CALL {}('duckle_dst', '{}');", exec_fn, stmt.replace('\'', "''"))
         };
-        if matches!(spec.family, plan::UpsertFamily::Postgres) {
-            // One transaction, so the delete, the insert and the cleanup land
-            // together or not at all, as the single statement string did. The
-            // postgres extension runs every postgres_execute of a DuckDB
-            // transaction on that transaction's connection.
-            let calls: String = native_stmts.iter().map(call).collect();
-            return self.run(
-                Some(db),
-                &format!("{secret_prefix}{}BEGIN TRANSACTION; {calls}COMMIT;", spec.attach),
-                false,
-            );
+        let upsert = || -> Result<String, EngineError> {
+            self.run(Some(db), &stage_sql, false)?;
+            if matches!(spec.family, plan::UpsertFamily::Postgres) {
+                // One transaction, so the delete, the insert and the cleanup
+                // land together or not at all, as the single statement string
+                // did. The postgres extension runs every postgres_execute of a
+                // DuckDB transaction on that transaction's connection.
+                let calls: String = native_stmts.iter().map(call).collect();
+                return self.run(
+                    Some(db),
+                    &format!("{secret_prefix}{}BEGIN TRANSACTION; {calls}COMMIT;", spec.attach),
+                    false,
+                );
+            }
+            let mut last = String::new();
+            for stmt in &native_stmts {
+                last = self.run(Some(db), &format!("{secret_prefix}{}{}", spec.attach, call(stmt)), false)?;
+            }
+            Ok(last)
+        };
+        let result = upsert();
+        if result.is_err() {
+            // Nothing else will ever drop a table only this execution knows
+            // the name of, so a failed upsert takes its staging table with it.
+            let drop = format!("DROP TABLE IF EXISTS {staging_native}");
+            let _ = self.run(Some(db), &format!("{secret_prefix}{}{}", spec.attach, call(&drop)), false);
         }
-        let mut last = String::new();
-        for stmt in &native_stmts {
-            last = self.run(Some(db), &format!("{secret_prefix}{}{}", spec.attach, call(stmt)), false)?;
-        }
-        Ok(last)
+        result
     }
 
     /// snk.execsource "Execute in Source" (#115): run each statement (a
