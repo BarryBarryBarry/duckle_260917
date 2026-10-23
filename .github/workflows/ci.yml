@@ -125,19 +125,20 @@ jobs:
         shell: bash
         run: |
           set -e
-          ver=1.5.5
+          ver=2.0.0
           case "$RUNNER_OS" in
-            Linux)   asset=duckdb_cli-linux-amd64.zip;  exe=duckdb ;;
-            Windows) asset=duckdb_cli-windows-amd64.zip; exe=duckdb.exe ;;
-            macOS)   asset=duckdb_cli-osx-universal.zip; exe=duckdb ;;
+            Linux)   asset=duckdb-cli-linux-amd64.tar.gz;  exe=duckdb ;;
+            Windows) asset=duckdb-cli-windows-amd64.tar.gz; exe=duckdb.exe ;;
+            macOS)   asset=duckdb-cli-osx-universal.tar.gz; exe=duckdb ;;
           esac
           # Use RUNNER_TEMP (a native drive-letter path on Windows) so the
           # binary path resolves for the Rust test process; $HOME is an
           # MSYS path (/c/...) on the Windows runner and Rust cannot find it.
           dest="$RUNNER_TEMP/duckdb"
           mkdir -p "$dest"
-          curl -L -o duckdb.zip "https://github.com/duckdb/duckdb/releases/download/v$ver/$asset"
-          unzip -o duckdb.zip -d "$dest"
+          curl -fL -o duckdb.tar.gz "https://github.com/duckdb/duckdb/releases/download/v$ver/$asset"
+          tar -xzf duckdb.tar.gz "$exe"
+          mv -f "$exe" "$dest/$exe"
           bin="$dest/$exe"
           if [ "$RUNNER_OS" = "Windows" ]; then bin="$(cygpath -w "$bin")"; fi
           echo "using duckdb at: $bin"
@@ -330,9 +331,9 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
-          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
       - name: Pre-install postgres extension
         run: |
@@ -379,9 +380,9 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
-          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
       - name: Pre-install extensions
         run: |
@@ -437,9 +438,9 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
-          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
       - name: Start the SharePoint mock
         run: |
@@ -479,9 +480,9 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
-          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
       - name: Pre-install mysql extension
         run: |
@@ -519,9 +520,9 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
-          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
       - name: Pre-install mssql extension
         run: |
@@ -569,9 +570,9 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
-          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
       - name: Seed MinIO with a test object
         run: |
@@ -625,9 +626,9 @@ jobs:
       - name: Install DuckDB CLI
         run: |
           set -e
-          curl -L -o duckdb.zip https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.zip
+          curl -fL -o duckdb.tar.gz https://github.com/duckdb/duckdb/releases/download/v2.0.0/duckdb-cli-linux-amd64.tar.gz
           mkdir -p "$RUNNER_TEMP/duckdb"
-          unzip -o duckdb.zip -d "$RUNNER_TEMP/duckdb"
+          tar -xzf duckdb.tar.gz -C "$RUNNER_TEMP/duckdb"
           echo "DUCKLE_DUCKDB_BIN=$RUNNER_TEMP/duckdb/duckdb" >> "$GITHUB_ENV"
       - name: Build duckle-runner
         run: cargo build -p duckle-runner

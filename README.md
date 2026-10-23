@@ -3918,7 +3918,7 @@ Duckle ships a thin shell and installs its engines on first launch.
 
 | Engine | Role | Status |
 |---|---|---|
-| **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. Tracking **v1.5.5** (latest stable). A lock-free single-SELECT read (`Engine::query`) powers dives. | Working |
+| **DuckDB** | Default execution engine: analytics, file formats, cloud reads, SQL pushdown. Tracking **v2.0.0** (LTS, latest stable). A lock-free single-SELECT read (`Engine::query`) powers dives. | Working |
 | **Duckie AI Assistant** | Local chat assistant via **llama.cpp** + **Qwen 2.5 Coder 1.5B GGUF**. Downloads ~1.1 GB and needs no network once installed, or point it at your own OpenAI-compatible endpoint and skip the download entirely. Managed as a `llama-server` subprocess exposing an OpenAI-compatible API on `127.0.0.1`. | Installable |
 | **SlothDB** | Alternate embedded analytical engine ([SouravRoy-ETL/slothdb](https://github.com/SouravRoy-ETL/slothdb)), installed the same way and selectable per pipeline. | Installable |
 | **Native** | In-process Rust streaming / incremental engine. | Planned |
@@ -3928,6 +3928,20 @@ Duckle ships a thin shell and installs its engines on first launch.
 When the installer downloads the DuckDB CLI it also pre-fetches the extensions Duckle uses, with per-extension progress, so the first time you touch a Postgres source or an Iceberg table there is no surprise network hop mid-pipeline:
 
 `httpfs` (S3 / GCS / HTTP), `azure` (Azure Blob native), `sqlite`, `postgres`, `mysql`, `excel`, `iceberg`, `delta`, `ducklake`, `vss`, `fts`.
+
+### Moving to DuckDB 2.0
+
+Duckle pins DuckDB 2.0.0 (LTS). Most of what changes is invisible, but these you may notice, each measured against 1.5.5:
+
+| What | On DuckDB 2.0 |
+|---|---|
+| A **new** `.duckdb` file | Written in the 2.0 storage format, which DuckDB 1.x cannot open. A file that already exists keeps its format when Duckle writes to it. |
+| A **DuckLake** whose catalog is a DuckDB file | The first write upgrades the catalog file, and DuckDB 1.x can no longer attach the lake. Reading it changes nothing. A catalog in PostgreSQL, SQLite or MySQL is not a DuckDB file, so this does not apply to it. Moving the catalog to DuckLake 1.1 stays opt-in: add `AUTOMATIC_MIGRATION` = `true` under Catalog parameters. |
+| The **merge** write mode | A source with two rows for one key fails ("cannot affect the same target row more than once"), where 1.5 kept the first silently. Deduplicate before the sink. |
+| A **PostgreSQL** server that does not answer | The extension tries to connect twice before it gives up, so a failure takes two connect timeouts. |
+| **Your own SQL** (SQL nodes, custom SQL) | `x -> x + 1` lambdas are refused: write `lambda x: x + 1`. `~` and `!~` match anywhere in the string; use `regexp_full_match` for a whole-string match. `//` and `%` by zero raise an error. An untyped `NULL` column keeps the `"NULL"` type. |
+
+The CLI's new "agent mode", which changes its output when an AI agent runs it, is turned off for Duckle's own runs, so nothing changes when Duckle itself runs under one.
 
 `spatial` is lazy-loaded (~50 MB GDAL bundle) - it installs on first use of a geospatial source/sink to keep the initial download small.
 
@@ -4236,7 +4250,7 @@ identity it already has where it runs:
 - **Azure Blob:** a managed or workload identity, an Azure CLI login or
   `AZURE_*` variables. Name the storage account; there is no key to give.
 
-GCS stays on HMAC keys: DuckDB 1.5.5 has no Google credential chain.
+GCS stays on HMAC keys: DuckDB 2.0.0 has no Google credential chain.
 
 The S3 path is tested live: the same node fails with no identity in the
 environment and reads the object once one is there. The Azure path is checked

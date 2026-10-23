@@ -180,7 +180,7 @@ const writeModeField = (componentId?: string): Field => ({
 
 // How a cloud storage node signs in: the keys typed here, or, for S3, the
 // S3-compatible stores and Azure, whatever identity the run has where it runs,
-// with no key in the pipeline. GCS stays keys only: DuckDB 1.5.5 reads it with
+// with no key in the pipeline. GCS stays keys only: DuckDB 2.0.0 reads it with
 // HMAC keys and has no Google credential chain (its "chain" for GCS is AWS's).
 // Azure's secret is made from an account name and key (lib.rs secret_statement),
 // which is what this offers it; the access/secret pair it used to get was never read.

@@ -3,14 +3,14 @@
 //! Duckle ships a tiny shell and downloads its execution engines on
 //! first launch into the app-data directory, rather than statically
 //! bundling them. DuckDB and SlothDB install through one shared path:
-//! fetch the platform's release zip from GitHub, extract the binary,
+//! fetch the platform's release archive from GitHub, extract the binary,
 //! mark it executable, and verify it runs.
 
 use serde::Serialize;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-pub const DUCKDB_VERSION: &str = "1.5.5";
+pub const DUCKDB_VERSION: &str = "2.0.0";
 pub const SLOTHDB_VERSION: &str = "0.2.7";
 /// Pinned llama.cpp build. Bump periodically; the GGUF wire format
 /// is stable so newer server binaries keep working with older models.
@@ -378,11 +378,11 @@ fn asset_for(s: &EngineSpec) -> Option<String> {
     match s.id {
         "duckdb" => Some(
             match (os, arch) {
-                ("windows", "x86_64") => "duckdb_cli-windows-amd64.zip",
-                ("windows", "aarch64") => "duckdb_cli-windows-arm64.zip",
-                ("linux", "x86_64") => "duckdb_cli-linux-amd64.zip",
-                ("linux", "aarch64") => "duckdb_cli-linux-arm64.zip",
-                ("macos", _) => "duckdb_cli-osx-universal.zip",
+                ("windows", "x86_64") => "duckdb-cli-windows-amd64.tar.gz",
+                ("windows", "aarch64") => "duckdb-cli-windows-arm64.tar.gz",
+                ("linux", "x86_64") => "duckdb-cli-linux-amd64.tar.gz",
+                ("linux", "aarch64") => "duckdb-cli-linux-arm64.tar.gz",
+                ("macos", _) => "duckdb-cli-osx-universal.tar.gz",
                 _ => return None,
             }
             .to_string(),
@@ -422,18 +422,18 @@ fn asset_for(s: &EngineSpec) -> Option<String> {
 /// different OS than the one Duckle runs on.
 fn duckdb_asset(os: &str, arch: &str) -> Option<&'static str> {
     Some(match (os, arch) {
-        ("windows", "x86_64") => "duckdb_cli-windows-amd64.zip",
-        ("windows", "aarch64") => "duckdb_cli-windows-arm64.zip",
-        ("linux", "x86_64") => "duckdb_cli-linux-amd64.zip",
-        ("linux", "aarch64") => "duckdb_cli-linux-arm64.zip",
-        ("macos", _) => "duckdb_cli-osx-universal.zip",
+        ("windows", "x86_64") => "duckdb-cli-windows-amd64.tar.gz",
+        ("windows", "aarch64") => "duckdb-cli-windows-arm64.tar.gz",
+        ("linux", "x86_64") => "duckdb-cli-linux-amd64.tar.gz",
+        ("linux", "aarch64") => "duckdb-cli-linux-arm64.tar.gz",
+        ("macos", _) => "duckdb-cli-osx-universal.tar.gz",
         _ => return None,
     })
 }
 
 /// Resolve a DuckDB CLI binary for a DIFFERENT target than the host, used to
 /// assemble a cross-OS "Build Pipeline" artifact. Downloads the official
-/// DuckDB release zip (same pinned DUCKDB_VERSION as the host engine) for the
+/// DuckDB release archive (same pinned DUCKDB_VERSION as the host engine) for the
 /// requested os/arch and caches the extracted binary under
 /// `engines/duckdb-cross/<os>-<arch>/duckdb(.exe)`. Returns the cached path.
 ///
@@ -477,7 +477,7 @@ pub fn ensure_cross_duckdb(app_data: &Path, os: &str, arch: &str) -> Result<Path
     let bytes = resp.bytes().map_err(|e| e.to_string())?;
     // Reject a truncated transfer before baking the binary into a shipped
     // artifact: a short read here would otherwise produce a corrupt bundled
-    // duckdb that only fails on the target. A DuckDB CLI zip is multi-MB, so a
+    // duckdb that only fails on the target. A DuckDB CLI archive is multi-MB, so a
     // tiny body also signals an error/redirect page slipped through.
     if let Some(expected) = expected {
         if (bytes.len() as u64) != expected {
@@ -501,24 +501,8 @@ pub fn ensure_cross_duckdb(app_data: &Path, os: &str, arch: &str) -> Result<Path
     // Before the archive is opened, let alone the binary extracted and run.
     verify_download("the DuckDB CLI download", &hex_sha256(&bytes), DUCKDB_SHA256)?;
 
-    let reader = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(reader).map_err(|e| e.to_string())?;
-    let mut extracted = false;
-    // DuckDB CLI zips ship a single self-contained binary named duckdb(.exe).
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i).map_err(|e| e.to_string())?;
-        if file.is_dir() {
-            continue;
-        }
-        let name = file.name().map_err(|e| e.to_string())?.into_owned();
-        let leaf = name.rsplit('/').next().unwrap_or(&name);
-        if leaf.eq_ignore_ascii_case("duckdb") || leaf.eq_ignore_ascii_case("duckdb.exe") {
-            copy_atomic(&mut file, &target)?;
-            extracted = true;
-            break;
-        }
-    }
-    if !extracted {
+    // DuckDB CLI archives ship a single self-contained binary named duckdb(.exe).
+    if !extract_tar_gz(&bytes, &dir, &target, bin_name, bin_name)? {
         return Err("DuckDB binary not found inside the downloaded archive".to_string());
     }
     Ok(target)
@@ -1033,7 +1017,8 @@ fn install_spec<F: FnMut(InstallProgress)>(
             ));
         }
     } else if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-        // llama.cpp's Linux + macOS releases ship as tar.gz. Same
+        // DuckDB (from 2.0, every platform) and llama.cpp's Linux + macOS
+        // releases ship as tar.gz. Same
         // semantics as the llamacpp zip branch: extract every file
         // to the engine dir so the binary keeps its sibling .so / .dylib.
         on_progress(InstallProgress::Extracting);
@@ -1532,6 +1517,19 @@ mod tests {
         assert!(status(tmp.path(), None)
             .iter()
             .any(|e| e.id == "duckdb" && e.installed));
+    }
+
+    /// A Build Pipeline for another OS bundles that OS's DuckDB. From 2.0 every
+    /// platform ships as a .tar.gz, the Windows build included.
+    #[test]
+    #[ignore = "downloads DuckDB CLIs from GitHub releases (network)"]
+    fn fetches_a_cross_target_duckdb() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (os, arch, magic) in [("linux", "x86_64", &b"\x7fELF"[..]), ("windows", "x86_64", &b"MZ"[..])] {
+            let path = ensure_cross_duckdb(tmp.path(), os, arch).expect("the cross download");
+            let head = std::fs::read(&path).unwrap();
+            assert!(head.starts_with(magic), "{os}-{arch}: not an executable for that OS: {}", path.display());
+        }
     }
 
     #[test]
