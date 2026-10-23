@@ -12390,12 +12390,9 @@ impl DuckdbEngine {
         db: &Path,
         spec: &EmailSourceSpec,
     ) -> Result<String, EngineError> {
-        use imap::ClientBuilder;
         use mail_parser::MessageParser;
         self.check_cancelled()?;
-        let client = ClientBuilder::new(&spec.host, spec.port)
-            .connect()
-            .map_err(|e| EngineError::Query(format!("imap connect: {}", e)))?;
+        let client = imap_connect(&spec.host, spec.port)?;
         let mut session = client
             .login(&spec.user, &spec.password)
             .map_err(|(e, _)| EngineError::Query(format!("imap login: {}", e)))?;
@@ -19222,6 +19219,87 @@ fn tail_chars(s: &str, max: usize) -> &str {
     let skip = count - max;
     let (idx, _) = s.char_indices().nth(skip).unwrap_or((0, ' '));
     &s[idx..]
+}
+
+/// The TLS stream src.email reads a mailbox over.
+type ImapTls = rustls::StreamOwned<rustls::ClientConnection, std::net::TcpStream>;
+
+/// An IMAP client on Duckle's own TLS, so it trusts what every other client
+/// here trusts: the bundled roots, the OS store and `DUCKLE_CA_CERT`. The imap
+/// crate's TLS read the OS store alone, on an older rustls carried for it only.
+///
+/// Its rule stays: TLS from the first byte on port 993, STARTTLS on any other,
+/// and a server that offers no STARTTLS is refused before the password is sent.
+fn imap_connect(host: &str, port: u16) -> Result<imap::Client<ImapTls>, EngineError> {
+    let fail = |what: &str, e: &dyn std::fmt::Display| {
+        EngineError::Query(format!("imap {what} {host}:{port}: {e}"))
+    };
+    let tcp = std::net::TcpStream::connect((host, port)).map_err(|e| fail("connect", &e))?;
+    let (tcp, greeted) = if port == 993 {
+        (tcp, false)
+    } else {
+        let mut plain = imap::Client::new(tcp);
+        plain.read_greeting().map_err(|e| fail("connect", &e))?;
+        let caps = plain.capabilities().map_err(|e| fail("CAPABILITY", &e))?;
+        if !caps.has_str("STARTTLS") {
+            return Err(EngineError::Query(format!(
+                "imap {host}:{port} offers no STARTTLS, so the login would travel unencrypted; \
+                 use port 993 if the server takes TLS from the start"
+            )));
+        }
+        let mut tcp = plain.into_inner().map_err(|e| fail("STARTTLS", &e))?;
+        imap_starttls(&mut tcp).map_err(|e| fail("STARTTLS", &e))?;
+        (tcp, true)
+    };
+    let name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|e| fail("connect", &e))?;
+    let conn = rustls::ClientConnection::new(
+        std::sync::Arc::new(crate::tls::build_client_config()),
+        name,
+    )
+    .map_err(|e| fail("TLS", &e))?;
+    let mut tls = rustls::StreamOwned::new(conn, tcp);
+    // Finished here, so a refused certificate is reported as that rather than
+    // as a failure to read the server's first line.
+    while tls.conn.is_handshaking() {
+        tls.conn
+            .complete_io(&mut tls.sock)
+            .map_err(|e| fail("TLS handshake with", &e))?;
+    }
+    let mut client = imap::Client::new(tls);
+    if !greeted {
+        client.read_greeting().map_err(|e| fail("connect", &e))?;
+    }
+    Ok(client)
+}
+
+/// Send STARTTLS and wait for the server's go-ahead. The imap crate keeps its
+/// raw-command call for logged-in sessions, so this one command is written
+/// here. Read a byte at a time: what follows the go-ahead is the handshake.
+fn imap_starttls(tcp: &mut std::net::TcpStream) -> std::io::Result<()> {
+    use std::io::{Read, Write};
+    tcp.write_all(b"S1 STARTTLS\r\n")?;
+    loop {
+        let mut line = Vec::new();
+        let mut byte = [0u8; 1];
+        while !line.ends_with(b"\r\n") {
+            if line.len() > 4096 {
+                return Err(std::io::Error::other("the server's answer has no end"));
+            }
+            if tcp.read(&mut byte)? == 0 {
+                return Err(std::io::ErrorKind::UnexpectedEof.into());
+            }
+            line.push(byte[0]);
+        }
+        let line = String::from_utf8_lossy(&line);
+        // Untagged lines before the answer carry nothing needed here.
+        if let Some(status) = line.strip_prefix("S1 ") {
+            return match status.get(..2) {
+                Some(ok) if ok.eq_ignore_ascii_case("OK") => Ok(()),
+                _ => Err(std::io::Error::other(status.trim_end().to_string())),
+            };
+        }
+    }
 }
 
 /// Map an ODBC column data type to the DuckDB type the Teradata source should
