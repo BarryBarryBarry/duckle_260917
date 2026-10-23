@@ -483,6 +483,8 @@ duckle-runner serve --host 0.0.0.0 --port 8080 --workspace /srv/duckle</code></p
       <tr><th>Variable</th><th>Meaning</th></tr>
       <tr><td><code>DUCKLE_CONSOLE_TOKEN</code></td><td>Shared sign-in token. Required for any non-loopback bind unless you have created accounts.</td></tr>
       <tr><td><code>DUCKLE_THREADS</code></td><td>Caps engine parallelism. Unset means every core on the box, which is usually what you want.</td></tr>
+      <tr><td><code>DUCKLE_ASYNC_THREADS</code></td><td>DuckDB 2.0 only. Caps the I/O threads object storage is read on, which <code>DUCKLE_THREADS</code> does not. Unset means 4 per core.</td></tr>
+      <tr><td><code>DUCKLE_READ_AHEAD_DEPTH</code></td><td>DuckDB 2.0 only. How far ahead object storage is read: <code>0</code> off, <code>-1</code> automatic (the default), or a number of scan jobs.</td></tr>
       <tr><td><code>DUCKLE_MAX_CONCURRENT_RUNS</code></td><td>How many pipelines run at once. Defaults to 1, so an unattended server stays predictable.</td></tr>
       <tr><td><code>DUCKLE_TICK_INTERVAL</code></td><td>Scheduler poll cadence in seconds. Default 15.</td></tr>
       <tr><td><code>DUCKLE_TEMP_DIR</code></td><td>Spill directory for queries larger than memory. Point it at fast local disk.</td></tr>

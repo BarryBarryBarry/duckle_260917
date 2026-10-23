@@ -415,6 +415,7 @@ Accounts, sessions and keys live in `.duckle/console.db`. An existing `console-u
 `duckle-runner serve` is an ordinary service. Run it on EC2, EKS, a VM or a container next to everything else you operate, and scale it the way you scale any service:
 
 - **More cores.** The engine is parallel and uses every core on the box by default, so a bigger instance is a faster pipeline with no change to the pipeline. Bound it with `DUCKLE_THREADS` when you would rather it did not take the whole machine.
+- **Object storage reads.** On DuckDB 2.0, Parquet, DuckDB files and uncompressed CSV over S3 (and other object storage) are read on DuckDB's own pool of I/O threads, 4 per core by default, which reads ahead within the memory limit. JSON and compressed CSV are still read synchronously. `DUCKLE_THREADS` does not bound that pool: `DUCKLE_ASYNC_THREADS` does, and `DUCKLE_READ_AHEAD_DEPTH` sets how far ahead it reads (`0` turns read-ahead off, `-1` is DuckDB's automatic default). Both need DuckDB 2.0, and a run records them in its manifest. The automatic depth grows with `DUCKLE_THREADS`, about four requests in flight per thread, so a small worker on high-latency storage gains most from raising it. Measured through Duckle on 2 threads, reading 104 MB of a 24M-row Parquet file from an S3 stand-in that answers each request after 50 ms: **6.4 s** on DuckDB 1.5.5, **2.1 s** on 2.0 as it ships, and **1.1 s** with `DUCKLE_ASYNC_THREADS=32` and `DUCKLE_READ_AHEAD_DEPTH=32`. A fixed depth is outside DuckDB's memory budget, so depth times the row-group size has to fit in memory.
 - **More RAM.** Set `memoryLimitMb` per stage, or a workspace default, and spill to disk past it.
 - **More pipelines at once.** `DUCKLE_MAX_CONCURRENT_RUNS` raises how many run together; it ships at 1 so an unattended server stays predictable until you decide otherwise.
 - **More machines.** `duckle-runner work` drains a queued batch from as many workers as you start, on as many hosts as you like, each claiming its items under a lock so nothing runs twice.
@@ -2190,7 +2191,9 @@ queries sharing a directory lost 3 of 12 to segfaults and delete failures.
 The flags set the same variables the engine reads (`DUCKLE_MEMORY_LIMIT`,
 `DUCKLE_THREADS`, `DUCKLE_TEMP_DIR`, `DUCKLE_MAX_TEMP_DIR_SIZE`), so a flag, a
 workspace-wide export and a per-stage setting all land in one place, with the
-most specific winning.
+most specific winning. Two more have no flag and need DuckDB 2.0:
+`DUCKLE_ASYNC_THREADS` and `DUCKLE_READ_AHEAD_DEPTH`, which bound the pool
+DuckDB reads object storage on and how far ahead it reads.
 
 ### Poll a remote source without downloading it (`src.changed`)
 
