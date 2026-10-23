@@ -7156,7 +7156,8 @@ fn map_duckdb_type(t: &str) -> DataType {
         "TIME" => DataType::Time,
         "TIMESTAMP" | "TIMESTAMP_S" | "TIMESTAMP_MS" | "TIMESTAMP_NS" | "TIMESTAMP_US"
         | "TIMESTAMPTZ" | "TIMESTAMP WITH TIME ZONE" => DataType::Timestamp,
-        "JSON" | "MAP" | "STRUCT" | "LIST" | "ARRAY" => DataType::Json,
+        // VARIANT (DuckDB 2.0) holds JSON-like values, typed per row.
+        "JSON" | "MAP" | "STRUCT" | "LIST" | "ARRAY" | "VARIANT" => DataType::Json,
         "BLOB" | "VARBINARY" => DataType::Binary,
         // DuckDB 1.5 made GEOMETRY a core type; DESCRIBE reports it plain or
         // parameterized ("geometry", "geometry('epsg:4326')"), both normalized to

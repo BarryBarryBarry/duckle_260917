@@ -3599,7 +3599,7 @@ For JSON sources, a **Format** selector picks how the file is read (auto / array
 
 | Group | Operations |
 |---|---|
-| **Fields** | Map (visual mapper: joins a main input to up to 3 lookup inputs with inner / left joins and per-output expressions + filter), Project / Select, Cast, Rename, Add / Drop / Reorder Column, Coalesce, UUID v4 |
+| **Fields** | Map (visual mapper: joins a main input to up to 3 lookup inputs with inner / left joins and per-output expressions + filter), Project / Select, Cast (to `variant` too: JSON text parsed into DuckDB 2.0's VARIANT, which Parquet stores shredded), Rename, Add / Drop / Reorder Column, Coalesce, UUID v4 |
 | **Rows** | Filter (visual or raw SQL, with reject port), Distinct, Sample, Top N / Limit, Sort, Skip, Top N per Group, Forward Fill, Backward Fill, Constant Fill |
 | **Aggregate** | Group By, Rollup, Cube, Count, Window Aggregate, Cumulative, Approx Quantile (t-digest), Approx Count Distinct (HyperLogLog) |
 | **Join** | Inner, Left, Right, Full Outer, Cross, Lookup, Semi, Anti, Nearest Join (each row paired with its k closest lookup rows by vector: cosine, inner product or euclidean, exact or approximate - DuckDB 2.0's NEAREST join), Spatial Join (Intersects, Contains, Within, Touches, Crosses, Overlaps, Equals, Covers, Covered by; fails naming both systems when the two geometry columns use different CRS, rather than returning zero rows) |

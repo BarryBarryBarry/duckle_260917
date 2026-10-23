@@ -4197,6 +4197,18 @@ fn cast_with_format(cast_fn: &str, column: &str, target_lc: &str, fmt: &str) -> 
     )
 }
 
+/// The SQL casting `column` to a Cast target. `variant` goes through JSON:
+/// DuckDB 2.0 keeps text cast straight to VARIANT as a string, so JSON text has
+/// to be parsed on the way for its objects and arrays to arrive as such.
+fn cast_expr(cast_fn: &str, column: &str, target: &str) -> String {
+    let col = quote_ident(column);
+    if target.eq_ignore_ascii_case("variant") {
+        format!("{cast_fn}({cast_fn}({col} AS JSON) AS VARIANT)")
+    } else {
+        format!("{cast_fn}({col} AS {})", duckle_type_to_duckdb(target))
+    }
+}
+
 pub(crate) fn build_cast(inputs: &NodeInputs, props: &JsonValue) -> Result<String, String> {
     let upstream = inputs.main().ok_or_else(|| "missing main input".to_string())?;
     let casts = props
@@ -4266,13 +4278,7 @@ pub(crate) fn build_cast(inputs: &NodeInputs, props: &JsonValue) -> Result<Strin
         if let (Some(fmt), true) = (fmt, target_lc == "date" || target_lc.starts_with("timestamp")) {
             replacements.push(cast_with_format(cast_fn, column, &target_lc, fmt));
         } else {
-            replacements.push(format!(
-                "{}({} AS {}) AS {}",
-                cast_fn,
-                quote_ident(column),
-                duckle_type_to_duckdb(target),
-                quote_ident(column)
-            ));
+            replacements.push(format!("{} AS {}", cast_expr(cast_fn, column, target), quote_ident(column)));
         }
     }
     // The Cast form is single-column: { column, targetType, format }.
@@ -4290,13 +4296,7 @@ pub(crate) fn build_cast(inputs: &NodeInputs, props: &JsonValue) -> Result<Strin
             {
                 replacements.push(cast_with_format(cast_fn, column, &target_lc, fmt));
             } else {
-                replacements.push(format!(
-                    "{}({} AS {}) AS {}",
-                    cast_fn,
-                    quote_ident(column),
-                    duckle_type_to_duckdb(&target),
-                    quote_ident(column)
-                ));
+                replacements.push(format!("{} AS {}", cast_expr(cast_fn, column, &target), quote_ident(column)));
             }
         }
     }

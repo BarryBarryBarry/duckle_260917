@@ -173,6 +173,9 @@ export const CAST_TYPES: SelectOption[] = [
     { label: 'timestamp', value: 'timestamp' },
     { label: 'decimal', value: 'decimal' },
     { label: 'json', value: 'json' },
+    // DuckDB 2.0. build_cast parses the value as JSON on the way, so JSON text
+    // arrives as objects and arrays rather than as a string.
+    { label: 'variant (from JSON)', value: 'variant' },
 ];
 
 export type Cast = {

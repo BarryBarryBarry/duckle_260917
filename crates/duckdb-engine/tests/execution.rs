@@ -16873,6 +16873,35 @@ fn inspect_parquet_regression_still_selects() {
     );
 }
 
+/// DuckDB 2.0's VARIANT. xf.cast to `variant` parses JSON text into one - a
+/// plain cast would keep the text as a string inside the variant - a Parquet
+/// sink stores it as VARIANT, and Duckle reads such a column as
+/// semi-structured (json) rather than as text.
+#[test]
+fn json_text_casts_to_variant_and_parquet_keeps_it() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let ndjson = write_file(tmp.path(), "in.json", "{\"id\": 1, \"payload\": \"{\\\"a\\\": 1, \\\"b\\\": [1, 2]}\"}\n");
+    let pq = out_path(tmp.path(), "out.parquet");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.json", json!({ "path": ndjson })),
+            node("c", "xf.cast", json!({ "casts": [{ "column": "payload", "targetType": "variant" }] })),
+            node("k", "snk.parquet", json!({ "path": pq })),
+        ]),
+        json!([main_edge("e1", "s", "c"), main_edge("e2", "c", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert_eq!(
+        scalar_string(&format!("SELECT variant_typeof(payload) FROM read_parquet('{pq}')")),
+        "OBJECT(a, b)",
+        "the JSON was parsed, not kept as text"
+    );
+    let insp = engine.inspect("parquet", json!({ "path": pq })).expect("parquet inspect");
+    let payload = insp.schema.iter().find(|c| c.name == "payload").expect("payload column");
+    assert_eq!(payload.data_type, duckle_duckdb_engine::DataType::Json);
+}
+
 // --- snk.salesforce (sObject Collections) ------------------------------------
 //
 // These drive the real executor against a mock HTTP server standing in for the
