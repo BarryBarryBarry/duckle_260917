@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        asset: [Duckle-windows-x64.exe, Duckle-windows-arm64.exe]
+        asset: [Otter-ETL-agent-windows-x64.exe, Otter-ETL-agent-windows-arm64.exe]
     steps:
       - name: Download the unsigned asset
         env:

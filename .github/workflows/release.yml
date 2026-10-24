@@ -42,7 +42,7 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "release $tag already exists"
           else
-            gh release create "$tag" --draft --title "Duckle $tag"
+            gh release create "$tag" --draft --title "Otter ETL agent $tag"
           fi
 
   # Build the static Linux runner ONCE. It serves two purposes:
@@ -50,7 +50,7 @@ jobs:
   #      binary can cross-build a Linux pipeline file from any OS;
   #   2. a published release asset, so a pipeline repo's CI can gate on
   #      `duckle-runner validate`.
-  # (2) cannot be served by the desktop asset. Duckle-linux-x64 is a Tauri
+  # (2) cannot be served by the desktop asset. Otter-ETL-agent-linux-x64 is a Tauri
   # binary with libwebkit2gtk-4.1, libgtk-3, libsoup-3, libjavascriptcoregtk,
   # libgdk-3, libgdk_pixbuf and libcairo in DT_NEEDED. Those resolve at load
   # time, before main() and before the headless-CLI branch, so on a runner with
@@ -149,8 +149,8 @@ jobs:
         env:
           OS_FILTER: ${{ github.event.inputs.os_filter }}
         run: |
-          linux='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Duckle-linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Duckle-linux-arm64"}]'
-          all='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Duckle-linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Duckle-linux-arm64"},{"os":"macos-14","binary":"duckle","asset":"Duckle-macos-x64","target":"x86_64-apple-darwin"},{"os":"macos-14","binary":"duckle","asset":"Duckle-macos-arm64"},{"os":"windows-latest","binary":"duckle.exe","asset":"Duckle-windows-x64.exe"},{"os":"windows-11-arm","binary":"duckle.exe","asset":"Duckle-windows-arm64.exe"}]'
+          linux='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Otter-ETL-agent-linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Otter-ETL-agent-linux-arm64"}]'
+          all='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Otter-ETL-agent-linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Otter-ETL-agent-linux-arm64"},{"os":"macos-14","binary":"duckle","asset":"Otter-ETL-agent-macos-x64","target":"x86_64-apple-darwin"},{"os":"macos-14","binary":"duckle","asset":"Otter-ETL-agent-macos-arm64"},{"os":"windows-latest","binary":"duckle.exe","asset":"Otter-ETL-agent-windows-x64.exe"},{"os":"windows-11-arm","binary":"duckle.exe","asset":"Otter-ETL-agent-windows-arm64.exe"}]'
           if [ "$OS_FILTER" = "linux" ]; then include="$linux"; else include="$all"; fi
           echo "matrix={\"include\":$include}" >> "$GITHUB_OUTPUT"
 
@@ -317,11 +317,12 @@ jobs:
           else
             src="target/release/${{ matrix.binary }}"
           fi
-          # The standalone desktop binary, named exactly as before so the
-          # in-app update check (apps/desktop/src/update_check.rs) and the
-          # README download table keep matching it. Single file, double-click.
-          # The duckle-runner is embedded into this binary at compile time
-          # (no separate with-runner asset needed).
+          # The standalone desktop binary, published as Otter-ETL-agent-<os>-<arch>.
+          # These names no longer match the upstream Duckle-* names that the
+          # in-app update check (apps/desktop/src/update_check.rs) and the README
+          # download table use; the update check is turned off in this build.
+          # Single file, double-click. The duckle-runner is embedded into this
+          # binary at compile time (no separate with-runner asset needed).
           cp "$src" "_release/${{ matrix.asset }}"
 
       # Guard (issue #131): a shipped Linux binary must NOT carry a dynamic
@@ -434,9 +435,9 @@ jobs:
           # before swapping it in, and looks its own asset up by name, so the
           # extra line is safe.
           sha256sum \
-            Duckle-linux-x64 Duckle-linux-arm64 \
-            Duckle-macos-x64 Duckle-macos-arm64 \
-            Duckle-windows-x64.exe Duckle-windows-arm64.exe \
+            Otter-ETL-agent-linux-x64 Otter-ETL-agent-linux-arm64 \
+            Otter-ETL-agent-macos-x64 Otter-ETL-agent-macos-arm64 \
+            Otter-ETL-agent-windows-x64.exe Otter-ETL-agent-windows-arm64.exe \
             duckle-runner-linux-x64 \
             > SHA256SUMS.txt
           cat SHA256SUMS.txt
@@ -449,7 +450,7 @@ jobs:
       # binds each digest to this repository, this commit and this run, and a
       # consumer checks it without trusting the release page:
       #
-      #   gh attestation verify Duckle-linux-x64 --repo ${{ github.repository }}
+      #   gh attestation verify Otter-ETL-agent-linux-x64 --repo ${{ github.repository }}
       #
       # Deliberately not the same thing as code signing. Authenticode and
       # macOS notarization still need a purchased certificate; this is the
@@ -458,11 +459,11 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
-            _sums/Duckle-linux-x64
-            _sums/Duckle-linux-arm64
-            _sums/Duckle-macos-x64
-            _sums/Duckle-macos-arm64
-            _sums/Duckle-windows-x64.exe
-            _sums/Duckle-windows-arm64.exe
+            _sums/Otter-ETL-agent-linux-x64
+            _sums/Otter-ETL-agent-linux-arm64
+            _sums/Otter-ETL-agent-macos-x64
+            _sums/Otter-ETL-agent-macos-arm64
+            _sums/Otter-ETL-agent-windows-x64.exe
+            _sums/Otter-ETL-agent-windows-arm64.exe
             _sums/duckle-runner-linux-x64
             _sums/SHA256SUMS.txt
