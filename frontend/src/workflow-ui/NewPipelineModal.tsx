@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 import type { RepoItem } from '../repo-types';
 import { pipelineFromSql, type FromSql } from '../tauri-bridge';
@@ -15,31 +16,12 @@ type Props = {
     onCreate: (name: string, parentId: string, template: PipelineTemplate, seed?: FromSql['pipeline']) => void;
 };
 
-const TEMPLATES: { id: PipelineTemplate; label: string; description: string; available: boolean }[] = [
-    {
-        id: 'empty',
-        label: 'Empty',
-        description: 'Blank canvas. Drag components from the palette to start.',
-        available: true,
-    },
-    {
-        id: 'sample-csv-to-parquet',
-        label: 'Sample · CSV → Filter → Parquet',
-        description: 'Pre-wired three-node pipeline to learn the editor.',
-        available: true,
-    },
-    {
-        id: 'sample-join-groupby',
-        label: 'Sample · Join + Group By',
-        description: 'Join two CSVs and aggregate - uses xf.groupby (not xf.aggregate).',
-        available: true,
-    },
-    {
-        id: 'from-sql',
-        label: 'From SQL',
-        description: 'Paste a SELECT: one step per CTE, and a source for each table it reads.',
-        available: true,
-    },
+/** `key` names the label and description under newPipeline.templates. */
+const TEMPLATES: { id: PipelineTemplate; key: string; available: boolean }[] = [
+    { id: 'empty', key: 'empty', available: true },
+    { id: 'sample-csv-to-parquet', key: 'sampleCsv', available: true },
+    { id: 'sample-join-groupby', key: 'sampleJoin', available: true },
+    { id: 'from-sql', key: 'fromSql', available: true },
 ];
 
 function buildPath(item: RepoItem, allItems: RepoItem[]): string {
@@ -61,6 +43,7 @@ function sanitizeName(raw: string): string {
 
 export default function NewPipelineModal(props: Props) {
     const { open, defaultParentId, repoItems, onCancel, onCreate } = props;
+    const { t } = useTranslation();
     const [name, setName] = useState('');
     const [parentId, setParentId] = useState(defaultParentId);
     const [template, setTemplate] = useState<PipelineTemplate>('empty');
@@ -120,7 +103,7 @@ export default function NewPipelineModal(props: Props) {
         try {
             const built = await pipelineFromSql(sql);
             if (!built) {
-                setError('From SQL needs the desktop app or the web editor.');
+                setError(t('newPipeline.needsDesktop'));
                 return;
             }
             onCreate(sanitized, parentId, template, built.pipeline);
@@ -142,12 +125,12 @@ export default function NewPipelineModal(props: Props) {
         >
             <div className="modal modal-new-pipeline">
                 <div className="modal-header">
-                    <div className="modal-title">New pipeline</div>
+                    <div className="modal-title">{t('newPipeline.title')}</div>
                     <button
                         type="button"
                         className="modal-close"
                         onClick={onCancel}
-                        aria-label="Close"
+                        aria-label={t('common.close')}
                     >
                         <X size={16} />
                     </button>
@@ -155,13 +138,13 @@ export default function NewPipelineModal(props: Props) {
 
                 <div className="modal-body">
                     <div className="modal-field">
-                        <label className="modal-field-label">Pipeline name</label>
+                        <label className="modal-field-label">{t('newPipeline.name')}</label>
                         <input
                             ref={nameRef}
                             type="text"
                             className="modal-input"
                             value={name}
-                            placeholder="e.g. customer_360"
+                            placeholder={t('newPipeline.namePlaceholder')}
                             onChange={e => setName(e.target.value)}
                             onKeyDown={e => {
                                 if (e.key === 'Enter' && canCreate) {
@@ -173,13 +156,13 @@ export default function NewPipelineModal(props: Props) {
                         />
                         {name && name !== sanitized ? (
                             <div className="modal-field-hint">
-                                Will be saved as <code>{sanitized}</code>
+                                {t('newPipeline.savedAs')} <code>{sanitized}</code>
                             </div>
                         ) : null}
                     </div>
 
                     <div className="modal-field">
-                        <label className="modal-field-label">Folder</label>
+                        <label className="modal-field-label">{t('newPipeline.folder')}</label>
                         <select
                             className="modal-input modal-select"
                             value={parentId}
@@ -194,31 +177,31 @@ export default function NewPipelineModal(props: Props) {
                     </div>
 
                     <div className="modal-field">
-                        <label className="modal-field-label">Template</label>
+                        <label className="modal-field-label">{t('newPipeline.template')}</label>
                         <div className="template-grid">
-                            {TEMPLATES.map(t => (
+                            {TEMPLATES.map(tpl => (
                                 <button
-                                    key={t.id}
+                                    key={tpl.id}
                                     type="button"
                                     className={
                                         'template-card' +
-                                        (template === t.id ? ' is-active' : '') +
-                                        (!t.available ? ' is-disabled' : '')
+                                        (template === tpl.id ? ' is-active' : '') +
+                                        (!tpl.available ? ' is-disabled' : '')
                                     }
                                     onClick={() => {
-                                        if (t.available) setTemplate(t.id);
+                                        if (tpl.available) setTemplate(tpl.id);
                                     }}
-                                    disabled={!t.available}
+                                    disabled={!tpl.available}
                                 >
-                                    <div className="template-card-title">{t.label}</div>
-                                    <div className="template-card-desc">{t.description}</div>
+                                    <div className="template-card-title">{t(`newPipeline.templates.${tpl.key}.label`)}</div>
+                                    <div className="template-card-desc">{t(`newPipeline.templates.${tpl.key}.desc`)}</div>
                                 </button>
                             ))}
                         </div>
                     </div>
                     {fromSql ? (
                         <div className="modal-field">
-                            <label className="modal-field-label">SELECT to convert</label>
+                            <label className="modal-field-label">{t('newPipeline.sqlLabel')}</label>
                             <textarea
                                 className="modal-input"
                                 rows={8}
@@ -227,10 +210,7 @@ export default function NewPipelineModal(props: Props) {
                                 onChange={e => setSql(e.target.value)}
                                 spellCheck={false}
                             />
-                            <div className="modal-field-hint">
-                                Each CTE becomes a step named after it; each table the query reads becomes a
-                                source to point at your data.
-                            </div>
+                            <div className="modal-field-hint">{t('newPipeline.sqlHint')}</div>
                             {error ? <div className="modal-field-hint field-warning">{error}</div> : null}
                         </div>
                     ) : null}
@@ -238,7 +218,7 @@ export default function NewPipelineModal(props: Props) {
 
                 <div className="modal-footer">
                     <button type="button" className="btn btn-secondary" onClick={onCancel}>
-                        Cancel
+                        {t('common.cancel')}
                     </button>
                     <button
                         type="button"
@@ -246,7 +226,7 @@ export default function NewPipelineModal(props: Props) {
                         onClick={handleCreate}
                         disabled={!canCreate}
                     >
-                        {busy ? 'Converting...' : 'Create'}
+                        {busy ? t('newPipeline.converting') : t('common.create')}
                     </button>
                 </div>
             </div>

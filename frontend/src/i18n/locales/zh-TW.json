@@ -922,5 +922,35 @@
   },
   "metrics": {
     "title": "執行指標"
+  },
+  "newPipeline": {
+    "title": "新管道",
+    "name": "管道名稱",
+    "namePlaceholder": "例如 customer_360",
+    "savedAs": "將儲存為",
+    "folder": "所在資料夾",
+    "template": "範本",
+    "templates": {
+      "empty": {
+        "label": "空白",
+        "desc": "空白畫布，從元件清單拖入元件開始建置。"
+      },
+      "sampleCsv": {
+        "label": "範例 · CSV → 篩選 → Parquet",
+        "desc": "預先連好的三節點管道，適合熟悉編輯器。"
+      },
+      "sampleJoin": {
+        "label": "範例 · 關聯 + 分組彙總",
+        "desc": "關聯兩個 CSV 後彙總，使用 xf.groupby（不是 xf.aggregate）。"
+      },
+      "fromSql": {
+        "label": "從 SQL 產生",
+        "desc": "貼上一段 SELECT 陳述式：每個 CTE 產生一個步驟，每張讀取的表產生一個資料來源。"
+      }
+    },
+    "sqlLabel": "要轉換的 SELECT 陳述式",
+    "sqlHint": "每個 CTE 會產生一個以其命名的步驟；查詢讀取的每張表會產生一個資料來源，再指向你的資料即可。",
+    "needsDesktop": "「從 SQL 產生」需要在桌面版或 Web 編輯器中使用。",
+    "converting": "正在轉換..."
   }
 }

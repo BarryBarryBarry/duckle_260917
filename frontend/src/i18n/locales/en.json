@@ -1024,5 +1024,35 @@
         "body": "Open one of the bundled examples from the Project tab to see a working pipeline, or draw your own. Everything here is replayable from Settings, and nothing you just saw needs an account or a cloud."
       }
     }
+  },
+  "newPipeline": {
+    "title": "New pipeline",
+    "name": "Pipeline name",
+    "namePlaceholder": "e.g. customer_360",
+    "savedAs": "Will be saved as",
+    "folder": "Folder",
+    "template": "Template",
+    "templates": {
+      "empty": {
+        "label": "Empty",
+        "desc": "Blank canvas. Drag components from the palette to start."
+      },
+      "sampleCsv": {
+        "label": "Sample · CSV → Filter → Parquet",
+        "desc": "Pre-wired three-node pipeline to learn the editor."
+      },
+      "sampleJoin": {
+        "label": "Sample · Join + Group By",
+        "desc": "Join two CSVs and aggregate - uses xf.groupby (not xf.aggregate)."
+      },
+      "fromSql": {
+        "label": "From SQL",
+        "desc": "Paste a SELECT: one step per CTE, and a source for each table it reads."
+      }
+    },
+    "sqlLabel": "SELECT to convert",
+    "sqlHint": "Each CTE becomes a step named after it; each table the query reads becomes a source to point at your data.",
+    "needsDesktop": "From SQL needs the desktop app or the web editor.",
+    "converting": "Converting..."
   }
 }

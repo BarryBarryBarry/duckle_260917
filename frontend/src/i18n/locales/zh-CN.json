@@ -989,5 +989,35 @@
         "body": "从“项目”标签页打开一个内置示例，看看可运行的管道，或者自己画一条。这里的一切都可以在“设置”中重新播放，你刚才看到的所有功能都不需要账户，也不需要云服务。"
       }
     }
+  },
+  "newPipeline": {
+    "title": "新建管道",
+    "name": "管道名称",
+    "namePlaceholder": "例如 customer_360",
+    "savedAs": "将保存为",
+    "folder": "所在文件夹",
+    "template": "模板",
+    "templates": {
+      "empty": {
+        "label": "空白",
+        "desc": "空白画布，从组件列表拖入组件开始搭建。"
+      },
+      "sampleCsv": {
+        "label": "示例 · CSV → 过滤 → Parquet",
+        "desc": "预置连好的三节点管道，适合熟悉编辑器。"
+      },
+      "sampleJoin": {
+        "label": "示例 · 关联 + 分组聚合",
+        "desc": "关联两个 CSV 后聚合，使用 xf.groupby（不是 xf.aggregate）。"
+      },
+      "fromSql": {
+        "label": "从 SQL 生成",
+        "desc": "粘贴一段 SELECT 语句：每个 CTE 生成一个步骤，每张读取的表生成一个数据源。"
+      }
+    },
+    "sqlLabel": "要转换的 SELECT 语句",
+    "sqlHint": "每个 CTE 会生成一个以其命名的步骤；查询读取的每张表会生成一个数据源，再指向你的数据即可。",
+    "needsDesktop": "“从 SQL 生成”需要在桌面版或 Web 编辑器中使用。",
+    "converting": "正在转换..."
   }
 }

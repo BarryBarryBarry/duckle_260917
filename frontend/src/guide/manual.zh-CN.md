@@ -135,10 +135,10 @@
 
 | 模板 | 说明 |
 |---|---|
-| Empty | 空白画布，从零开始 |
-| Sample · CSV → Filter → Parquet | 预置的三节点示例，适合熟悉编辑器 |
-| Sample · Join + Group By | 两个 CSV 关联后聚合的示例 |
-| From SQL | 粘贴一段 SELECT 语句，自动拆成对应的节点 |
+| 空白 | 空白画布，从零开始 |
+| 示例 · CSV → 过滤 → Parquet | 预置的三节点示例，适合熟悉编辑器 |
+| 示例 · 关联 + 分组聚合 | 两个 CSV 关联后聚合的示例 |
+| 从 SQL 生成 | 粘贴一段 SELECT 语句，自动拆成对应的节点 |
 
 ![新建 Pipeline：输入名称并选择模板](./images/new-pipeline.webp)
 
