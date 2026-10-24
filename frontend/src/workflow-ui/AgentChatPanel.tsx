@@ -42,7 +42,6 @@ import {
     agentUiReply,
     pickAgentAttachments,
     type AgentAttachment,
-    type AgentConnectionContext,
     type AgentContext,
     type AgentEvent,
     type AgentEventEnvelope,
@@ -51,6 +50,7 @@ import {
     type InstallProgress,
 } from '../tauri-bridge';
 import type { RepoItem } from '../repo-types';
+import { connectionContext, type AgentRequest } from '../agent-diagnosis';
 import { getWorkspacePath } from '../workspace';
 import ConversationSidebar from './ConversationSidebar';
 import { SkillCommandMenu, looksLikeSkillCommand, matchSkills, skillCommand, slashQuery } from './AgentSkillMenu';
@@ -68,7 +68,6 @@ import {
     connectionKindOf,
     connectionsOfKind,
     type PickedSource,
-    type SourceRole,
 } from './AgentDataSources';
 
 type Props = {
@@ -86,6 +85,11 @@ type Props = {
     /** `side`: docked as a tool window beside the canvas, filling its
      *  container, instead of a floating, draggable window. */
     placement?: 'floating' | 'side';
+    /** A message to send on the user's behalf in a new conversation, such as
+     *  "diagnose this failed run" from the bottom panel. */
+    request?: AgentRequest | null;
+    /** Called once `request` has been taken, so it is not sent again. */
+    onRequestHandled?: (id: number) => void;
 };
 
 type ToolCall = {
@@ -239,22 +243,6 @@ function readSavedSelection(workspace: string): {
     } catch {
         return { draft: '', picked: [] };
     }
-}
-
-/** What the agent is told about a picked connection: never its secrets. */
-function connectionContext(item: RepoItem, role: SourceRole): AgentConnectionContext {
-    const p = (item.payload ?? {}) as Record<string, unknown>;
-    const text = (k: string) => (typeof p[k] === 'string' && p[k] ? String(p[k]) : null);
-    return {
-        id: item.id,
-        name: item.name,
-        kind: text('kind'),
-        host: text('host'),
-        port: p.port === undefined || p.port === null || p.port === '' ? null : String(p.port),
-        database: text('database'),
-        schema: text('schema'),
-        role,
-    };
 }
 
 function installLabel(progress: InstallProgress | null): string {
@@ -464,6 +452,8 @@ export default function AgentChatPanel({
     connections = NO_CONNECTIONS,
     onSaveConnection,
     placement = 'floating',
+    request = null,
+    onRequestHandled,
 }: Props) {
     const { t } = useTranslation();
     const workspace = useMemo(() => workspaceProp ?? getWorkspacePath(), [workspaceProp]);
@@ -541,6 +531,9 @@ export default function AgentChatPanel({
     };
     /** The conversation whose Pi session is running, if any. */
     const startedConversationRef = useRef<string | null>(null);
+    /** A request started a conversation: restoring the last one must not
+     *  replace it. */
+    const requestTookOverRef = useRef(false);
     /** Serializes history writes so a slow save cannot land after a newer one. */
     const historyQueueRef = useRef<Promise<void>>(Promise.resolve());
     /** What was last written to disk, to skip saves that would change nothing. */
@@ -679,6 +672,7 @@ export default function AgentChatPanel({
         savedSignatureRef.current = '';
         stopAgent();
         let cancelled = false;
+        requestTookOverRef.current = false;
         const restoreId = readActiveConversation(workspace);
         void (async () => {
             try {
@@ -688,7 +682,7 @@ export default function AgentChatPanel({
                 setHistoryError(null);
                 if (restoreId && list.some(c => c.id === restoreId)) {
                     const conv = await agentConversationGet(workspace, restoreId);
-                    if (cancelled) return;
+                    if (cancelled || requestTookOverRef.current) return;
                     const loaded = restoreMessages(conv.messages);
                     savedSignatureRef.current = JSON.stringify(loaded);
                     setMessages(loaded);
@@ -1201,6 +1195,58 @@ export default function AgentChatPanel({
             setError({ message: String(err), needsSettings: false });
         }
     }
+
+    /** Sends a request from elsewhere in the editor, in a conversation of its
+     *  own so it does not land in the middle of another task. */
+    async function sendRequest(req: AgentRequest) {
+        if (!workspace) return;
+        requestTookOverRef.current = true;
+        const conversationId = newConversationId();
+        // It already says which databases it is about.
+        noSourceOkRef.current.add(conversationId);
+        resetRecall();
+        savedSignatureRef.current = '';
+        currentTurnIdRef.current = null;
+        turnStartedAtRef.current = Date.now();
+        setActiveId(conversationId);
+        setMessages([{ kind: 'user', text: req.prompt }]);
+        setBusy(true);
+        setError(null);
+        const startFailure = await ensureStarted(conversationId);
+        if (startFailure) {
+            setBusy(false);
+            setError(startFailure);
+            return;
+        }
+        try {
+            await agentSendPrompt(req.prompt, {
+                workspace,
+                connection: null,
+                connections: req.connections,
+                selectedAssets: req.selectedAssets,
+                attachments: [],
+            });
+        } catch (err) {
+            setBusy(false);
+            setError({ message: String(err), needsSettings: false });
+        }
+    }
+
+    // Sent once the runtime is known to be installed; a request made before
+    // the Agent was installed goes out when installing finishes.
+    const handledRequestRef = useRef<number | null>(null);
+    useEffect(() => {
+        if (!request || handledRequestRef.current === request.id) return;
+        if (!open || !workspace || setup.phase !== 'ready') return;
+        handledRequestRef.current = request.id;
+        onRequestHandled?.(request.id);
+        if (busyRef.current || attaching) {
+            setError({ message: t('agent.diagnose.busy'), needsSettings: false });
+            return;
+        }
+        void sendRequest(request);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [request, open, workspace, setup.phase]);
 
     async function handleAttach() {
         try {

@@ -68,6 +68,8 @@ import {
 } from './canvas/layout';
 import { validatePipeline } from './validation';
 import { loadRecentComponents, recordRecentComponent } from './recent-components';
+import { buildRunDiagnosis, type AgentRequest } from './agent-diagnosis';
+import { friendlyError } from './errors';
 import { resolveForRun, discoverParams, builtinVars, buildContextVars, pipelineRunFields } from './run-resolve';
 import type { ParamSpec } from './run-resolve';
 import { livePreviewable } from './live-preview';
@@ -2459,6 +2461,53 @@ export default function App() {
         },
         [workspacePathState, t],
     );
+    // "Diagnose with Agent" from the bottom panel: opens the Agent and sends it
+    // the failed run with what it needs to find the cause.
+    const [agentRequest, setAgentRequest] = useState<AgentRequest | null>(null);
+    const agentRequestSeq = useRef(0);
+    const handleAskAgent = useCallback(
+        (nodeId?: string) => {
+            if (!shownRunResult || !workspacePathState) return;
+            const job = jobs.find(j => j.id === activeJobId);
+            const pipelineName = job?.name ?? activeJobId;
+            const { selectedAssets, connections, focusNodeIds } = buildRunDiagnosis({
+                workspace: workspacePathState,
+                pipelineId: activeJobId,
+                pipelineName,
+                unsavedChanges: !!job?.dirty,
+                engine,
+                nodes,
+                edges,
+                runResult: shownRunResult,
+                validation,
+                savedConnections,
+                nodeId,
+            });
+            const raw =
+                (nodeId ? shownRunResult.nodes[nodeId]?.error : undefined) ??
+                shownRunResult.error ??
+                (focusNodeIds[0] ? shownRunResult.nodes[focusNodeIds[0]]?.error : undefined) ??
+                '';
+            const friendly = friendlyError(raw) || raw || t('bottom.runFailed');
+            const error = friendly.length > 300 ? `${friendly.slice(0, 300)}…` : friendly;
+            const prompt =
+                focusNodeIds.length === 1
+                    ? t('agent.diagnose.promptNode', {
+                          pipeline: pipelineName,
+                          node: nodeLabels[focusNodeIds[0]] ?? focusNodeIds[0],
+                          error,
+                      })
+                    : t('agent.diagnose.promptRun', {
+                          pipeline: pipelineName,
+                          nodes: focusNodeIds.map(id => nodeLabels[id] ?? id).join(', ') || '-',
+                          error,
+                      });
+            agentRequestSeq.current += 1;
+            setAgentRequest({ id: agentRequestSeq.current, prompt, selectedAssets, connections });
+            setRightTool('agent');
+        },
+        [shownRunResult, workspacePathState, jobs, activeJobId, engine, nodes, edges, validation, savedConnections, nodeLabels, t],
+    );
     const handleSaveContext = useCallback(
         (name: string, payload: ContextPayload) => upsertRepoItem('context', name, payload),
         [upsertRepoItem],
@@ -2897,6 +2946,8 @@ export default function App() {
                             onOpenSettings={() => setShowSettings(true)}
                             connections={savedConnections}
                             onSaveConnection={handleAgentSaveConnection}
+                            request={agentRequest}
+                            onRequestHandled={id => setAgentRequest(r => (r?.id === id ? null : r))}
                         />
                     </SideToolWindow>
                 ) : null}
@@ -2948,6 +2999,7 @@ export default function App() {
                 terminalNodeIds={terminalNodeIds}
                 validation={validation}
                 openProblemsRequest={validateRequest}
+                onAskAgent={isInTauri() && workspacePathState ? handleAskAgent : undefined}
             />
 
             <StatusBar

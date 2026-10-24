@@ -229,7 +229,9 @@
     "consoleDesc": "执行日志。运行管道后，每个阶段的状态、行数、时间以及任何错误都会显示在此处。",
     "pipelineFinished": "管道已完成",
     "pipelineLabel": "管道",
-    "dismissError": "关闭错误提示"
+    "dismissError": "关闭错误提示",
+    "askAgent": "让 Agent 诊断",
+    "askAgentTitle": "把这次失败的运行发给 Agent 诊断"
   },
   "status": {
     "pipelineLabel": "管道：",
@@ -696,6 +698,11 @@
       "remove": "移除",
       "failed": "附件添加失败：{{message}}",
       "defaultPrompt": "请阅读附件。"
+    },
+    "diagnose": {
+      "promptNode": "流水线「{{pipeline}}」运行失败，出错节点「{{node}}」：{{error}}\n请找出根因并给出修复方案。修改或运行流水线前先征得我同意。",
+      "promptRun": "流水线「{{pipeline}}」运行失败（失败节点：{{nodes}}）：{{error}}\n请找出根因并给出修复方案。修改或运行流水线前先征得我同意。",
+      "busy": "Agent 仍在处理上一条消息。请等待完成或先停止，然后再次发送该错误。"
     }
   },
   "reply": {

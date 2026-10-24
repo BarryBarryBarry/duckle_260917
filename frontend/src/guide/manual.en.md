@@ -195,7 +195,7 @@ When something goes wrong, work through these in order:
    - **Output**: row counts per node, showing where rows were lost or multiplied.
 3. **The data**: select a node and look at **Properties → Preview**, walking upstream one node at a time.
 4. **The SQL**: switch to the **Plan** view to see the generated SQL, and run it in your database client to check it on its own.
-5. **Ask the Agent**: send it the error, for example "running xxx failed, please investigate". The Agent can read run logs, check a node's SQL and suggest fixes.
+5. **Ask the Agent**: after a failed run, click **Diagnose with Agent** next to "Run failed" at the top of **Output** in the bottom panel. The Agent opens on the right and sends the error in a new conversation, together with the pipeline id, every node's run status and error, and the failing nodes' and their inputs' components and settings (passwords and other credentials are left out). The Agent reads the run logs, checks the node's SQL and suggests a fix, and asks before changing or re-running the pipeline. You can also describe it yourself in the chat, for example "running xxx failed, please investigate".
 
 ![Configuration issue example: the Problems panel reports missing required fields and validation errors](./images/problems.webp)
 ![Run failure example: failed node state plus Console logs help locate the root cause](./images/run-failed.webp)

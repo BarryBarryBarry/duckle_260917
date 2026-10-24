@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     AlertCircle,
+    Bot,
     CheckCircle2,
     ChevronDown,
     ChevronUp,
@@ -26,6 +27,9 @@ export type Props = {
     terminalNodeIds: string[];
     validation: ValidationResult;
     openProblemsRequest?: number;
+    /** Sends the failed run to the Agent to diagnose. Absent where the Agent
+     *  is not available. */
+    onAskAgent?: () => void;
 };
 
 export default function BottomPanel({
@@ -35,6 +39,7 @@ export default function BottomPanel({
     terminalNodeIds,
     validation,
     openProblemsRequest,
+    onAskAgent,
 }: Props) {
     const { t } = useTranslation();
     const [tab, setTab] = useState<TabId>('problems');
@@ -162,6 +167,7 @@ export default function BottomPanel({
                             isRunning={isRunning}
                             nodeLabels={nodeLabels}
                             terminalNodeIds={terminalNodeIds}
+                            onAskAgent={onAskAgent}
                         />
                     ) : null}
                     {tab === 'console' ? (
@@ -246,16 +252,29 @@ function ProblemRow({
     );
 }
 
+/** Beside a failed run's status: sends it to the Agent. */
+function AskAgentButton({ onClick }: { onClick: () => void }) {
+    const { t } = useTranslation();
+    return (
+        <button type="button" className="bottom-ask-agent" onClick={() => onClick()} title={t('bottom.askAgentTitle')}>
+            <Bot size={13} aria-hidden="true" />
+            <span>{t('bottom.askAgent')}</span>
+        </button>
+    );
+}
+
 function OutputTab({
     runResult,
     isRunning,
     nodeLabels,
     terminalNodeIds,
+    onAskAgent,
 }: {
     runResult: RunResult | null;
     isRunning: boolean;
     nodeLabels: Record<string, string>;
     terminalNodeIds: string[];
+    onAskAgent?: () => void;
 }) {
     const { t } = useTranslation();
     // Let the user dismiss the run-error banner. Reset on every new run
@@ -301,6 +320,9 @@ function OutputTab({
                     {runResult.status === 'ok' ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
                     {runResult.status === 'ok' ? t('bottom.runSucceeded') : t('bottom.runFailed')}
                 </span>
+                {onAskAgent && hasFailure(runResult) ? (
+                    <AskAgentButton onClick={onAskAgent} />
+                ) : null}
                 <span className="bottom-output-stat">
                     <b>{totals.nodeCount}</b> {t('bottom.nodesLabel')}
                 </span>
@@ -467,6 +489,11 @@ function ConsoleTab({
             ))}
         </div>
     );
+}
+
+/** A run the Agent can be asked about: it failed, or one of its nodes did. */
+function hasFailure(r: RunResult): boolean {
+    return r.status === 'error' || !!r.error || Object.values(r.nodes).some(st => st.status === 'error');
 }
 
 function runStats(r: RunResult) {

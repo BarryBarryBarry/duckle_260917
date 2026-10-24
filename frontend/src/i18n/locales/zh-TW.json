@@ -228,7 +228,9 @@
     "ready": "準備就緒",
     "consoleDesc": "執行記錄。執行管線，此處會顯示每個階段的狀態、行數和時間以及任何錯誤。",
     "pipelineFinished": "管道已完成",
-    "pipelineLabel": "商機漏斗"
+    "pipelineLabel": "商機漏斗",
+    "askAgent": "讓 Agent 診斷",
+    "askAgentTitle": "把這次失敗的執行傳給 Agent 診斷"
   },
   "status": {
     "pipelineLabel": "商機漏斗",
@@ -626,6 +628,11 @@
       "remove": "移除",
       "failed": "附件新增失敗：{{message}}",
       "defaultPrompt": "請閱讀附件。"
+    },
+    "diagnose": {
+      "promptNode": "管線「{{pipeline}}」執行失敗，出錯節點「{{node}}」：{{error}}\n請找出根因並提出修復方案。修改或執行管線前先徵得我同意。",
+      "promptRun": "管線「{{pipeline}}」執行失敗（失敗節點：{{nodes}}）：{{error}}\n請找出根因並提出修復方案。修改或執行管線前先徵得我同意。",
+      "busy": "Agent 仍在處理上一則訊息。請等待完成或先停止，然後再次傳送該錯誤。"
     }
   },
   "reply": {

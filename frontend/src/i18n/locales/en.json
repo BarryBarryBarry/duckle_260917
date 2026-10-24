@@ -236,7 +236,9 @@
     "consoleDesc": "The execution log. Run a pipeline and each stage's status, row count, and timing - plus any errors - appears here.",
     "pipelineFinished": "Pipeline finished",
     "pipelineLabel": "Pipeline",
-    "dismissError": "Dismiss error"
+    "dismissError": "Dismiss error",
+    "askAgent": "Diagnose with Agent",
+    "askAgentTitle": "Send this failed run to the Agent to diagnose"
   },
   "status": {
     "pipelineLabel": "Pipeline:",
@@ -730,6 +732,11 @@
       "remove": "Remove",
       "failed": "Could not attach the files: {{message}}",
       "defaultPrompt": "Please read the attached files."
+    },
+    "diagnose": {
+      "promptNode": "Pipeline \"{{pipeline}}\" failed at node \"{{node}}\": {{error}}\nFind the root cause and propose a fix. Ask me before changing or running the pipeline.",
+      "promptRun": "Pipeline \"{{pipeline}}\" failed (failed nodes: {{nodes}}): {{error}}\nFind the root cause and propose a fix. Ask me before changing or running the pipeline.",
+      "busy": "The Agent is still working on the previous message. Wait for it or stop it, then send the failure again."
     }
   },
   "reply": {
