@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Copy, Minus, Square, X } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri } from '../tauri-dialog';
+import { routeTitleBarDoubleClick, toggleMaximizeWindow } from './window-maximize';
 
 /**
  * Minimize / maximize / close controls for the frameless window,
@@ -13,6 +14,7 @@ export default function WindowControls() {
 
     useEffect(() => {
         if (!isTauri()) return;
+        routeTitleBarDoubleClick();
         const win = getCurrentWindow();
         let unlisten: (() => void) | undefined;
         void win.isMaximized().then(setMaximized).catch(() => {});
@@ -45,7 +47,7 @@ export default function WindowControls() {
                 className="win-ctl"
                 title={maximized ? 'Restore' : 'Maximize'}
                 aria-label={maximized ? 'Restore' : 'Maximize'}
-                onClick={() => void win.toggleMaximize()}
+                onClick={() => void toggleMaximizeWindow()}
             >
                 {maximized ? <Copy size={11} /> : <Square size={11} />}
             </button>
