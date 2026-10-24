@@ -155,6 +155,9 @@ void i18n
             order: ['localStorage', 'navigator'],
             caches: ['localStorage'],
             lookupLocalStorage: 'duckle.lang',
+            // Traditional Chinese and other Chinese variants are not offered:
+            // a saved or browser choice of one reads Simplified, not English.
+            convertDetectedLanguage: lng => (/^zh\b/i.test(lng) ? 'zh-CN' : lng),
         },
     });
 

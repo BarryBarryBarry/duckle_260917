@@ -84,9 +84,10 @@ export const LANGUAGES: LangMeta[] = [
 ];
 
 // Languages offered in the selector and accepted by the detector. The rest stay
-// bundled but hidden until their translations are complete; a browser or saved
-// choice for a hidden language falls back to English.
-const ENABLED_CODES: readonly LangCode[] = ['en', 'zh-CN', 'zh-TW', 'ja', 'ko'];
+// bundled but hidden; a browser or saved choice for a hidden language falls
+// back to English, except other Chinese variants, which take Simplified
+// (see convertDetectedLanguage in index.ts).
+const ENABLED_CODES: readonly LangCode[] = ['zh-CN', 'en'];
 
 export const ENABLED_LANGUAGES: LangMeta[] = ENABLED_CODES
     .map(code => LANGUAGES.find(l => l.code === code))
