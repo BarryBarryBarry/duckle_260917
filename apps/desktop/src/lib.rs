@@ -32,6 +32,8 @@ mod duckie_history;
 mod engine_manager;
 mod llama_chat;
 mod local_auth;
+#[cfg(target_os = "macos")]
+mod macos_app_name;
 mod pixeltable_engine;
 mod samples;
 mod secrets;
@@ -134,12 +136,17 @@ pub fn run() {
 
     tracing::info!("duckle starting");
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_opener::init());
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(macos_app_name::default_menu);
+    builder
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            macos_app_name::apply(&app.package_info().name);
             // A self-update moves the running exe aside and it can only be
             // removed once that process has exited, which is this launch.
             if let Some(dir) = std::env::current_exe()
