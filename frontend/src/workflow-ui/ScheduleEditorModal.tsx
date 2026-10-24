@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import {
     AlarmClock,
@@ -66,6 +67,7 @@ export default function ScheduleEditorModal({
     workspacePath,
     onClose,
 }: Props) {
+    const { t } = useTranslation();
     const [schedules, setSchedules] = useState<Schedule[]>([]);
     const [history, setHistory] = useState<RunRecord[]>([]);
     const [editing, setEditing] = useState<Draft | null>(null);
@@ -299,7 +301,7 @@ export default function ScheduleEditorModal({
                                 // offers a door that cannot open: every save
                                 // re-reads the file and fails the same way.
                                 disabled={busy || !!loadError}
-                                title={loadError ? 'Repair schedules.json first' : undefined}
+                                title={loadError ? t('schedule.repairFirst') : undefined}
                             >
                                 <Plus size={13} /> New schedule
                             </button>
@@ -361,6 +363,7 @@ function ScheduleRow({
     onRunNow: () => void;
     busy: boolean;
 }) {
+    const { t } = useTranslation();
     const summary = useMemo(() => describeKind(schedule.kind), [schedule.kind]);
     return (
         <div className={'schedule-row' + (schedule.enabled ? '' : ' is-disabled')}>
@@ -408,7 +411,7 @@ function ScheduleRow({
                     className="btn btn-icon"
                     onClick={onRunNow}
                     disabled={busy}
-                    title="Run now"
+                    title={t('schedule.runNow')}
                 >
                     <Play size={12} />
                 </button>
@@ -417,7 +420,7 @@ function ScheduleRow({
                     className="btn btn-icon"
                     onClick={onEdit}
                     disabled={busy}
-                    title="Edit"
+                    title={t('schedule.edit')}
                 >
                     <Pencil size={12} />
                 </button>
@@ -426,7 +429,7 @@ function ScheduleRow({
                     className="btn btn-icon btn-icon-danger"
                     onClick={onDelete}
                     disabled={busy}
-                    title="Delete"
+                    title={t('common.delete')}
                 >
                     <Trash2 size={12} />
                 </button>

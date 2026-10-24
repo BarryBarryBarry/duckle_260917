@@ -13,7 +13,16 @@
     "switchDark": "切换至暗色模式",
     "themeAriaToggle": "切换主题",
     "runtime": "运行时：{{name}}",
-    "languageAriaLabel": "选择语言"
+    "languageAriaLabel": "选择语言",
+    "reloadWorkspace": "从磁盘重新加载工作区（获取外部修改）",
+    "webDashboardTooltip": "打开 Web 仪表盘（在浏览器中运行和监控管道）",
+    "webDashboardAria": "打开 Web 仪表盘",
+    "divesTooltip": "Dives——实时数据视图与仪表盘",
+    "divesAria": "打开 Dives",
+    "lineageTooltip": "列级血缘——追溯每一列的数据来源",
+    "lineageAria": "打开列级血缘",
+    "trustTooltip": "可信度评分——此管道的可解释评分",
+    "trustAria": "打开可信度评分"
   },
   "sidebar": {
     "ariaLabel": "侧边栏",
@@ -118,7 +127,10 @@
       "communication": "通讯"
     },
     "recent": "最近使用",
-    "recentEmpty": "添加到画布的组件会显示在这里，保留最近 7 天内使用的 20 个。"
+    "recentEmpty": "添加到画布的组件会显示在这里，保留最近 7 天内使用的 20 个。",
+    "badgePreview": "预览",
+    "badgePlanned": "计划中",
+    "notExecutable": "（{{badge}}——暂不能在 DuckDB 引擎上执行）"
   },
   "chat": {
     "title": "Duckie 智能助手",
@@ -205,7 +217,8 @@
     "noSchema": "暂无模式",
     "noSchemaDesc": "运行模式自动检测（模式标签页）或连接上游节点以查看此处的样本数据。",
     "noSample": "暂无样本行",
-    "noSampleDescHtml": "点击模式标签页上的<b>自动检测</b>以拉取样本，或运行管道来填充此内容。"
+    "noSampleDescHtml": "点击模式标签页上的<b>自动检测</b>以拉取样本，或运行管道来填充此内容。",
+    "sqlAliasTooltip": "SQL 名称（别名）"
   },
   "bottom": {
     "problems": "问题",
@@ -275,7 +288,8 @@
     "ok": "确定",
     "loading": "加载中",
     "error": "错误",
-    "success": "成功"
+    "success": "成功",
+    "dismiss": "关闭提示"
   },
   "metrics": {
     "title": "运行指标",
@@ -1026,5 +1040,148 @@
     "sqlHint": "每个 CTE 会生成一个以其命名的步骤；查询读取的每张表会生成一个数据源，再指向你的数据即可。",
     "needsDesktop": "“从 SQL 生成”需要在桌面版或 Web 编辑器中使用。",
     "converting": "正在转换..."
+  },
+  "canvas": {
+    "controls": "画布控件",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "fitView": "适应视图",
+    "toggleInteractivity": "锁定或解锁画布",
+    "minimap": "小地图"
+  },
+  "connection": {
+    "chooseType": "选择连接类型",
+    "escToCancel": "按 Esc 取消",
+    "rowTitle": "行连接",
+    "rowSubtitle": "在组件之间传递表格数据",
+    "triggerTitle": "触发连接",
+    "triggerSubtitle": "控制流，不传递数据——满足条件时触发一次",
+    "types": {
+      "main": {
+        "label": "主流程",
+        "description": "默认数据流。行原样通过。"
+      },
+      "lookup": {
+        "label": "查找",
+        "description": "用于连接 / 映射器查找的参考数据。先加载，再按键索引。"
+      },
+      "reject": {
+        "label": "拒绝",
+        "description": "未通过校验或匹配的行。"
+      },
+      "filter": {
+        "label": "过滤",
+        "description": "被上游组件过滤掉的行。"
+      },
+      "iterate": {
+        "label": "迭代",
+        "description": "遍历输入；每一行触发一次下游运行。"
+      },
+      "on-subjob-ok": {
+        "label": "子作业成功时",
+        "description": "当前子作业成功完成后，运行下一个子作业。"
+      },
+      "on-subjob-error": {
+        "label": "子作业出错时",
+        "description": "当前子作业失败时，运行下一个子作业。"
+      },
+      "on-component-ok": {
+        "label": "组件成功时",
+        "description": "当此组件无错误完成时触发。"
+      },
+      "on-component-error": {
+        "label": "组件出错时",
+        "description": "当此组件出错时触发。"
+      },
+      "if": {
+        "label": "条件",
+        "description": "条件分支——请提供一个布尔表达式。"
+      },
+      "run-if": {
+        "label": "条件运行",
+        "description": "运行时条件判断，支持更丰富的表达式。"
+      }
+    }
+  },
+  "dives": {
+    "exportHtmlTooltip": "导出独立的 HTML 快照"
+  },
+  "window": {
+    "minimize": "最小化",
+    "maximize": "最大化",
+    "restore": "还原"
+  },
+  "plan": {
+    "copyAllSql": "复制全部 SQL"
+  },
+  "catalog": {
+    "rescanTooltip": "重新读取所有管道并重建关系图"
+  },
+  "schedule": {
+    "repairFirst": "请先修复 schedules.json",
+    "runNow": "立即运行",
+    "edit": "编辑"
+  },
+  "backfill": {
+    "notEditable": "{{kind}} 节点不支持从手动填写的值继续。请清除状态，让该节点从头开始。",
+    "saveWatermark": "保存水位线",
+    "clearState": "清除状态（下次运行时全量重新加载）"
+  },
+  "projectTree": {
+    "dragContextHint": "{{name}}——拖到画布上可设为当前上下文，拖入文件夹可移动",
+    "dragItemHint": "{{name}}——拖入文件夹可移动",
+    "newFolder": "新建文件夹",
+    "openInEditor": "已在编辑器中打开"
+  },
+  "contextEditor": {
+    "secretTooltip": "作为密钥处理（掩码显示，从不记录到日志）"
+  },
+  "connectionEditor": {
+    "testTooltip": "使用这些设置进行连接，并列出可访问的内容",
+    "testUnsupported": "暂不支持测试此类连接"
+  },
+  "fileBrowser": {
+    "upOneFolder": "返回上一级文件夹"
+  },
+  "fields": {
+    "browseSnapshots": "浏览 DuckLake 快照",
+    "nativeDialog": "系统原生对话框",
+    "inAppDialog": "应用内文件对话框（浏览器模式）",
+    "hide": "隐藏",
+    "show": "显示",
+    "fieldSource": "字段来源（上下文：{{name}}）",
+    "resolvedFromContext": "运行时从当前上下文解析",
+    "castFormatTooltip": "将字符串解析为日期/时间戳时使用的 strptime 格式。仅用于 date/timestamp 目标类型；留空则自动识别 ISO 格式。",
+    "castOnErrorTooltip": "此列中无法转换的值如何处理。默认继承节点级的“转换出错时”设置。",
+    "nullsOrderTooltip": "NULL 值的排列位置。默认交由数据库决定，这也是此节点当前的行为。",
+    "moveEarlierAria": "将 {{column}} 上移",
+    "moveLaterAria": "将 {{column}} 下移",
+    "sortSooner": "提高此列的排序优先级",
+    "sortLater": "降低此列的排序优先级",
+    "schemaFormatTooltip": "strptime 格式，例如 %d/%m/%Y。留空则自动识别。格式错误会导致不匹配的值为空。",
+    "resolvedSecret": "（密钥）",
+    "resolvedFromEnv": "（运行时从操作系统环境变量读取）",
+    "resolvedNotSet": "（未设置）"
+  },
+  "ci": {
+    "state": {
+      "success": "成功",
+      "failure": "失败",
+      "cancelled": "已取消",
+      "in_progress": "进行中",
+      "pending": "等待中"
+    }
+  },
+  "mapper": {
+    "autoMapTooltip": "根据所有输入生成输出列",
+    "resetTooltip": "清空所有输出列",
+    "dragToExpression": "拖到表达式：{{ref}}",
+    "removeAria": "删除 {{name}}",
+    "removeRow": "删除第 {{n}} 行",
+    "joinType": "连接类型"
+  },
+  "git": {
+    "refresh": "刷新",
+    "closeEsc": "关闭（Esc）"
   }
 }

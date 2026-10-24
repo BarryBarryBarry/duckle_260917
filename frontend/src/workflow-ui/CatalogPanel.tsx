@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { annotationPatch } from '../catalog-annotate';
 import { Library, RefreshCw, Search, Tag, User, X } from 'lucide-react';
 import {
@@ -54,6 +55,7 @@ function score(asset: CatalogAsset, q: string): number {
 }
 
 export default function CatalogPanel({ workspace, onClose }: Props) {
+    const { t } = useTranslation();
     const [view, setView] = useState<CatalogView | null>(null);
     // Kept apart from the view: a failed refresh must not blank a catalog that
     // is on screen and still perfectly readable.
@@ -156,7 +158,7 @@ export default function CatalogPanel({ workspace, onClose }: Props) {
                             </div>
                         </div>
                     </div>
-                    <button type="button" className="modal-close" onClick={onClose} aria-label="Close">
+                    <button type="button" className="modal-close" onClick={onClose} aria-label={t('common.close')}>
                         <X size={16} />
                     </button>
                 </div>
@@ -181,7 +183,7 @@ export default function CatalogPanel({ workspace, onClose }: Props) {
                                     className="btn"
                                     onClick={() => void load(true)}
                                     disabled={loading || busy}
-                                    title="Re-read every pipeline and rebuild the graph"
+                                    title={t('catalog.rescanTooltip')}
                                 >
                                     <RefreshCw size={13} /> Rescan
                                 </button>

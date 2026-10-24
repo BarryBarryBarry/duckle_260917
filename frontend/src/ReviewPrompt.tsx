@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { openExternal } from './tauri-io';
 import { REVIEW_PROMPT } from './features';
 
@@ -27,6 +28,7 @@ const SNOOZE_KEY = 'duckle.reviewPrompt.snooze'; // sessionStorage: '1'
 const DELAY_MS = 30_000;
 
 export function ReviewPrompt() {
+    const { t } = useTranslation();
     const [show, setShow] = useState(
         REVIEW_PROMPT &&
             typeof window !== 'undefined' &&
@@ -65,8 +67,8 @@ export function ReviewPrompt() {
             <button
                 type="button"
                 className="review-prompt-x"
-                aria-label="Close"
-                title="Close"
+                aria-label={t('common.close')}
+                title={t('common.close')}
                 onClick={later}
             >
                 ×

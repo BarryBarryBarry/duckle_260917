@@ -13,6 +13,7 @@
     "check-secret-fields": "node scripts/check-secret-fields.mjs",
     "check-logic": "node scripts/check-logic.mjs",
     "check-guide": "node scripts/check-guide.mjs",
+    "check-component-i18n": "node scripts/check-component-i18n.mjs",
     "capture-guide": "node scripts/capture-guide.mjs",
     "gen-icons": "node scripts/gen-brand-icons.mjs",
     "gen-macos-icon": "node scripts/gen-macos-icon.mjs"

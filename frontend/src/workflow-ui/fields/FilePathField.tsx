@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { Field } from './types';
 import { isTauri, tauriOpenFile, tauriSavePath } from '../../tauri-dialog';
 import FileBrowserModal from './FileBrowserModal';
@@ -11,6 +12,7 @@ type Props = {
 };
 
 export function FilePathField({ field, value, onChange, mode }: Props) {
+    const { t } = useTranslation();
     const [picking, setPicking] = useState(false);
     const [modalOpen, setModalOpen] = useState(false);
     const tauri = isTauri();
@@ -51,7 +53,7 @@ export function FilePathField({ field, value, onChange, mode }: Props) {
                 className="field-path-browse"
                 onClick={handleBrowse}
                 disabled={picking}
-                title={tauri ? 'Native OS dialog' : 'In-app file dialog (browser mode)'}
+                title={tauri ? t('fields.nativeDialog') : t('fields.inAppDialog')}
             >
                 {picking ? '…' : mode === 'save' ? 'Save as…' : 'Browse…'}
             </button>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
     AlertTriangle,
     ArrowDownToLine,
@@ -44,6 +45,7 @@ type Props = {
  * Duckle for routine operations.
  */
 export default function GitPanel({ workspacePath, onClose, onFilesChanged }: Props) {
+    const { t } = useTranslation();
     const [status, setStatus] = useState<GitStatus | null>(null);
     const [branches, setBranches] = useState<string[]>([]);
     const [loading, setLoading] = useState(true);
@@ -189,8 +191,8 @@ export default function GitPanel({ workspacePath, onClose, onFilesChanged }: Pro
                         className="git-panel-icon-btn"
                         onClick={() => void refresh()}
                         disabled={loading}
-                        title="Refresh"
-                        aria-label="Refresh"
+                        title={t('git.refresh')}
+                        aria-label={t('git.refresh')}
                     >
                         {loading ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />}
                     </button>
@@ -198,8 +200,8 @@ export default function GitPanel({ workspacePath, onClose, onFilesChanged }: Pro
                         type="button"
                         className="git-panel-icon-btn"
                         onClick={onClose}
-                        title="Close (Esc)"
-                        aria-label="Close"
+                        title={t('git.closeEsc')}
+                        aria-label={t('common.close')}
                     >
                         <X size={12} />
                     </button>

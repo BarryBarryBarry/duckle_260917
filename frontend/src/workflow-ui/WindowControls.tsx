@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Copy, Minus, Square, X } from 'lucide-react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri } from '../tauri-dialog';
@@ -10,6 +11,7 @@ import { routeTitleBarDoubleClick, toggleMaximizeWindow } from './window-maximiz
  * browser the OS chrome (or none) applies.
  */
 export default function WindowControls() {
+    const { t } = useTranslation();
     const [maximized, setMaximized] = useState(false);
 
     useEffect(() => {
@@ -36,8 +38,8 @@ export default function WindowControls() {
             <button
                 type="button"
                 className="win-ctl"
-                title="Minimize"
-                aria-label="Minimize"
+                title={t('window.minimize')}
+                aria-label={t('window.minimize')}
                 onClick={() => void win.minimize()}
             >
                 <Minus size={15} />
@@ -45,8 +47,8 @@ export default function WindowControls() {
             <button
                 type="button"
                 className="win-ctl"
-                title={maximized ? 'Restore' : 'Maximize'}
-                aria-label={maximized ? 'Restore' : 'Maximize'}
+                title={maximized ? t('window.restore') : t('window.maximize')}
+                aria-label={maximized ? t('window.restore') : t('window.maximize')}
                 onClick={() => void toggleMaximizeWindow()}
             >
                 {maximized ? <Copy size={11} /> : <Square size={11} />}
@@ -54,8 +56,8 @@ export default function WindowControls() {
             <button
                 type="button"
                 className="win-ctl win-ctl-close"
-                title="Close"
-                aria-label="Close"
+                title={t('common.close')}
+                aria-label={t('common.close')}
                 onClick={() => void win.close()}
             >
                 <X size={15} />

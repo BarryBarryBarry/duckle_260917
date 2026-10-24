@@ -1,4 +1,5 @@
 import { Component, useContext } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { Field, Aggregation, Cast, SortKey } from './types';
 import {
     BoolField,
@@ -115,6 +116,7 @@ const PLACEHOLDER_RE = /\$\{([^}]+)\}/g;
  * without opening the Contexts editor. Secret-flagged variables are masked.
  */
 function ResolvedHint({ value }: { value: unknown }) {
+    const { t } = useTranslation();
     const { repoItems, workspacePath } = useContext(FieldContext);
     if (typeof value !== 'string' || !value.includes('${')) return null;
 
@@ -140,13 +142,13 @@ function ResolvedHint({ value }: { value: unknown }) {
     }
 
     const lines = refs.map(key => {
-        if (secretKeys.has(key)) return `\${${key}} = •••• (secret)`;
+        if (secretKeys.has(key)) return `\${${key}} = •••• ${t('fields.resolvedSecret')}`;
         if (Object.prototype.hasOwnProperty.call(vars, key)) return `\${${key}} = ${vars[key]}`;
         // ${ENV:NAME} is resolved from the OS environment by the engine at run
         // time (issue #137). The editor can't read OS env vars, so report the
         // source instead of a misleading "(not set)".
-        if (/^ENV:/i.test(key)) return `\${${key}} = (from the OS environment at run time)`;
-        return `\${${key}} = (not set)`;
+        if (/^ENV:/i.test(key)) return `\${${key}} = ${t('fields.resolvedFromEnv')}`;
+        return `\${${key}} = ${t('fields.resolvedNotSet')}`;
     });
 
     return (
@@ -173,6 +175,7 @@ function ContextBindable({
     children: (value: unknown, onChange: (v: unknown) => void) => React.ReactNode;
 }) {
     const { activeContext } = useContext(FieldContext);
+    const { t } = useTranslation();
     const vars = activeContext?.variables ?? [];
     if (!activeContext || vars.length === 0) {
         return <>{children(value, onChange)}</>;
@@ -190,7 +193,7 @@ function ContextBindable({
                     const v = e.target.value;
                     onChange(v === '__manual' ? '' : '${' + v + '}');
                 }}
-                title={`Field source (context: ${activeContext.name})`}
+                title={t('fields.fieldSource', { name: activeContext.name })}
             >
                 <option value="__manual">Manual entry</option>
                 <optgroup label={activeContext.name}>
@@ -203,7 +206,7 @@ function ContextBindable({
                 </optgroup>
             </select>
             {bound ? (
-                <div className="ctx-bound" title="Resolved from the active context at run time">
+                <div className="ctx-bound" title={t('fields.resolvedFromContext')}>
                     <span className="ctx-bound-token">{'${' + boundKey + '}'}</span>
                     <span className="ctx-bound-hint">from {activeContext.name}</span>
                 </div>

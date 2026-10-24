@@ -53,6 +53,11 @@ jobs:
       - name: Every credential field is masked
         run: npm --prefix frontend run check-secret-fields
 
+      # A palette summary is the component's hover tooltip; one added or renamed
+      # without its translation shows English to a Chinese UI.
+      - name: Every palette summary is translated
+        run: npm --prefix frontend run check-component-i18n
+
       # The frontend has no unit-test runner. These call the real modules with
       # real inputs, for logic whose bugs only showed up when it was executed.
       - name: Frontend logic behaves

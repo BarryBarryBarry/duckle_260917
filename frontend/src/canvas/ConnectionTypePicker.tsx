@@ -1,7 +1,10 @@
 import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import {
     CONNECTION_TYPES,
+    connectionDescription,
+    connectionLabel,
     ROW_CONNECTIONS,
     TRIGGER_CONNECTIONS,
     type ConnectionType,
@@ -16,6 +19,7 @@ type Props = {
 };
 
 export default function ConnectionTypePicker({ position, allowedTypes, onPick, onCancel }: Props) {
+    const { t } = useTranslation();
     const rowItems = allowedTypes
         ? ROW_CONNECTIONS.filter(t => allowedTypes.has(t.id))
         : ROW_CONNECTIONS;
@@ -46,21 +50,21 @@ export default function ConnectionTypePicker({ position, allowedTypes, onPick, o
                 onMouseDown={e => e.stopPropagation()}
             >
                 <div className="connection-picker-header">
-                    <span>Choose connection type</span>
-                    <span className="connection-picker-hint">Esc to cancel</span>
+                    <span>{t('connection.chooseType')}</span>
+                    <span className="connection-picker-hint">{t('connection.escToCancel')}</span>
                 </div>
                 {rowItems.length > 0 ? (
                     <PickerSection
-                        title="Row connections"
-                        subtitle="Carry tabular data between components"
+                        title={t('connection.rowTitle')}
+                        subtitle={t('connection.rowSubtitle')}
                         items={rowItems}
                         onPick={onPick}
                     />
                 ) : null}
                 {triggerItems.length > 0 ? (
                     <PickerSection
-                        title="Trigger connections"
-                        subtitle="Control flow, no data - fires once when condition is met"
+                        title={t('connection.triggerTitle')}
+                        subtitle={t('connection.triggerSubtitle')}
                         items={triggerItems}
                         onPick={onPick}
                     />
@@ -82,6 +86,7 @@ function PickerSection({
     items: ConnectionTypeMeta[];
     onPick: (type: ConnectionType) => void;
 }) {
+    const { t: tr } = useTranslation();
     return (
         <div className="connection-picker-section">
             <div className="connection-picker-section-title">{title}</div>
@@ -117,8 +122,8 @@ function PickerSection({
                             />
                         </svg>
                         <div className="connection-picker-item-text">
-                            <div className="connection-picker-item-label">{t.label}</div>
-                            <div className="connection-picker-item-desc">{t.description}</div>
+                            <div className="connection-picker-item-label">{connectionLabel(tr, t)}</div>
+                            <div className="connection-picker-item-desc">{connectionDescription(tr, t)}</div>
                         </div>
                         {t.badge ? (
                             <span className="connection-picker-item-badge">{t.badge}</span>

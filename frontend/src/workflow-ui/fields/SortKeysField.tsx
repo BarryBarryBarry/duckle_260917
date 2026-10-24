@@ -1,4 +1,5 @@
 import { useContext } from 'react';
+import { useTranslation } from 'react-i18next';
 import { X, ChevronUp, ChevronDown } from 'lucide-react';
 import { FieldContext } from './FieldContext';
 import type { SortKey } from './types';
@@ -45,6 +46,7 @@ function seedFromLegacy(props: Record<string, unknown> | undefined): SortKey[] {
 }
 
 export function SortKeysField({ value, onChange }: Props) {
+    const { t } = useTranslation();
     const { upstreamSchema, nodeProps } = useContext(FieldContext);
     const stored = value ?? [];
     // Shown, not written. The node keeps its old properties until the user
@@ -145,7 +147,7 @@ export function SortKeysField({ value, onChange }: Props) {
                                                   : undefined,
                                     })
                                 }
-                                title="Where NULLs go. Default leaves it to the database, which is what this node does today."
+                                title={t('fields.nullsOrderTooltip')}
                             >
                                 {NULLS_OPTIONS.map(o => (
                                     <option key={o.value} value={o.value}>
@@ -158,8 +160,8 @@ export function SortKeysField({ value, onChange }: Props) {
                                     type="button"
                                     onClick={() => move(i, -1)}
                                     disabled={i === 0}
-                                    aria-label={`Move ${k.column || 'key'} earlier`}
-                                    title="Sort by this column sooner"
+                                    aria-label={t('fields.moveEarlierAria', { column: k.column || 'key' })}
+                                    title={t('fields.sortSooner')}
                                 >
                                     <ChevronUp size={13} />
                                 </button>
@@ -167,8 +169,8 @@ export function SortKeysField({ value, onChange }: Props) {
                                     type="button"
                                     onClick={() => move(i, 1)}
                                     disabled={i === keys.length - 1}
-                                    aria-label={`Move ${k.column || 'key'} later`}
-                                    title="Sort by this column later"
+                                    aria-label={t('fields.moveLaterAria', { column: k.column || 'key' })}
+                                    title={t('fields.sortLater')}
                                 >
                                     <ChevronDown size={13} />
                                 </button>

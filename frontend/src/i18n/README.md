@@ -41,8 +41,18 @@ Only the highest-traffic surfaces are wrapped with `useTranslation()` so far:
 - Settings dialog (`settings.*`) and the Connect to Claude / MCP dialog (`mcp.*`), hand-translated for zh-CN, zh-TW, ja and ko
 - Guided tour (`guidedTour.*`, one `steps.<id>` entry per step in `GuidedTour.tsx`), hand-translated for zh-CN, zh-TW, ja and ko. Labels of screens that are not translated yet (Home tiles, context menus) are kept in English inside the translated text so they match what is on screen.
 
+- Palette component summaries (the hover tooltip of each palette entry), see below
+- Hover tooltips (`title`) across the app, including React Flow's canvas controls (via `ariaLabelConfig` in `Canvas.tsx`) and connection-port tooltips (`connection.types.*`)
+
+### Palette component summaries
+
+English summaries stay in `workflow-ui/palette-data.ts`. Translations live in `locales/components/<lang>.json`, a flat map from component id (`src.csv`, `xf.filter`, ...) to the translated summary, loaded as the `components` namespace; read them with `componentSummary()` from `component-text.ts`. A missing entry falls back to the English summary. Only `zh-CN` ships today.
+
+When you add a component or change its summary, update `locales/components/zh-CN.json` too. `npm run check-component-i18n` (run in CI) fails on a missing or orphaned translation, or one that lost a `backticked` span.
+
 Deferred to follow-ups:
-- Palette subgroup labels and component summaries
+- Palette component names (they double as tooltips for components that have no summary)
+- Home launcher tiles (labels and blurbs; the tile tooltip repeats the blurb)
 - GitPanel internals
 - Properties panel tab labels
 - Every modal (EdgeEditor, VisualMapper, ConnectionEditor, ContextEditor, etc.)

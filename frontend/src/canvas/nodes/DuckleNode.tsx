@@ -12,7 +12,7 @@ import {
 import { AlertCircle, CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import type { DuckleNodeData } from '../../pipeline-types';
 import { getManifest } from '../../workflow-ui/fields/component-manifests';
-import { metaFor } from '../connection-types';
+import { connectionDescription, connectionLabel, metaFor } from '../connection-types';
 import type { PortDef } from '../../workflow-ui/fields/types';
 import { resolveOutputSchema } from '../../schema-resolve';
 import { useRunStatus } from '../run-status-context';
@@ -219,6 +219,7 @@ type PortRowProps = {
 };
 
 function PortRow({ port, side, vertical, index, count }: PortRowProps) {
+    const { t } = useTranslation();
     const meta = metaFor(port.type);
     const isInput = side === 'input';
     const handleStyle = {
@@ -237,7 +238,7 @@ function PortRow({ port, side, vertical, index, count }: PortRowProps) {
                 port.type +
                 (port.optional ? ' is-optional' : '')
             }
-            title={meta.label + ' · ' + meta.description}
+            title={connectionLabel(t, meta) + ' · ' + connectionDescription(t, meta)}
         >
             {isInput ? (
                 <Handle

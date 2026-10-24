@@ -25,6 +25,7 @@ import {
     type ComponentDef,
 } from './palette-data';
 import ComponentIcon from './ComponentIcon';
+import { componentSummary } from '../i18n/component-text';
 import { getRecentComponents, RECENT_KEEP_MS, subscribeRecentComponents } from '../recent-components';
 
 const CATEGORY_ICONS: Record<string, React.ReactNode> = {
@@ -134,12 +135,13 @@ export default function Palette() {
                         c =>
                             c.label.toLowerCase().includes(q) ||
                             c.id.toLowerCase().includes(q) ||
-                            (c.summary?.toLowerCase().includes(q) ?? false),
+                            (c.summary?.toLowerCase().includes(q) ?? false) ||
+                            (componentSummary(t, c.id, c.summary)?.toLowerCase().includes(q) ?? false),
                     ),
                 }))
                 .filter(g => g.components.length > 0),
         })).filter(cat => cat.groups.length > 0);
-    }, [q]);
+    }, [q, categories, t]);
 
     const toggle = (id: string) => {
         setExpanded(s => {
@@ -164,15 +166,15 @@ export default function Palette() {
                   : ' is-available';
         const badgeLabel =
             c.availability === 'preview'
-                ? 'Preview'
+                ? t('palette.badgePreview')
                 : c.availability === 'planned'
-                  ? 'Planned'
+                  ? t('palette.badgePlanned')
                   : null;
         const titleParts = [
-            c.summary ?? c.label,
+            componentSummary(t, c.id, c.summary) ?? c.label,
             c.alternateHint,
             badgeLabel
-                ? `(${badgeLabel} - not executable on DuckDB engine yet)`
+                ? t('palette.notExecutable', { badge: badgeLabel })
                 : null,
         ].filter(Boolean);
         return (
@@ -211,7 +213,7 @@ export default function Palette() {
                     <Check
                         className="palette-availability palette-availability-yes"
                         size={12}
-                        aria-label="available"
+                        aria-label={t('palette.available')}
                     />
                 ) : (
                     <span

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import {
     AlertCircle,
@@ -84,6 +85,7 @@ export default function VisualMapperModal({
     onSave,
     onCancel,
 }: Props) {
+    const { t } = useTranslation();
     const [outputs, setOutputs] = useState<MappingRow[]>(initialState.outputs);
     const [filter, setFilter] = useState<string>(initialState.filter ?? '');
     const [lookups, setLookups] = useState<LookupConfig[]>(initialState.lookups ?? []);
@@ -285,7 +287,7 @@ export default function VisualMapperModal({
                             type="button"
                             className="btn btn-secondary mapper-action"
                             onClick={inferAllFromInputs}
-                            title="Generate output columns from all inputs"
+                            title={t('mapper.autoMapTooltip')}
                         >
                             <Zap size={14} />
                             Auto-map
@@ -294,7 +296,7 @@ export default function VisualMapperModal({
                             type="button"
                             className="btn btn-secondary mapper-action"
                             onClick={() => setOutputs([])}
-                            title="Clear all output columns"
+                            title={t('mapper.resetTooltip')}
                         >
                             <RotateCcw size={14} />
                             Reset
@@ -303,7 +305,7 @@ export default function VisualMapperModal({
                             type="button"
                             className="modal-close"
                             onClick={onCancel}
-                            aria-label="Close"
+                            aria-label={t('common.close')}
                         >
                             <X size={16} />
                         </button>
@@ -352,7 +354,7 @@ export default function VisualMapperModal({
                                                     onDragStart={e =>
                                                         handleColumnDragStart(e, port.portId, col)
                                                     }
-                                                    title={'Drag to expression: ' + ref}
+                                                    title={t('mapper.dragToExpression', { ref })}
                                                 >
                                                     <GripVertical
                                                         size={11}
@@ -474,8 +476,8 @@ export default function VisualMapperModal({
                                                     type="button"
                                                     className="schema-remove"
                                                     onClick={() => removeRow(row.id)}
-                                                    aria-label={'Remove ' + row.name}
-                                                    title={'Remove row ' + (i + 1)}
+                                                    aria-label={t('mapper.removeAria', { name: row.name })}
+                                                    title={t('mapper.removeRow', { n: i + 1 })}
                                                 >
                                                     <X size={12} />
                                                 </button>
@@ -525,7 +527,7 @@ export default function VisualMapperModal({
                                                                     .value as JoinType,
                                                             })
                                                         }
-                                                        title="Join type"
+                                                        title={t('mapper.joinType')}
                                                     >
                                                         <option value="left">Left join</option>
                                                         <option value="inner">Inner join</option>

@@ -249,6 +249,18 @@ function CanvasInner({
     );
     const directionToggleLabel =
         layoutDirection === 'TB' ? t('header.layoutLeftToRight') : t('header.layoutTopToBottom');
+    // React Flow's own controls take their tooltips from this config.
+    const ariaLabelConfig = useMemo(
+        () => ({
+            'controls.ariaLabel': t('canvas.controls'),
+            'controls.zoomIn.ariaLabel': t('canvas.zoomIn'),
+            'controls.zoomOut.ariaLabel': t('canvas.zoomOut'),
+            'controls.fitView.ariaLabel': t('canvas.fitView'),
+            'controls.interactive.ariaLabel': t('canvas.toggleInteractivity'),
+            'minimap.ariaLabel': t('canvas.minimap'),
+        }),
+        [t],
+    );
 
     // Ctrl/Cmd+0, as the canvas menu advertises: fit the whole pipeline.
     useEffect(() => {
@@ -670,6 +682,7 @@ function CanvasInner({
                         // Lower than React Flow's 0.5 so a long pipeline fits on screen whole.
                         minZoom={0.2}
                         colorMode={theme}
+                        ariaLabelConfig={ariaLabelConfig}
                     >
                         <Background gap={16} />
                         {showMinimap ? <MiniMap pannable zoomable /> : null}

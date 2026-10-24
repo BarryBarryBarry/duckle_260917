@@ -1,4 +1,5 @@
 import { X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { DATA_TYPES, type Column, type DataType } from '../pipeline-types';
 
 type Props = {
@@ -8,6 +9,7 @@ type Props = {
 };
 
 export default function SchemaEditor({ columns, onChange, readOnly = false }: Props) {
+    const { t } = useTranslation();
     const update = (i: number, patch: Partial<Column>) => {
         const next = columns.map((c, idx) => (idx === i ? { ...c, ...patch } : c));
         onChange(next);
@@ -86,7 +88,7 @@ export default function SchemaEditor({ columns, onChange, readOnly = false }: Pr
                                     disabled={readOnly}
                                     spellCheck={false}
                                     placeholder="%d/%m/%Y"
-                                    title="strptime format, e.g. %d/%m/%Y. Leave blank to auto-detect. A wrong format makes unmatched values empty."
+                                    title={t('fields.schemaFormatTooltip')}
                                 />
                             ) : null}
                         </div>

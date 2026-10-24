@@ -462,7 +462,7 @@ export default function PropertiesPanel({
                     <span className="properties-kind">{KIND_LABEL[kind] ?? kind}</span>
                     <span className="properties-id" title={selected.id}>#{selected.id}</span>
                     {typeof data.alias === 'string' && data.alias.trim() ? (
-                        <span className="properties-id" title="SQL name (alias)">
+                        <span className="properties-id" title={t('properties.sqlAliasTooltip')}>
                             as {data.alias.trim()}
                         </span>
                     ) : null}

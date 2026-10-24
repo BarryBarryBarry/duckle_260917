@@ -2,6 +2,7 @@
 // own DivePanel. Edit mode picks which saved dives to include. See docs/design/dives.md.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { RepoItem } from '../repo-types';
 import { DivePanel } from './DivePanel';
 import { loadDive } from './dive-io';
@@ -29,6 +30,7 @@ export function DashboardModal({
     onClose,
     onSave,
 }: DashboardModalProps) {
+    const { t } = useTranslation();
     let existing: Dashboard | null = null;
     let loadError: string | null = null;
     if (item?.payload) {
@@ -74,7 +76,7 @@ export function DashboardModal({
                                 Edit
                             </button>
                         ) : null}
-                        <button className="dive-modal-x" onClick={onClose} aria-label="Close" title="Close">
+                        <button className="dive-modal-x" onClick={onClose} aria-label={t('common.close')} title={t('common.close')}>
                             ×
                         </button>
                     </div>

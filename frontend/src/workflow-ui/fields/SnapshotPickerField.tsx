@@ -1,4 +1,5 @@
 import { useContext, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { X, Loader2, History } from 'lucide-react';
 import type { Field } from './types';
@@ -19,6 +20,7 @@ type Snapshot = { snapshot_id: number | string; snapshot_time?: string };
  * snapshot id. Reads the catalog `path` from the node's sibling props.
  */
 export function SnapshotPickerField({ field, value, onChange }: Props) {
+    const { t } = useTranslation();
     const ctx = useContext(FieldContext);
     const catalog = (ctx.nodeProps?.path as string | undefined)?.trim();
     const [open, setOpen] = useState(false);
@@ -80,7 +82,7 @@ export function SnapshotPickerField({ field, value, onChange }: Props) {
                 <button
                     type="button"
                     onClick={browse}
-                    title="Browse DuckLake snapshots"
+                    title={t('fields.browseSnapshots')}
                     style={{
                         display: 'inline-flex',
                         alignItems: 'center',

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { KeyValueField } from '../fields/KeyValueField';
 import { createPortal } from 'react-dom';
 import { Plug, Save, X } from 'lucide-react';
@@ -201,6 +202,7 @@ const SECRET_FIELDS = new Set<keyof ConnectionPayload>([
 ]);
 
 export default function ConnectionEditorModal({ item, onSave, onCancel }: Props) {
+    const { t } = useTranslation();
     const initial = (item?.payload as ConnectionPayload | undefined) ?? null;
     const [name, setName] = useState(item?.name ?? '');
     const [kind, setKind] = useState<ConnectionKind>(initial?.kind ?? 'postgres');
@@ -499,8 +501,8 @@ export default function ConnectionEditorModal({ item, onSave, onCancel }: Props)
                         disabled={!canTest || testing}
                         title={
                             canTest
-                                ? 'Connect with these settings and list what they can see'
-                                : 'Testing this kind of connection is not supported yet'
+                                ? t('connectionEditor.testTooltip')
+                                : t('connectionEditor.testUnsupported')
                         }
                     >
                         <Plug size={13} />

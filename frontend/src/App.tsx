@@ -2607,7 +2607,7 @@ export default function App() {
                         type="button"
                         className="topbar-workspace"
                         onClick={handleReloadWorkspace}
-                        title="Reload workspace from disk (pick up external edits)"
+                        title={t('topbar.reloadWorkspace')}
                     >
                         <RotateCw size={12} />
                     </button>
@@ -2649,8 +2649,8 @@ export default function App() {
                                 alert('Could not open the web panel: ' + String(e));
                             }
                         }}
-                        title="Open the web dashboard (run + monitor pipelines in a browser)"
-                        aria-label="Open web dashboard"
+                        title={t('topbar.webDashboardTooltip')}
+                        aria-label={t('topbar.webDashboardAria')}
                     >
                         <LayoutDashboard size={14} className="dashboard-icon-glow" />
                     </button>
@@ -2661,8 +2661,8 @@ export default function App() {
                         className="topbar-theme-toggle"
                         data-tour="dives"
                         onClick={() => setShowDivesGallery(true)}
-                        title="Dives - live data views & dashboards"
-                        aria-label="Open dives"
+                        title={t('topbar.divesTooltip')}
+                        aria-label={t('topbar.divesAria')}
                     >
                         <BarChart3 size={14} />
                     </button>
@@ -2673,8 +2673,8 @@ export default function App() {
                         className="topbar-theme-toggle"
                         data-tour="lineage"
                         onClick={() => setShowLineage(true)}
-                        title="Column lineage - trace each column back to its sources"
-                        aria-label="Open column lineage"
+                        title={t('topbar.lineageTooltip')}
+                        aria-label={t('topbar.lineageAria')}
                     >
                         <Waypoints size={14} />
                     </button>
@@ -2685,8 +2685,8 @@ export default function App() {
                         className="topbar-theme-toggle"
                         data-tour="trust"
                         onClick={() => setShowTrust(true)}
-                        title="Trust score - an explainable score for this pipeline"
-                        aria-label="Open trust score"
+                        title={t('topbar.trustTooltip')}
+                        aria-label={t('topbar.trustAria')}
                     >
                         <ShieldCheck size={14} />
                     </button>

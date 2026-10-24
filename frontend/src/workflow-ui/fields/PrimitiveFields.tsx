@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { Field } from './types';
 import { connectionPlaceholder, useConnectionSupplied } from './useConnectionSupplied';
 
@@ -15,6 +16,7 @@ function isSecretField(field: Field): boolean {
 }
 
 export function TextField({ field, value, onChange }: Props<string>) {
+    const { t } = useTranslation();
     const secret = isSecretField(field);
     const [reveal, setReveal] = useState(false);
     // Shown, never stored. See useConnectionSupplied.
@@ -47,11 +49,11 @@ export function TextField({ field, value, onChange }: Props<string>) {
                 type="button"
                 className="field-secret-toggle"
                 onClick={() => setReveal(r => !r)}
-                aria-label={reveal ? 'Hide' : 'Show'}
-                title={reveal ? 'Hide' : 'Show'}
+                aria-label={reveal ? t('fields.hide') : t('fields.show')}
+                title={reveal ? t('fields.hide') : t('fields.show')}
                 tabIndex={-1}
             >
-                {reveal ? 'Hide' : 'Show'}
+                {reveal ? t('fields.hide') : t('fields.show')}
             </button>
         </div>
     );

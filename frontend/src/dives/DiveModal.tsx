@@ -3,6 +3,7 @@
 // are self-contained SQL (read their source inline). See docs/design/dives.md.
 
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { RepoItem } from '../repo-types';
 import { loadDive } from './dive-io';
 import { DivePanel } from './DivePanel';
@@ -25,6 +26,7 @@ function newId(): string {
 }
 
 export function DiveModal({ item, workspacePath, theme, onClose, onSave }: DiveModalProps) {
+    const { t } = useTranslation();
     let loadError: string | null = null;
     let existing: Dive | null = null;
     try {
@@ -108,7 +110,7 @@ export function DiveModal({ item, workspacePath, theme, onClose, onSave }: DiveM
                             className="dive-btn"
                             onClick={() => void exportHtml()}
                             disabled={exporting || (!existing && !canRun)}
-                            title="Export a self-contained HTML snapshot"
+                            title={t('dives.exportHtmlTooltip')}
                         >
                             {exporting ? 'Exporting…' : 'Export HTML'}
                         </button>
@@ -117,7 +119,7 @@ export function DiveModal({ item, workspacePath, theme, onClose, onSave }: DiveM
                                 Edit
                             </button>
                         ) : null}
-                        <button className="dive-modal-x" onClick={onClose} aria-label="Close" title="Close">
+                        <button className="dive-modal-x" onClick={onClose} aria-label={t('common.close')} title={t('common.close')}>
                             ×
                         </button>
                     </div>

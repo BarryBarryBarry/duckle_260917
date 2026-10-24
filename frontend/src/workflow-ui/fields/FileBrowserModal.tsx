@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { ArrowUp, Clock, File as FileIcon, Folder, HardDrive, X } from 'lucide-react';
@@ -54,6 +55,7 @@ export default function FileBrowserModal({
     onConfirm,
     onCancel,
 }: Props) {
+    const { t } = useTranslation();
     const [path, setPath] = useState(initialPath ?? '');
     const [recent] = useState<string[]>(() => getRecentPaths());
     const inputRef = useRef<HTMLInputElement>(null);
@@ -234,7 +236,7 @@ export default function FileBrowserModal({
                                     className="fb-up"
                                     onClick={goUp}
                                     disabled={atRoot}
-                                    title="Up one folder"
+                                    title={t('fileBrowser.upOneFolder')}
                                 >
                                     <ArrowUp size={14} />
                                 </button>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CheckCircle2, CircleDashed, Loader2, XCircle } from 'lucide-react';
 import { workspaceCiStatus, type CiStatus } from '../tauri-bridge';
 import { openExternal } from '../tauri-io';
@@ -16,6 +17,7 @@ type Props = {
  * refresh buttons; the GitPanel has its own refresh.
  */
 export default function CiStatusBadge({ workspacePath }: Props) {
+    const { t } = useTranslation();
     const [status, setStatus] = useState<CiStatus | null>(null);
     const [loading, setLoading] = useState(true);
 
@@ -68,6 +70,12 @@ export default function CiStatusBadge({ workspacePath }: Props) {
             <CircleDashed size={12} />
         );
 
+    // The backend label reads "<provider>: <state> (...)"; only the state word is ours to translate.
+    const label =
+        status.state === 'unknown'
+            ? status.label
+            : status.label.replace(`: ${status.state}`, `: ${t(`ci.state.${status.state}`, { defaultValue: status.state })}`);
+
     const handleClick = () => {
         if (status.url) {
             void openExternal(status.url);
@@ -80,8 +88,8 @@ export default function CiStatusBadge({ workspacePath }: Props) {
             className={`ci-badge ci-badge-${tone}`}
             onClick={handleClick}
             disabled={!status.url}
-            title={`${status.label}${status.sha ? ` @ ${status.sha}` : ''}`}
-            aria-label={status.label}
+            title={`${label}${status.sha ? ` @ ${status.sha}` : ''}`}
+            aria-label={label}
         >
             {icon}
             <span className="ci-badge-label">CI</span>

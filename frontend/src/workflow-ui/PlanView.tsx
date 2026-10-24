@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ListTree, Clipboard } from 'lucide-react';
 import type { Edge, Node } from '@xyflow/react';
 import { compilePipelineSql, type StageSql } from '../tauri-bridge';
@@ -17,6 +18,7 @@ type Props = {
 // catch planner-time errors - missing columns, bad joins - without
 // having to run the pipeline).
 export default function PlanView({ nodes, edges, workspacePath }: Props) {
+    const { t } = useTranslation();
     const [stages, setStages] = useState<StageSql[] | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -108,7 +110,7 @@ export default function PlanView({ nodes, edges, workspacePath }: Props) {
                     type="button"
                     className="plan-copy-btn"
                     onClick={() => void copyText(fullSql)}
-                    title="Copy all SQL"
+                    title={t('plan.copyAllSql')}
                 >
                     <Clipboard size={12} /> Copy SQL
                 </button>

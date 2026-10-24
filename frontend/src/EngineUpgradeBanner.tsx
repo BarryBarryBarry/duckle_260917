@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
     engineInstall,
     engineStatus,
@@ -16,6 +17,7 @@ import {
  * session. No-op in the browser build or when the engine is already current.
  */
 export function EngineUpgradeBanner() {
+    const { t } = useTranslation();
     const [duck, setDuck] = useState<EngineStatus | null>(null);
     const [dismissed, setDismissed] = useState(false);
     const [progress, setProgress] = useState<InstallProgress | null>(null);
@@ -109,8 +111,8 @@ export function EngineUpgradeBanner() {
                 <button
                     type="button"
                     className="update-banner-dismiss"
-                    aria-label="Dismiss"
-                    title="Dismiss"
+                    aria-label={t('common.dismiss')}
+                    title={t('common.dismiss')}
                     onClick={() => setDismissed(true)}
                 >
                     ×

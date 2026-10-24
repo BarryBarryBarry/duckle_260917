@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { Lock, Plus, Save, Variable, X } from 'lucide-react';
 import type { ContextPayload, ContextVariable, RepoItem } from '../../repo-types';
@@ -10,6 +11,7 @@ type Props = {
 };
 
 export default function ContextEditorModal({ item, onSave, onCancel }: Props) {
+    const { t } = useTranslation();
     const initial = (item?.payload as ContextPayload | undefined) ?? null;
     const [name, setName] = useState(item?.name ?? '');
     const [variables, setVariables] = useState<ContextVariable[]>(initial?.variables ?? []);
@@ -162,7 +164,7 @@ export default function ContextEditorModal({ item, onSave, onCancel }: Props) {
                                         />
                                         <label
                                             className="ctx-secret-toggle"
-                                            title="Treat as secret (masked, never logged)"
+                                            title={t('contextEditor.secretTooltip')}
                                         >
                                             <input
                                                 type="checkbox"

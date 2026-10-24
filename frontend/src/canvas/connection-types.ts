@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+
 export type ConnectionType =
     | 'main'
     | 'lookup'
@@ -142,6 +144,14 @@ export const CONNECTION_TYPES: ConnectionTypeMeta[] = [
 
 export function metaFor(type: ConnectionType): ConnectionTypeMeta {
     return CONNECTION_TYPES.find(t => t.id === type) ?? CONNECTION_TYPES[0]!;
+}
+
+export function connectionLabel(t: TFunction, meta: ConnectionTypeMeta): string {
+    return t(`connection.types.${meta.id}.label`, { defaultValue: meta.label });
+}
+
+export function connectionDescription(t: TFunction, meta: ConnectionTypeMeta): string {
+    return t(`connection.types.${meta.id}.description`, { defaultValue: meta.description });
 }
 
 export const ROW_CONNECTIONS = CONNECTION_TYPES.filter(t => t.group === 'row');

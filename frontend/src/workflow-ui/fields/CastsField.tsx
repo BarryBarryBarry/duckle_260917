@@ -1,4 +1,5 @@
 import { useContext } from 'react';
+import { useTranslation } from 'react-i18next';
 import { FieldContext } from './FieldContext';
 import { CAST_TYPES, type Cast } from './types';
 
@@ -35,6 +36,7 @@ const defaultTargetFor = (sourceType: string) =>
 const CAST_GRID = { gridTemplateColumns: '18px 1.2fr 0.7fr 1fr 1fr 0.9fr' };
 
 export function CastsField({ value, onChange }: Props) {
+    const { t } = useTranslation();
     const { upstreamSchema } = useContext(FieldContext);
     const casts = value ?? [];
     const byCol = new Map(casts.map(c => [c.column, c]));
@@ -99,7 +101,7 @@ export function CastsField({ value, onChange }: Props) {
                     onChange={e => update(name, { format: e.target.value })}
                     disabled={!enabled || !isDateLike(cast?.targetType ?? '')}
                     placeholder={enabled && isDateLike(cast?.targetType ?? '') ? '%d/%m/%Y' : ''}
-                    title="strptime format for parsing strings into a date/timestamp. Only used for date/timestamp targets; blank = ISO auto-detect."
+                    title={t('fields.castFormatTooltip')}
                     spellCheck={false}
                 />
                 <select
@@ -107,7 +109,7 @@ export function CastsField({ value, onChange }: Props) {
                     value={cast?.onError ?? ''}
                     disabled={!enabled}
                     onChange={e => update(name, { onError: e.target.value || undefined })}
-                    title="How to handle a value in this column that cannot be converted. Default inherits the node-level On conversion error setting."
+                    title={t('fields.castOnErrorTooltip')}
                 >
                     {ON_ERROR_OPTIONS.map(o => (
                         <option key={o.value} value={o.value}>{o.label}</option>

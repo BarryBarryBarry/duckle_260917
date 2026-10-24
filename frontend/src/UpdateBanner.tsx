@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
     checkForUpdate,
     selfUpdate,
@@ -24,6 +25,7 @@ import { openExternal } from './tauri-io';
  * the real fetched release info if any, otherwise a representative placeholder.
  */
 export function UpdateBanner() {
+    const { t } = useTranslation();
     const [info, setInfo] = useState<UpdateInfo | null>(null);
     const [dismissed, setDismissed] = useState(false);
     const [forced, setForced] = useState(
@@ -147,8 +149,8 @@ export function UpdateBanner() {
                 <button
                     type="button"
                     className="update-banner-dismiss"
-                    aria-label="Dismiss"
-                    title="Dismiss"
+                    aria-label={t('common.dismiss')}
+                    title={t('common.dismiss')}
                     onClick={() => setDismissed(true)}
                 >
                     ×

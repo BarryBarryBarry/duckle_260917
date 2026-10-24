@@ -73,14 +73,16 @@ import sq from './locales/sq.json';
 import az from './locales/az.json';
 import mn from './locales/mn.json';
 import kk from './locales/kk.json';
+import zhCNComponents from './locales/components/zh-CN.json';
+import { COMPONENTS_NS } from './component-text';
 
 // Locales may be missing newer keys (filled in by scripts/i18n-translate.py).
 // i18next's fallbackLng resolves missing keys to en, so loose typing is safe.
-type LocaleBundle = { common: Record<string, unknown> };
+type LocaleBundle = { common: Record<string, unknown>; [COMPONENTS_NS]?: Record<string, string> };
 const RESOURCES: Record<LangCode, LocaleBundle> = {
     'en':    { common: en },
     'es':    { common: es },
-    'zh-CN': { common: zhCN },
+    'zh-CN': { common: zhCN, [COMPONENTS_NS]: zhCNComponents },
     'zh-TW': { common: zhTW },
     'hi':    { common: hi },
     'ar':    { common: ar },
@@ -148,7 +150,7 @@ void i18n
         resources: RESOURCES,
         fallbackLng: 'en',
         supportedLngs: ENABLED_LANGUAGES.map(l => l.code),
-        ns: ['common'],
+        ns: ['common', COMPONENTS_NS],
         defaultNS: 'common',
         interpolation: { escapeValue: false },
         detection: {

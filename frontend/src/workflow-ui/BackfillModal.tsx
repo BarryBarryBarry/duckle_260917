@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { createPortal } from 'react-dom';
 import { History, RotateCcw, Save, Trash2, X } from 'lucide-react';
 import {
@@ -22,6 +23,7 @@ type Props = {
 // it forces a full reload on the next run. State only appears here after a node
 // has run at least once and written state.
 export default function BackfillModal({ pipelineId, pipelineName, workspacePath, onClose }: Props) {
+    const { t } = useTranslation();
     const [entries, setEntries] = useState<WatermarkEntry[]>([]);
     // node_id -> edited value (controlled inputs)
     const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -151,7 +153,7 @@ export default function BackfillModal({ pipelineId, pipelineName, workspacePath,
                                                 disabled={e.editable === false}
                                                 title={
                                                     e.editable === false
-                                                        ? `A ${e.kind} node does not resume from a hand-written value. Clear it to start that node over.`
+                                                        ? t('backfill.notEditable', { kind: e.kind })
                                                         : undefined
                                                 }
                                                 value={drafts[e.node_id] ?? ''}
@@ -174,7 +176,7 @@ export default function BackfillModal({ pipelineId, pipelineName, workspacePath,
                                                     (drafts[e.node_id] ?? e.value) === e.value
                                                 }
                                                 onClick={() => save(e)}
-                                                title="Save watermark"
+                                                title={t('backfill.saveWatermark')}
                                             >
                                                 <Save size={13} /> Save
                                             </button>
@@ -183,7 +185,7 @@ export default function BackfillModal({ pipelineId, pipelineName, workspacePath,
                                                 className="backfill-btn backfill-btn-danger"
                                                 disabled={busy === e.node_id}
                                                 onClick={() => clear(e)}
-                                                title="Clear state (full reload next run)"
+                                                title={t('backfill.clearState')}
                                             >
                                                 <Trash2 size={13} /> Clear
                                             </button>

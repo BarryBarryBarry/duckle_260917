@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
     AlarmClock,
     Box,
@@ -97,6 +98,7 @@ function TypeIcon({ type, isOpen }: { type: RepoItemType; isOpen: boolean }) {
 }
 
 export default function ProjectTree(props: Props) {
+    const { t } = useTranslation();
     const {
         items,
         activeJobId,
@@ -519,9 +521,9 @@ export default function ProjectTree(props: Props) {
                     }}
                     title={
                         item.type === 'context'
-                            ? `${item.name} - drag onto the canvas to make it the active context, or into a folder to move it`
+                            ? t('projectTree.dragContextHint', { name: item.name })
                             : isDraggable
-                              ? `${item.name} - drag into a folder to move it`
+                              ? t('projectTree.dragItemHint', { name: item.name })
                               : item.name
                     }
                 >
@@ -548,7 +550,7 @@ export default function ProjectTree(props: Props) {
                         <span className="repo-label">{item.name}</span>
                     )}
                     {item.type === 'pipeline' && isOpen && !isRenaming ? (
-                        <span className="repo-open-dot" aria-label="open in editor" />
+                        <span className="repo-open-dot" aria-label={t('projectTree.openInEditor')} />
                     ) : null}
                     {item.type === 'folder' && children.length > 0 && !isRenaming ? (
                         <span className="repo-count">{children.length}</span>
@@ -572,7 +574,7 @@ export default function ProjectTree(props: Props) {
                     type="button"
                     className="repo-action-button"
                     onClick={() => onNewPipeline('pipelines')}
-                    title="New pipeline"
+                    title={t('header.newPipeline')}
                 >
                     <Plus size={13} /> Pipeline
                 </button>
@@ -580,7 +582,7 @@ export default function ProjectTree(props: Props) {
                     type="button"
                     className="repo-action-button"
                     onClick={() => onNewFolder('root')}
-                    title="New folder"
+                    title={t('projectTree.newFolder')}
                 >
                     <FolderPlus size={13} /> Folder
                 </button>
@@ -589,7 +591,7 @@ export default function ProjectTree(props: Props) {
                         type="button"
                         className="repo-action-button"
                         onClick={onImportJob}
-                        title="Import a Talend .item job"
+                        title={t('sidebar.importJobTitle')}
                     >
                         <Upload size={13} /> Talend
                     </button>

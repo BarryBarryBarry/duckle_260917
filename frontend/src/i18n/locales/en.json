@@ -13,7 +13,16 @@
     "switchDark": "Switch to dark mode",
     "themeAriaToggle": "Toggle theme",
     "runtime": "runtime: {{name}}",
-    "languageAriaLabel": "Choose language"
+    "languageAriaLabel": "Choose language",
+    "reloadWorkspace": "Reload workspace from disk (pick up external edits)",
+    "webDashboardTooltip": "Open the web dashboard (run + monitor pipelines in a browser)",
+    "webDashboardAria": "Open web dashboard",
+    "divesTooltip": "Dives - live data views & dashboards",
+    "divesAria": "Open dives",
+    "lineageTooltip": "Column lineage - trace each column back to its sources",
+    "lineageAria": "Open column lineage",
+    "trustTooltip": "Trust score - an explainable score for this pipeline",
+    "trustAria": "Open trust score"
   },
   "sidebar": {
     "ariaLabel": "Sidebar",
@@ -125,7 +134,10 @@
       "communication": "Communication"
     },
     "recent": "Recently used",
-    "recentEmpty": "Components you add to a canvas show up here: the last 20 used in the past 7 days."
+    "recentEmpty": "Components you add to a canvas show up here: the last 20 used in the past 7 days.",
+    "badgePreview": "Preview",
+    "badgePlanned": "Planned",
+    "notExecutable": "({{badge}} - not executable on DuckDB engine yet)"
   },
   "chat": {
     "title": "Duckie AI Assistant",
@@ -212,7 +224,8 @@
     "noSchema": "No schema yet",
     "noSchemaDesc": "Run schema autodetect (Schema tab) or connect an upstream node to see sample data here.",
     "noSample": "No sample rows",
-    "noSampleDescHtml": "Click <b>Autodetect</b> on the Schema tab to pull a sample, or run the pipeline to fill this in."
+    "noSampleDescHtml": "Click <b>Autodetect</b> on the Schema tab to pull a sample, or run the pipeline to fill this in.",
+    "sqlAliasTooltip": "SQL name (alias)"
   },
   "bottom": {
     "problems": "Problems",
@@ -282,7 +295,8 @@
     "ok": "OK",
     "loading": "Loading...",
     "error": "Error",
-    "success": "Success"
+    "success": "Success",
+    "dismiss": "Dismiss"
   },
   "import": {
     "reportTitle": "Job imported",
@@ -1061,5 +1075,148 @@
     "sqlHint": "Each CTE becomes a step named after it; each table the query reads becomes a source to point at your data.",
     "needsDesktop": "From SQL needs the desktop app or the web editor.",
     "converting": "Converting..."
+  },
+  "canvas": {
+    "controls": "Canvas controls",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "fitView": "Fit view",
+    "toggleInteractivity": "Lock or unlock the canvas",
+    "minimap": "Mini map"
+  },
+  "connection": {
+    "chooseType": "Choose connection type",
+    "escToCancel": "Esc to cancel",
+    "rowTitle": "Row connections",
+    "rowSubtitle": "Carry tabular data between components",
+    "triggerTitle": "Trigger connections",
+    "triggerSubtitle": "Control flow, no data - fires once when condition is met",
+    "types": {
+      "main": {
+        "label": "Main",
+        "description": "Default flow. Rows pass through unchanged."
+      },
+      "lookup": {
+        "label": "Lookup",
+        "description": "Reference data for joins / mapper lookups. Loaded then keyed."
+      },
+      "reject": {
+        "label": "Reject",
+        "description": "Rows that failed validation or matching."
+      },
+      "filter": {
+        "label": "Filter",
+        "description": "Rows filtered out by the upstream component."
+      },
+      "iterate": {
+        "label": "Iterate",
+        "description": "Iterate over inputs; one downstream run per row."
+      },
+      "on-subjob-ok": {
+        "label": "On Subjob OK",
+        "description": "Run the next subjob once this one completes successfully."
+      },
+      "on-subjob-error": {
+        "label": "On Subjob Error",
+        "description": "Run the next subjob if this one fails."
+      },
+      "on-component-ok": {
+        "label": "On Component OK",
+        "description": "Fire when this component finishes without error."
+      },
+      "on-component-error": {
+        "label": "On Component Error",
+        "description": "Fire when this component errors."
+      },
+      "if": {
+        "label": "If",
+        "description": "Conditional branch - provide a boolean expression."
+      },
+      "run-if": {
+        "label": "Run If",
+        "description": "Run-time conditional with a richer expression."
+      }
+    }
+  },
+  "dives": {
+    "exportHtmlTooltip": "Export a self-contained HTML snapshot"
+  },
+  "window": {
+    "minimize": "Minimize",
+    "maximize": "Maximize",
+    "restore": "Restore"
+  },
+  "plan": {
+    "copyAllSql": "Copy all SQL"
+  },
+  "catalog": {
+    "rescanTooltip": "Re-read every pipeline and rebuild the graph"
+  },
+  "schedule": {
+    "repairFirst": "Repair schedules.json first",
+    "runNow": "Run now",
+    "edit": "Edit"
+  },
+  "backfill": {
+    "notEditable": "A {{kind}} node does not resume from a hand-written value. Clear it to start that node over.",
+    "saveWatermark": "Save watermark",
+    "clearState": "Clear state (full reload next run)"
+  },
+  "projectTree": {
+    "dragContextHint": "{{name}} - drag onto the canvas to make it the active context, or into a folder to move it",
+    "dragItemHint": "{{name}} - drag into a folder to move it",
+    "newFolder": "New folder",
+    "openInEditor": "open in editor"
+  },
+  "contextEditor": {
+    "secretTooltip": "Treat as secret (masked, never logged)"
+  },
+  "connectionEditor": {
+    "testTooltip": "Connect with these settings and list what they can see",
+    "testUnsupported": "Testing this kind of connection is not supported yet"
+  },
+  "fileBrowser": {
+    "upOneFolder": "Up one folder"
+  },
+  "fields": {
+    "browseSnapshots": "Browse DuckLake snapshots",
+    "nativeDialog": "Native OS dialog",
+    "inAppDialog": "In-app file dialog (browser mode)",
+    "hide": "Hide",
+    "show": "Show",
+    "fieldSource": "Field source (context: {{name}})",
+    "resolvedFromContext": "Resolved from the active context at run time",
+    "castFormatTooltip": "strptime format for parsing strings into a date/timestamp. Only used for date/timestamp targets; blank = ISO auto-detect.",
+    "castOnErrorTooltip": "How to handle a value in this column that cannot be converted. Default inherits the node-level On conversion error setting.",
+    "nullsOrderTooltip": "Where NULLs go. Default leaves it to the database, which is what this node does today.",
+    "moveEarlierAria": "Move {{column}} earlier",
+    "moveLaterAria": "Move {{column}} later",
+    "sortSooner": "Sort by this column sooner",
+    "sortLater": "Sort by this column later",
+    "schemaFormatTooltip": "strptime format, e.g. %d/%m/%Y. Leave blank to auto-detect. A wrong format makes unmatched values empty.",
+    "resolvedSecret": "(secret)",
+    "resolvedFromEnv": "(from the OS environment at run time)",
+    "resolvedNotSet": "(not set)"
+  },
+  "ci": {
+    "state": {
+      "success": "success",
+      "failure": "failure",
+      "cancelled": "cancelled",
+      "in_progress": "in progress",
+      "pending": "pending"
+    }
+  },
+  "mapper": {
+    "autoMapTooltip": "Generate output columns from all inputs",
+    "resetTooltip": "Clear all output columns",
+    "dragToExpression": "Drag to expression: {{ref}}",
+    "removeAria": "Remove {{name}}",
+    "removeRow": "Remove row {{n}}",
+    "joinType": "Join type"
+  },
+  "git": {
+    "refresh": "Refresh",
+    "closeEsc": "Close (Esc)"
   }
 }
