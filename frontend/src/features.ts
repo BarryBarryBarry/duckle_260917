@@ -36,3 +36,7 @@ export const PROJECT_TREE_IMPORT_TALEND = false;
 export const STATUSBAR_REPORT_BUG = false;
 /** The card that asks for a review on G2 after ~30s of use. */
 export const REVIEW_PROMPT = false;
+/** "A newer build is available" banner and its in-place "Update now". It checks
+ *  the upstream Duckle releases, so in this build it would offer to replace the
+ *  app with upstream Duckle. Off: no update check is made at all. */
+export const UPDATE_BANNER = false;

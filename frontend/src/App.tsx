@@ -133,6 +133,7 @@ import {
     TOPBAR_LINEAGE,
     TOPBAR_TRUST,
     TOPBAR_WEB_DASHBOARD,
+    UPDATE_BANNER,
 } from './features';
 import type { DropPosition, NodeAction, PaneAction } from './canvas/Canvas';
 import { useUndoRedo, type CanvasSnapshot } from './useUndoRedo';
@@ -2752,7 +2753,7 @@ export default function App() {
                 <WindowControls />
             </header>
 
-            <UpdateBanner />
+            {UPDATE_BANNER ? <UpdateBanner /> : null}
             <EngineUpgradeBanner />
             <ReviewPrompt />
 
