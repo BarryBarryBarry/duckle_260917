@@ -1066,6 +1066,12 @@ textarea:focus-visible {
     white-space: nowrap;
 }
 
+.palette-component-category {
+    margin-left: 6px;
+    font-size: 0.7692rem;
+    color: var(--text-3);
+}
+
 .palette-availability {
     width: 14px;
     height: 14px;

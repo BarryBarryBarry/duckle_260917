@@ -1,5 +1,6 @@
 import { useMemo, useState, useSyncExternalStore, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
     ArrowDownToLine,
     ArrowUpFromLine,
@@ -101,6 +102,11 @@ const GROUP_LABEL_KEY: Record<string, string> = {
     'Communication': 'palette.groups.communication',
 };
 
+const catLabel = (t: TFunction, cat: { id: string; label: string }) =>
+    CAT_LABEL_KEY[cat.id] ? t(CAT_LABEL_KEY[cat.id]) : cat.label;
+
+const groupLabel = (t: TFunction, label: string) => (GROUP_LABEL_KEY[label] ? t(GROUP_LABEL_KEY[label]) : label);
+
 export default function Palette() {
     const { t } = useTranslation();
     const [query, setQuery] = useState('');
@@ -114,15 +120,18 @@ export default function Palette() {
 
     const recent = useSyncExternalStore(subscribeRecentComponents, getRecentComponents);
     const recentDefs = useMemo(() => {
-        const byId = new Map<string, ComponentDef>();
-        for (const cat of categories) for (const g of cat.groups) for (const c of g.components) byId.set(c.id, c);
+        const byId = new Map<string, { def: ComponentDef; category: string }>();
+        for (const cat of categories)
+            for (const g of cat.groups)
+                for (const c of g.components)
+                    byId.set(c.id, { def: c, category: `${catLabel(t, cat)} / ${groupLabel(t, g.label)}` });
         const since = Date.now() - RECENT_KEEP_MS;
         // A component the workspace no longer declares drops out.
         return recent.items.flatMap(r => {
-            const def = r.usedAt >= since ? byId.get(r.componentId) : undefined;
-            return def ? [def] : [];
+            const hit = r.usedAt >= since ? byId.get(r.componentId) : undefined;
+            return hit ? [hit] : [];
         });
-    }, [recent, categories]);
+    }, [recent, categories, t]);
 
     const filtered = useMemo(() => {
         if (!q) return categories;
@@ -157,7 +166,7 @@ export default function Palette() {
         e.dataTransfer.effectAllowed = 'copy';
     };
 
-    const renderComponent = (c: ComponentDef) => {
+    const renderComponent = (c: ComponentDef, category?: string) => {
         const availClass =
             c.availability === 'planned'
                 ? ' is-planned'
@@ -199,6 +208,7 @@ export default function Palette() {
                 />
                 <span className="palette-component-label">
                     {c.label}
+                    {category ? <span className="palette-component-category">{category}</span> : null}
                 </span>
                 {badgeLabel ? (
                     <span
@@ -298,7 +308,7 @@ export default function Palette() {
                         {expanded.has(RECENT_ID) ? (
                             <div className="palette-category-body">
                                 {recentDefs.length > 0 ? (
-                                    <div className="palette-group">{recentDefs.map(renderComponent)}</div>
+                                    <div className="palette-group">{recentDefs.map(r => renderComponent(r.def, r.category))}</div>
                                 ) : (
                                     <div className="palette-recent-empty">{t('palette.recentEmpty')}</div>
                                 )}
@@ -332,15 +342,15 @@ export default function Palette() {
                                     <span className="palette-cat-icon" aria-hidden="true">
                                         {CATEGORY_ICONS[cat.id]}
                                     </span>
-                                    <span className="palette-cat-label">{CAT_LABEL_KEY[cat.id] ? t(CAT_LABEL_KEY[cat.id]) : cat.label}</span>
+                                    <span className="palette-cat-label">{catLabel(t, cat)}</span>
                                     <span className="palette-cat-count">{count}</span>
                                 </button>
                                 {isExpanded ? (
                                     <div className="palette-category-body">
                                         {cat.groups.map(g => (
                                             <div className="palette-group" key={g.id}>
-                                                <div className="palette-group-label">{GROUP_LABEL_KEY[g.label] ? t(GROUP_LABEL_KEY[g.label]) : g.label}</div>
-                                                {g.components.map(renderComponent)}
+                                                <div className="palette-group-label">{groupLabel(t, g.label)}</div>
+                                                {g.components.map(c => renderComponent(c))}
                                             </div>
                                         ))}
                                     </div>
