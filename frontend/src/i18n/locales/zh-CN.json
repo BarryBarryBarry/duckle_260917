@@ -243,7 +243,7 @@
     "pipelineFinished": "管道已完成",
     "pipelineLabel": "管道",
     "dismissError": "关闭错误提示",
-    "askAgent": "让 Agent 诊断",
+    "askAgent": "Agent 诊断",
     "askAgentTitle": "把这次失败的运行发给 Agent 诊断"
   },
   "status": {
