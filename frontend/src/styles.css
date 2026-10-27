@@ -8287,6 +8287,7 @@ select.modal-select:focus {
     background: var(--bg-2);
     border: 1px solid var(--border);
     align-self: flex-start;
+    width: min(92%, 100%);
     min-width: min(356px, 100%);
 }
 .chat-bubble-head {
