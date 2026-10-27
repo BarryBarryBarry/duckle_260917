@@ -8339,6 +8339,23 @@ select.modal-select:focus {
 .chat-bubble-content.chat-markdown-body {
     white-space: normal;
     display: block;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-gutter: stable;
+}
+.chat-markdown-scroll-content {
+    min-width: max-content;
+}
+.chat-markdown-scroll-content p,
+.chat-markdown-scroll-content li,
+.chat-markdown-scroll-content blockquote,
+.chat-markdown-scroll-content table th,
+.chat-markdown-scroll-content table td {
+    white-space: nowrap;
+}
+.chat-markdown-scroll-content table {
+    width: max-content;
+    min-width: 100%;
 }
 .chat-paragraph {
     margin: 0;

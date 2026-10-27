@@ -1863,7 +1863,9 @@ function AssistantBubble({
             {turn.text ? (
                 <div className="chat-bubble-body">
                     <div className="chat-bubble-content chat-markdown-body markdown-body">
-                        <MarkdownMessage text={turn.text} />
+                        <div className="chat-markdown-scroll-content">
+                            <MarkdownMessage text={turn.text} />
+                        </div>
                         {live ? <span className="chat-caret" /> : null}
                     </div>
                 </div>
