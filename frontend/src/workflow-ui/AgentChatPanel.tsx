@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { useTranslation } from 'react-i18next';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import i18n from '../i18n';
 import {
     AlertCircle,
@@ -1801,6 +1803,35 @@ function ProcessingDots() {
     );
 }
 
+function MarkdownMessage({ text }: { text: string }) {
+    return (
+        <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+                a: ({ href, children, title }) => (
+                    <a href={href} title={title} target="_blank" rel="noopener noreferrer">
+                        {children}
+                    </a>
+                ),
+                img: ({ src, alt, title }) => (
+                    <img
+                        src={src}
+                        alt={alt ?? ''}
+                        title={title}
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        onError={e => {
+                            (e.currentTarget as HTMLImageElement).style.display = 'none';
+                        }}
+                    />
+                ),
+            }}
+        >
+            {text}
+        </ReactMarkdown>
+    );
+}
+
 function AssistantBubble({
     turn,
     live,
@@ -1831,8 +1862,8 @@ function AssistantBubble({
             ) : null}
             {turn.text ? (
                 <div className="chat-bubble-body">
-                    <div className="chat-bubble-content agent-pre">
-                        {turn.text}
+                    <div className="chat-bubble-content chat-markdown-body markdown-body">
+                        <MarkdownMessage text={turn.text} />
                         {live ? <span className="chat-caret" /> : null}
                     </div>
                 </div>

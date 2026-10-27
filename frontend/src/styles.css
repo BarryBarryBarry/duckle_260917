@@ -8335,6 +8335,10 @@ select.modal-select:focus {
     flex-direction: column;
     gap: 10px;
 }
+.chat-bubble-content.chat-markdown-body {
+    white-space: normal;
+    display: block;
+}
 .chat-paragraph {
     margin: 0;
     color: var(--text-1);

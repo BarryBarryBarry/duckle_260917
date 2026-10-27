@@ -522,18 +522,27 @@ fn write_json_atomic(path: &Path, value: &JsonValue) -> Result<(), String> {
 
 const CONTEXT_OPEN: &str = "[Duckle Context]\n";
 const CONTEXT_CLOSE: &str = "\n[/Duckle Context]\n\n";
+const REPLY_STYLE_OPEN: &str = "[Duckle Reply Style]\n";
+const REPLY_STYLE_CLOSE: &str = "\n[/Duckle Reply Style]\n\n";
+const DEFAULT_REPLY_STYLE: &str =
+    "Prefer Markdown formatting for readability: use headings, bullet lists, tables, and fenced code blocks when helpful.";
 
 /// The user's own words from a prompt written by [`build_prompt_message`].
 fn strip_context_block(text: &str) -> &str {
-    text.strip_prefix(CONTEXT_OPEN)
+    let rest = text
+        .strip_prefix(CONTEXT_OPEN)
         .and_then(|rest| rest.split_once(CONTEXT_CLOSE))
         .map(|(_, prompt)| prompt)
-        .unwrap_or(text)
+        .unwrap_or(text);
+    rest.strip_prefix(REPLY_STYLE_OPEN)
+        .and_then(|rest| rest.split_once(REPLY_STYLE_CLOSE))
+        .map(|(_, prompt)| prompt)
+        .unwrap_or(rest)
 }
 
 fn build_prompt_message(ctx: &ContextPayload, prompt: &str) -> String {
     format!(
-        "{CONTEXT_OPEN}{}{CONTEXT_CLOSE}{}",
+        "{CONTEXT_OPEN}{}{CONTEXT_CLOSE}{REPLY_STYLE_OPEN}{DEFAULT_REPLY_STYLE}{REPLY_STYLE_CLOSE}{}",
         serde_json::to_string(&json!({
             "workspace": ctx.workspace,
             "connection": ctx.connection,
@@ -1091,6 +1100,8 @@ mod tests {
         };
         let message = build_prompt_message(&ctx, "build it\nplease");
         assert!(message.starts_with("[Duckle Context]\n{"));
+        assert!(message.contains(REPLY_STYLE_OPEN));
+        assert!(message.contains(DEFAULT_REPLY_STYLE));
         assert_eq!(strip_context_block(&message), "build it\nplease");
         assert_eq!(strip_context_block("plain text"), "plain text");
     }
@@ -1134,14 +1145,15 @@ mod tests {
         }))
         .unwrap();
         let message = build_prompt_message(&ctx, "/skill:review check it");
-        let (block, prompt) = message
+        let (block, rest) = message
             .strip_prefix(CONTEXT_OPEN)
             .and_then(|rest| rest.split_once(CONTEXT_CLOSE))
             .unwrap();
         let sent: JsonValue = serde_json::from_str(block).unwrap();
         assert_eq!(sent["attachments"][0]["name"], "orders.csv");
         assert_eq!(sent["attachments"][0]["path"], "/ws/.duckle/pi-agent/attachments/c1/orders.csv");
-        assert_eq!(prompt, "/skill:review check it");
+        assert!(rest.starts_with(REPLY_STYLE_OPEN));
+        assert_eq!(strip_context_block(&message), "/skill:review check it");
     }
 
     #[test]
