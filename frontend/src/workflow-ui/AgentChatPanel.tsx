@@ -1914,10 +1914,10 @@ function AssistantBubble({
                                         <div className="chat-status-label">
                                             {subagent ? t('agent.run.subagent', { task: subagent.task }) : humanizeTool(tool.name)}
                                         </div>
-                                        <details className="chat-status-detail agent-tool-detail">
-                                            <summary>{tone === 'running' ? t('agent.run.params') : t('agent.run.details')}</summary>
-                                            <pre>{formatJson(tool.result ?? tool.partial ?? tool.args)}</pre>
-                                        </details>
+                                        <ToolDetail
+                                            summary={tone === 'running' ? t('agent.run.params') : t('agent.run.details')}
+                                            value={tool.result ?? tool.partial ?? tool.args}
+                                        />
                                     </div>
                                 </div>
                                 {tool.pipelineId && onOpenPipeline ? (
@@ -1959,6 +1959,50 @@ function formatJson(value: unknown): string {
     } catch {
         return String(value);
     }
+}
+
+// Recursively parses string values that are themselves JSON (e.g. MCP `content[].text`)
+// so the beautified view shows nested structures instead of escaped strings.
+function unwrapJsonStrings(value: unknown, depth = 0): unknown {
+    if (depth > 8) return value;
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+            try {
+                return unwrapJsonStrings(JSON.parse(trimmed), depth + 1);
+            } catch {
+                return value;
+            }
+        }
+        return value;
+    }
+    if (Array.isArray(value)) return value.map(item => unwrapJsonStrings(item, depth + 1));
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(
+            Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, unwrapJsonStrings(v, depth + 1)]),
+        );
+    }
+    return value;
+}
+
+function ToolDetail({ summary, value }: { summary: string; value: unknown }) {
+    const { t } = useTranslation();
+    const [pretty, setPretty] = useState(false);
+    const text = useMemo(() => formatJson(pretty ? unwrapJsonStrings(value) : value), [pretty, value]);
+    return (
+        <details className="chat-status-detail agent-tool-detail">
+            <summary>{summary}</summary>
+            <button
+                type="button"
+                className="agent-tool-detail-beautify"
+                onClick={() => setPretty(p => !p)}
+                aria-pressed={pretty}
+            >
+                {pretty ? t('agent.run.raw') : t('agent.run.beautify')}
+            </button>
+            <pre>{text}</pre>
+        </details>
+    );
 }
 
 function InstallProgressBar({ progress }: { progress: InstallProgress | null }) {

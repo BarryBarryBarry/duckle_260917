@@ -682,6 +682,8 @@
       "subagent": "子 Agent · {{task}}",
       "params": "参数",
       "details": "详情",
+      "beautify": "美化",
+      "raw": "原始",
       "open": "打开",
       "reportedTokens": "由模型服务上报的 token 用量",
       "estimatedTokens": "模型服务未上报 token 用量，这是按回复长度估算的值"

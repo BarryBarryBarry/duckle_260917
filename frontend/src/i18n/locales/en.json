@@ -716,6 +716,8 @@
       "subagent": "Sub-agent · {{task}}",
       "params": "Parameters",
       "details": "Details",
+      "beautify": "Beautify",
+      "raw": "Raw",
       "open": "Open",
       "reportedTokens": "Token usage reported by the model service",
       "estimatedTokens": "The model service didn't report token usage; this is an estimate from the reply length"

@@ -556,6 +556,8 @@
       "subagent": "サブ Agent · {{task}}",
       "params": "パラメーター",
       "details": "詳細",
+      "beautify": "整形",
+      "raw": "元に戻す",
       "open": "開く",
       "reportedTokens": "モデルサービスが報告したトークン使用量",
       "estimatedTokens": "モデルサービスがトークン使用量を報告しなかったため、返信の長さから推定した値です"

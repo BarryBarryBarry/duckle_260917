@@ -9142,6 +9142,30 @@ select.modal-select:focus {
     cursor: pointer;
     user-select: none;
 }
+.agent-tool-detail {
+    position: relative;
+}
+.agent-tool-detail-beautify {
+    position: absolute;
+    top: -1px;
+    right: 0;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-3);
+    font: inherit;
+    line-height: 1.35;
+    cursor: pointer;
+    transition: background 100ms, color 100ms;
+}
+.agent-tool-detail-beautify:hover {
+    background: var(--accent-soft);
+    color: var(--text-1);
+}
+.agent-tool-detail-beautify[aria-pressed='true'] {
+    color: var(--accent-text);
+}
 .agent-tool-detail pre {
     margin: 6px 0 0;
     max-height: 180px;
