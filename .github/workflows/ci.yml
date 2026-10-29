@@ -296,7 +296,17 @@ jobs:
           mkdir -p apps/desktop/bin
           cp target/release/duckle-runner apps/desktop/bin/duckle-runner
           cp target/release/duckle-mcp apps/desktop/bin/duckle-mcp
+      # The same Agent runtime staging as the release, so a lockfile that is
+      # missing or out of step with PI_VERSION, a dependency that is not portable,
+      # or a pruning mistake fails a PR instead of a release.
+      - name: Stage the embedded Pi Agent runtime
+        run: |
+          set -e
+          python3 scripts/stage-agent-runtime.py pi
+          python3 scripts/stage-agent-runtime.py node linux-x64
       - name: Build raw Duckle binary (release workflow command)
+        env:
+          DUCKLE_REQUIRE_AGENT_RUNTIME: "1"
         run: cargo build --release --manifest-path apps/desktop/Cargo.toml --features custom-protocol
       - name: Verify embedded frontend (not devUrl) is in binary
         # Grep the built binary for the frontend's main JS chunk filename.

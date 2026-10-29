@@ -4237,6 +4237,8 @@ Connections live in the workspace's connection store, a DuckDB table in `.duckle
 
 To create or edit a database connection, use the **数据源** (data source) menu in the Agent input box: it lists the databases under Sources → Databases whose connection it can configure (MySQL, MariaDB, PostgreSQL and wire-compatible engines, SQL Server, Oracle, SAP HANA), opens that database node's own connection form, and asks whether the connection is the source, the target or both before sending it with your message (never its password). The project tree and the Home page no longer manage connections.
 
+The Agent needs no install step: release builds carry its runtime (Node.js and the Pi coding agent, both at pinned versions) inside the binary and unpack it into the app's data folder the first time the Agent panel opens, without network access. A build made without the runtime staged (see [Build from source](#build-from-source)) offers an **Install** button instead, which downloads Node.js and installs Pi with npm.
+
 The Agent also uses the workspace's own skills, kept in `.duckle/skills/<name>/SKILL.md` (the folder is created the first time the Agent opens). Typing `/` in the Agent input lists them as `/skill:<name>` with their description, read from disk as you type, so a skill added or edited while the app runs shows up at once; ↑/↓ choose, Enter or Tab inserts and Esc closes. Sending `/skill:<name> <request>` hands the agent that skill's instructions followed by your request, and the agent may also pick a skill by its `description` on its own. A skill's other files (`references/`, ...) are readable by the agent; the rest of `.duckle` is not, apart from attachments.
 
 The **+** button at the bottom left of the Agent input, beside 数据源, attaches files to the next message. When it is sent they are copied into `.duckle/pi-agent/attachments/<conversation>/` (kept out of git, removed with the conversation, at most 10 MB each by default; change it in Settings > Agent attachments) and the agent is told their names and paths, so it can read them: text files in pages, and images when the model takes them. A binary format such as xlsx or parquet cannot be read as text, but the agent can still point a pipeline at its path. Executable files (.exe, .msi, .bat, .sh, .dmg, .jar and the like, or any file that is a Windows, Linux or macOS program whatever its name) are refused.
@@ -4326,6 +4328,15 @@ cargo build --release --manifest-path apps/desktop/Cargo.toml --features custom-
 ```
 
 Outputs land in `target/release/duckle` (or `duckle.exe`). The engine is not statically linked: DuckDB downloads at first launch, which is why the build is fast and the binary is tiny.
+
+**Embed the Agent runtime** (optional locally, required by the release workflow). Stage Pi and this platform's Node.js before building, and `build.rs` embeds them so the Agent needs no install step:
+
+```bash
+python3 scripts/stage-agent-runtime.py pi     # npm ci from apps/desktop/agent-runtime/package-lock.json
+python3 scripts/stage-agent-runtime.py node   # or a platform: darwin-x64, linux-arm64, win-x64, ...
+```
+
+To upgrade Pi, change `PI_VERSION` in `apps/desktop/src/engine_manager.rs` and the version in `apps/desktop/agent-runtime/package.json`, then regenerate the lockfile with `npm --prefix apps/desktop/agent-runtime install --package-lock-only --ignore-scripts`.
 
 **Run the tests:**
 

@@ -85,6 +85,28 @@ jobs:
           gh release upload "$REL_TAG" \
             apps/desktop/bin/duckle-runner-linux-x64 --clobber
 
+  # Install the Pi Agent and its dependencies ONCE from the committed lockfile
+  # (apps/desktop/agent-runtime). They are JavaScript, wasm and prebuilds for
+  # every platform picked at run time, which the script checks, so this one tar
+  # is embedded into every desktop binary next to that platform's Node.js, and
+  # the Agent needs no install step on first use.
+  build-agent-runtime:
+    needs: prepare-release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Stage the Pi runtime tar
+        run: python3 scripts/stage-agent-runtime.py pi
+      - name: Upload as a workflow artifact (embedded by the desktop builds)
+        uses: actions/upload-artifact@v7
+        with:
+          name: pi-runtime
+          path: apps/desktop/bin/pi-runtime.tar
+          if-no-files-found: error
+
   # #313 criterion 3: publish the capability registry with the release, so a
   # tool or an agent can target a KNOWN Duckle version rather than asking a
   # binary it may not have. Runs before `checksums`, like the runner asset, so
@@ -149,13 +171,13 @@ jobs:
         env:
           OS_FILTER: ${{ github.event.inputs.os_filter }}
         run: |
-          linux='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Otter-ETL-agent-linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Otter-ETL-agent-linux-arm64"}]'
-          all='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Otter-ETL-agent-linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Otter-ETL-agent-linux-arm64"},{"os":"macos-14","binary":"duckle","asset":"Otter-ETL-agent-macos-x64","target":"x86_64-apple-darwin"},{"os":"macos-14","binary":"duckle","asset":"Otter-ETL-agent-macos-arm64"},{"os":"windows-latest","binary":"duckle.exe","asset":"Otter-ETL-agent-windows-x64.exe"},{"os":"windows-11-arm","binary":"duckle.exe","asset":"Otter-ETL-agent-windows-arm64.exe"}]'
+          linux='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Otter-ETL-agent-linux-x64","node":"linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Otter-ETL-agent-linux-arm64","node":"linux-arm64"}]'
+          all='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Otter-ETL-agent-linux-x64","node":"linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Otter-ETL-agent-linux-arm64","node":"linux-arm64"},{"os":"macos-14","binary":"duckle","asset":"Otter-ETL-agent-macos-x64","target":"x86_64-apple-darwin","node":"darwin-x64"},{"os":"macos-14","binary":"duckle","asset":"Otter-ETL-agent-macos-arm64","node":"darwin-arm64"},{"os":"windows-latest","binary":"duckle.exe","asset":"Otter-ETL-agent-windows-x64.exe","node":"win-x64"},{"os":"windows-11-arm","binary":"duckle.exe","asset":"Otter-ETL-agent-windows-arm64.exe","node":"win-arm64"}]'
           if [ "$OS_FILTER" = "linux" ]; then include="$linux"; else include="$all"; fi
           echo "matrix={\"include\":$include}" >> "$GITHUB_OUTPUT"
 
   build:
-    needs: [prepare-release, build-linux-runner, plan]
+    needs: [prepare-release, build-linux-runner, build-agent-runtime, plan]
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -235,6 +257,22 @@ jobs:
           name: duckle-runner-linux-x64
           path: apps/desktop/bin
 
+      # Stage the Pi Agent runtime so build.rs embeds it: the shared Pi tar from
+      # build-agent-runtime plus this target's Node.js (matrix.node, chosen by
+      # the build TARGET, so the cross-compiled Intel macOS binary gets darwin-x64
+      # on the arm64 runner). Checked against the SHA-256 in engine_manager.rs.
+      - name: Stage the embedded Pi runtime tar
+        uses: actions/download-artifact@v8
+        with:
+          name: pi-runtime
+          path: apps/desktop/bin
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Stage the embedded Node.js for the Agent
+        shell: bash
+        run: python scripts/stage-agent-runtime.py node "${{ matrix.node }}"
+
       # protoc is needed only by the LanceDB sidecar build below (lancedb ->
       # lance pulls prost-build); the engine/desktop builds don't need it.
       - name: Install protoc (for the LanceDB sidecar)
@@ -297,6 +335,9 @@ jobs:
 
       - name: Build raw Duckle binary
         shell: bash
+        env:
+          # A release must carry the Agent runtime; fail rather than ship without.
+          DUCKLE_REQUIRE_AGENT_RUNTIME: "1"
         run: |
           set -e
           if [ -n "${{ matrix.target }}" ]; then

@@ -1,0 +1,8 @@
+{
+  "name": "duckle-agent-runtime",
+  "private": true,
+  "description": "The Pi Agent runtime embedded into the desktop binary by scripts/stage-agent-runtime.py. Keep the version equal to PI_VERSION in apps/desktop/src/engine_manager.rs.",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.4.0"
+  }
+}

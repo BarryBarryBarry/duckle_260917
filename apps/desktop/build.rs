@@ -24,8 +24,66 @@ fn main() {
     embed_runner_linux();
     embed_mcp();
     embed_lance();
+    embed_agent_runtime();
 
     tauri_build::build()
+}
+
+/// Embed the Pi Agent runtime: the Node.js executable (bin/pi-node) and Pi with
+/// its dependencies (bin/pi-runtime.tar), both staged by
+/// scripts/stage-agent-runtime.py. They are unpacked into the app-data folder
+/// the first time the Agent panel opens, so the Agent needs no install step and
+/// no network. OPTIONAL as a pair: when either is missing both are embedded
+/// empty and the Agent falls back to downloading Node.js and installing Pi.
+fn embed_agent_runtime() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let node_name = if target_os == "windows" {
+        "pi-node.exe"
+    } else {
+        "pi-node"
+    };
+    let bin = std::path::Path::new(&manifest_dir).join("bin");
+    let parts = [
+        (
+            bin.join(node_name),
+            "embedded-pi-node.bin",
+            "DUCKLE_EMBEDDED_PI_NODE",
+        ),
+        (
+            bin.join("pi-runtime.tar"),
+            "embedded-pi-runtime.bin",
+            "DUCKLE_EMBEDDED_PI_RUNTIME",
+        ),
+    ];
+    let staged = parts.iter().all(|(src, _, _)| src.exists());
+    for (src, out, env) in &parts {
+        let dst = std::path::Path::new(&out_dir).join(out);
+        if staged {
+            // An empty placeholder from an unstaged build can be newer than a
+            // source staged before it, which compress_to would take as current.
+            if dst.metadata().is_ok_and(|m| m.len() == 0) {
+                let _ = std::fs::remove_file(&dst);
+            }
+            compress_to(src, &dst);
+        } else {
+            std::fs::write(&dst, []).unwrap_or_else(|e| panic!("write empty {out}: {e}"));
+        }
+        println!("cargo:rustc-env={env}={}", dst.display());
+        println!("cargo:rerun-if-changed={}", src.display());
+    }
+    println!("cargo:rerun-if-env-changed=DUCKLE_REQUIRE_AGENT_RUNTIME");
+    if !staged {
+        if std::env::var_os("DUCKLE_REQUIRE_AGENT_RUNTIME").is_some() {
+            panic!(
+                "DUCKLE_REQUIRE_AGENT_RUNTIME is set but apps/desktop/bin/{node_name} and pi-runtime.tar are not both staged (scripts/stage-agent-runtime.py)"
+            );
+        }
+        println!(
+            "cargo:warning=Pi Agent runtime not staged (apps/desktop/bin/{node_name} + pi-runtime.tar); the Agent will download Node.js and install Pi on first use. Stage it: python3 scripts/stage-agent-runtime.py pi && python3 scripts/stage-agent-runtime.py node"
+        );
+    }
 }
 
 /// zstd-compress `src` into `dst` so the embedded sidecar ships small; the app

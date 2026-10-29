@@ -19,7 +19,9 @@ pub const SLOTHDB_VERSION: &str = "0.2.7";
 /// universal variant.
 pub const LLAMACPP_BUILD: &str = "b9305";
 pub const NODE_VERSION: &str = "22.23.3";
-pub const PI_VERSION: &str = "0.99.2";
+/// Keep equal to the version in apps/desktop/agent-runtime/package.json (and
+/// its lockfile), which is what release builds embed.
+pub const PI_VERSION: &str = "1.4.0";
 /// A GGUF chat model the assistant can be installed with.
 ///
 /// The catalogue is curated rather than a live Hugging Face search: every
@@ -535,6 +537,113 @@ pub fn pi_installed(app_data: &Path) -> bool {
                 .map(str::to_string)
         })
         .is_some_and(|version| version == PI_VERSION)
+}
+
+/// Node.js and Pi as embedded by build.rs (zstd), or empty when this build was
+/// made without them staged.
+const EMBEDDED_PI_NODE: &[u8] = include_bytes!(env!("DUCKLE_EMBEDDED_PI_NODE"));
+const EMBEDDED_PI_RUNTIME: &[u8] = include_bytes!(env!("DUCKLE_EMBEDDED_PI_RUNTIME"));
+
+static AGENT_RUNTIME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Whether this build carries the Agent runtime, so it needs no install step.
+pub fn agent_runtime_bundled() -> bool {
+    !EMBEDDED_PI_NODE.is_empty() && !EMBEDDED_PI_RUNTIME.is_empty()
+}
+
+/// Unpack the embedded Node.js and Pi into the app-data folder unless the
+/// pinned versions are already there. Returns false, doing nothing, when this
+/// build has no embedded runtime; the Agent's install button then downloads
+/// it instead. Serialised, so the panel's check and a start cannot unpack into
+/// the same folder at once.
+pub fn ensure_bundled_agent_runtime(app_data: &Path) -> Result<bool, String> {
+    if !agent_runtime_bundled() {
+        return Ok(false);
+    }
+    let _guard = AGENT_RUNTIME_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !nodejs_installed(app_data) {
+        unpack_bundled_node(app_data, EMBEDDED_PI_NODE)?;
+        if !nodejs_installed(app_data) {
+            return Err("the bundled Node.js runtime does not run on this machine".to_string());
+        }
+    }
+    if !pi_installed(app_data) {
+        unpack_bundled_pi(app_data, EMBEDDED_PI_RUNTIME)?;
+    }
+    Ok(true)
+}
+
+/// Write the zstd-compressed Node.js executable where `nodejs_path` expects it.
+/// Built beside the old folder and swapped in, so an interrupted unpack never
+/// leaves a half-written runtime behind.
+fn unpack_bundled_node(app_data: &Path, compressed: &[u8]) -> Result<(), String> {
+    let final_dir = nodejs_dir(app_data);
+    let tmp_dir = final_dir.with_extension("installing");
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    let rel = nodejs_path(app_data)
+        .strip_prefix(&final_dir)
+        .map(Path::to_path_buf)
+        .map_err(|e| e.to_string())?;
+    let node = tmp_dir.join(rel);
+    let result = (|| {
+        std::fs::create_dir_all(node.parent().unwrap_or(&tmp_dir)).map_err(|e| e.to_string())?;
+        let mut out = std::fs::File::create(&node).map_err(|e| e.to_string())?;
+        let mut decoder = zstd::stream::read::Decoder::new(compressed)
+            .map_err(|e| format!("decompress bundled Node.js: {e}"))?;
+        std::io::copy(&mut decoder, &mut out)
+            .map_err(|e| format!("unpack bundled Node.js: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| e.to_string())?;
+        }
+        let _ = std::fs::remove_dir_all(&final_dir);
+        std::fs::rename(&tmp_dir, &final_dir).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+    result
+}
+
+/// Unpack the zstd-compressed `node_modules` tar into `pi_prefix`, checking it
+/// holds PI_VERSION before it replaces what was there.
+fn unpack_bundled_pi(app_data: &Path, compressed: &[u8]) -> Result<(), String> {
+    let final_dir = pi_prefix(app_data);
+    let tmp_dir = final_dir.with_extension("installing");
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    let result = (|| {
+        std::fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+        let decoder = zstd::stream::read::Decoder::new(compressed)
+            .map_err(|e| format!("decompress bundled Agent: {e}"))?;
+        tar::Archive::new(decoder)
+            .unpack(&tmp_dir)
+            .map_err(|e| format!("unpack bundled Agent: {e}"))?;
+        let manifest = tmp_dir
+            .join("node_modules")
+            .join("@earendil-works")
+            .join("pi-coding-agent")
+            .join("package.json");
+        let version = std::fs::read_to_string(&manifest)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|json| json.get("version")?.as_str().map(str::to_string));
+        if version.as_deref() != Some(PI_VERSION) {
+            return Err(format!(
+                "the bundled Agent is {}, expected {PI_VERSION}",
+                version.as_deref().unwrap_or("unreadable")
+            ));
+        }
+        let _ = std::fs::remove_dir_all(&final_dir);
+        std::fs::rename(&tmp_dir, &final_dir).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+    result
 }
 
 /// Release asset name for this OS/arch, or None if unsupported.
@@ -1912,5 +2021,118 @@ mod tests {
         assert!(status(tmp.path(), None)
             .iter()
             .any(|e| e.id == "slothdb" && e.installed));
+    }
+}
+
+#[cfg(test)]
+mod bundled_agent_runtime_tests {
+    use super::*;
+
+    /// A zstd tar shaped like scripts/stage-agent-runtime.py's output, with
+    /// Pi's package.json at the given version and its CLI entry point.
+    fn pi_runtime(version: &str) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        let manifest = serde_json::json!({
+            "name": "@earendil-works/pi-coding-agent",
+            "version": version,
+            "bin": { "pi": "dist/bundle/cli.js" },
+        })
+        .to_string();
+        for (path, body) in [
+            (
+                "node_modules/@earendil-works/pi-coding-agent/package.json",
+                manifest.as_bytes(),
+            ),
+            (
+                "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js",
+                b"// pi".as_slice(),
+            ),
+        ] {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, body).unwrap();
+        }
+        zstd::encode_all(builder.into_inner().unwrap().as_slice(), 3).unwrap()
+    }
+
+    #[test]
+    fn unpacks_the_pinned_pi_and_replaces_an_older_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stale = pi_prefix(tmp.path()).join("node_modules").join("stale.js");
+        std::fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        std::fs::write(&stale, "old").unwrap();
+
+        unpack_bundled_pi(tmp.path(), &pi_runtime(PI_VERSION)).unwrap();
+
+        assert!(pi_installed(tmp.path()));
+        assert!(
+            !stale.exists(),
+            "the previous install is replaced, not merged"
+        );
+        assert!(!pi_prefix(tmp.path()).with_extension("installing").exists());
+    }
+
+    #[test]
+    fn refuses_a_bundle_of_another_pi_version_and_keeps_the_old_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        unpack_bundled_pi(tmp.path(), &pi_runtime(PI_VERSION)).unwrap();
+
+        let err = unpack_bundled_pi(tmp.path(), &pi_runtime("0.0.1")).unwrap_err();
+
+        assert!(err.contains("0.0.1"), "{err}");
+        assert!(
+            pi_installed(tmp.path()),
+            "a bad bundle leaves the working install alone"
+        );
+        assert!(!pi_prefix(tmp.path()).with_extension("installing").exists());
+    }
+
+    #[test]
+    fn rejects_a_corrupt_pi_bundle() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(unpack_bundled_pi(tmp.path(), b"not zstd").is_err());
+        assert!(!pi_prefix(tmp.path()).exists());
+    }
+
+    #[test]
+    fn writes_node_where_nodejs_path_expects_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let old = nodejs_dir(tmp.path()).join("leftover");
+        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+        std::fs::write(&old, "x").unwrap();
+
+        let body = b"#!/bin/sh\necho fake node\n";
+        unpack_bundled_node(tmp.path(), &zstd::encode_all(body.as_slice(), 3).unwrap()).unwrap();
+
+        let node = nodejs_path(tmp.path());
+        assert_eq!(std::fs::read(&node).unwrap(), body);
+        assert!(!old.exists());
+        assert!(!nodejs_dir(tmp.path()).with_extension("installing").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&node).unwrap().permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "node is executable");
+        }
+    }
+
+    /// The runtime this build really carries: it unpacks, Node.js runs at the
+    /// pinned version, Pi is the pinned version, and a second call is a no-op.
+    /// Only meaningful in a build with the runtime staged (CI's release build).
+    #[test]
+    fn the_embedded_runtime_unpacks_and_runs() {
+        if !agent_runtime_bundled() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(ensure_bundled_agent_runtime(tmp.path()).unwrap());
+        assert!(nodejs_installed(tmp.path()));
+        assert!(pi_installed(tmp.path()));
+        let cli = pi_cli_js(tmp.path());
+        let stamp = std::fs::metadata(&cli).unwrap().modified().unwrap();
+        assert!(ensure_bundled_agent_runtime(tmp.path()).unwrap());
+        assert_eq!(std::fs::metadata(&cli).unwrap().modified().unwrap(), stamp);
     }
 }

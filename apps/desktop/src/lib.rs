@@ -1463,9 +1463,11 @@ async fn engine_install(
 }
 
 #[tauri::command]
-fn agent_check_installed(app: tauri::AppHandle) -> Result<bool, String> {
+async fn agent_check_installed(app: tauri::AppHandle) -> Result<bool, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    Ok(agent_manager::agent_check_installed_sync(&dir))
+    tokio::task::spawn_blocking(move || agent_manager::agent_check_installed_sync(&dir))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1475,7 +1477,15 @@ async fn agent_install(
 ) -> Result<String, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || {
-        if !engine_manager::nodejs_installed(&dir) {
+        if engine_manager::agent_runtime_bundled() {
+            let _ = on_progress.send(InstallProgress::Extracting);
+            engine_manager::ensure_bundled_agent_runtime(&dir)?;
+            return Ok(engine_manager::pi_cli_js(&dir)
+                .to_string_lossy()
+                .into_owned());
+        }
+        // A runtime unpacked by a bundled build has no npm; download the full one.
+        if !engine_manager::nodejs_installed(&dir) || !engine_manager::npm_cli_js(&dir).exists() {
             engine_manager::install_nodejs(&dir, |p| {
                 let _ = on_progress.send(p);
             })?;

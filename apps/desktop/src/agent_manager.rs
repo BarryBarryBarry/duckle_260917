@@ -254,6 +254,9 @@ pub fn agent_start_sync(
         return Err("Open or create a workspace first".to_string());
     }
     let app_data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    if let Err(e) = engine_manager::ensure_bundled_agent_runtime(&app_data) {
+        tracing::warn!("Unpacking the bundled Agent runtime failed: {e}");
+    }
     if !engine_manager::nodejs_installed(&app_data) {
         return Err("nodejs_not_installed".to_string());
     }
@@ -309,7 +312,12 @@ pub fn agent_stop_sync() -> Result<(), String> {
     Ok(())
 }
 
+/// Whether the Agent can start. A build carrying the runtime unpacks it here,
+/// so opening the Agent panel is all the setup there is.
 pub fn agent_check_installed_sync(app_data: &Path) -> bool {
+    if let Err(e) = engine_manager::ensure_bundled_agent_runtime(app_data) {
+        tracing::warn!("Unpacking the bundled Agent runtime failed: {e}");
+    }
     engine_manager::nodejs_installed(app_data) && engine_manager::pi_installed(app_data)
 }
 
