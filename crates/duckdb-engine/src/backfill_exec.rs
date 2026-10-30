@@ -96,7 +96,7 @@ pub fn plan_for(
         &std::env::var("DUCKLE_ENVIRONMENT").unwrap_or_else(|_| "default".into()),
     );
     let id = backfill::new_id(&name);
-    let pid = backfill::this_process_owns(&id);
+    let pid = backfill::this_process_owns(workspace, &id);
     Ok(Backfill {
         id,
         pipeline: name.clone(),

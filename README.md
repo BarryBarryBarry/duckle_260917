@@ -419,7 +419,7 @@ Accounts, sessions and keys live in `.duckle/console.db`. An existing `console-u
 - **More RAM.** Set `memoryLimitMb` per stage, or a workspace default, and spill to disk past it.
 - **More pipelines at once.** `DUCKLE_MAX_CONCURRENT_RUNS` raises how many run together; it ships at 1 so an unattended server stays predictable until you decide otherwise.
 - **More machines.** `duckle-runner work` drains a queued batch from as many workers as you start, on as many hosts as you like, each claiming its items under a lock so nothing runs twice. The hosts need shared storage whose locks work: a worker tests that when it starts and refuses to run where they do not, and `work --check` runs just that test.
-- **One `serve` per workspace.** Each `serve` decides for itself when a schedule is due, so a second one on the same workspace fires every schedule again: measured on one machine, every cron occurrence ran twice. Add capacity with workers rather than consoles. [docs/design/horizontal-scaling.md](docs/design/horizontal-scaling.md) has the measurements and the proposed fix.
+- **More than one `serve`.** Several `serve` processes can share a workspace. Each works out for itself that a schedule is due and the first to claim the occurrence runs it, so measured with two replicas every occurrence ran once, with the work split between them. Only one pumps publications to their subscribers at a time, and a run started through one can be followed and cancelled through the other. Keep them on one host for now: the console's accounts are SQLite in WAL mode, which is not safe across machines on network storage, so add hosts with `duckle-runner work`. A replica that dies takes nothing with it: its lock goes with it and the others carry on. [docs/design/horizontal-scaling.md](docs/design/horizontal-scaling.md) has the measurements and what is left.
 - **Bigger than any box.** Turn on **pushdown** and the query runs verbatim inside Postgres, Oracle, SQL Server or Snowflake. The warehouse does the scan; Duckle keeps the scheduling, lineage, data quality and alerting.
 
 Measured, rather than asserted:
@@ -3153,7 +3153,7 @@ Open `http://localhost:8080`. The panel has eight views:
 
 - **Overview** - every pipeline with its last status, duration and next scheduled run, and a Run button.
 - **Runs** - run history across every pipeline (status, duration, rows, errors) with expandable per-pipeline run logs and optional auto-refresh.
-- **Schedules** - an editable cron or interval schedule per pipeline, showing what is running now and what is due next.
+- **Schedules** - an editable cron or interval schedule per pipeline, showing what is running now and what is due next. An interval runs on the clock rather than from whenever a process started: every 15 minutes means :00, :15, :30 and :45 UTC, and every 24 hours means midnight UTC. That is what lets everything scheduling a workspace agree on what is due, and a restart neither fires early nor pushes the next run back.
 - **Plans** - several pipelines in the order you chose. See [Plans](#plans-several-pipelines-in-an-order-you-chose).
 - **Catalog** - everything the workspace reads and writes, who owns it, and what is written but never read. See [Workspace catalog](#workspace-catalog-what-reads-and-writes-what).
 - **Batches** - work queued for workers: progress, what is running now, what failed, and a retry for the failures.

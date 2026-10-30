@@ -749,6 +749,7 @@ mod tests {
         std::fs::write(config_path(ws), r#"{"namespace":"prod"}"#).unwrap();
         let r = crate::retry::begin(ws, "run-x-9", "scheduled", "p", "pipelines/p.json", "h", None);
         drop(r);
+        crate::runlock::release_started("run-x-9");
         // Nothing is alive, so reconcile calls it interrupted.
         let changed = crate::retry::reconcile(ws, &|_| false);
         assert_eq!(changed, vec!["run-x-9"]);

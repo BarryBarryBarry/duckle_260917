@@ -593,6 +593,11 @@ impl DuckdbEngine {
         self.cancel.store(false, Ordering::Relaxed);
     }
 
+    /// Whether a stop has been asked for.
+    pub fn cancel_requested(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
     /// When a cancelled run was stopped by its own `maxRunSeconds`, the error to
     /// report instead: a timeout is a failure, so failure alerts fire, where a
     /// cancel somebody asked for is not.

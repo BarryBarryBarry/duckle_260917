@@ -296,8 +296,49 @@ pub fn begin(
     parent_run_id: Option<String>,
 ) -> RunReceipt {
     // A pid alone cannot say who owns this receipt, so remember that we do.
-    crate::runlock::claim_started(run_id);
-    let receipt = RunReceipt {
+    crate::runlock::claim_started(workspace, run_id);
+    let receipt =
+        new_receipt(workspace, run_id, trigger, pipeline_name, pipeline_path, pipeline_hash, parent_run_id);
+    // Best effort: a run that cannot record itself is still a run that happens.
+    let _ = write(workspace, &receipt);
+    export_lineage(workspace, &receipt, crate::openlineage::EventType::Start);
+    receipt
+}
+
+/// Record a run that has been accepted and not started yet, before the caller hears of it.
+///
+/// So that another server asked about this id can answer. `begin` replaces this when the run
+/// gets going, which is why it sends nothing to lineage: the run has not started.
+pub fn accept(workspace: &Path, run_id: &str, pipeline_name: &str, pipeline_path: &str) {
+    crate::runlock::claim_started(workspace, run_id);
+    let mut receipt = new_receipt(workspace, run_id, "manual", pipeline_name, pipeline_path, "", None);
+    receipt.state = QUEUED.to_string();
+    receipt.status = QUEUED.to_string();
+    receipt.queued_at = Some(chrono::Utc::now().to_rfc3339());
+    let _ = write(workspace, &receipt);
+}
+
+/// An accepted run that never started. Finished as an error, or it would read as queued
+/// for ever.
+pub fn abandon(workspace: &Path, run_id: &str, why: &str) {
+    if let Ok(receipt) = load(workspace, run_id) {
+        if receipt.state != FINISHED {
+            eprintln!("duckle: {run_id} did not start: {why}");
+            finish(workspace, receipt, "error", BTreeMap::new());
+        }
+    }
+}
+
+fn new_receipt(
+    workspace: &Path,
+    run_id: &str,
+    trigger: &str,
+    pipeline_name: &str,
+    pipeline_path: &str,
+    pipeline_hash: &str,
+    parent_run_id: Option<String>,
+) -> RunReceipt {
+    RunReceipt {
         run_id: run_id.to_string(),
         trigger: trigger.to_string(),
         state: RUNNING.to_string(),
@@ -329,11 +370,25 @@ pub fn begin(
         started_at: None,
         queue_ms: None,
         nodes: BTreeMap::new(),
-    };
-    // Best effort: a run that cannot record itself is still a run that happens.
-    let _ = write(workspace, &receipt);
-    export_lineage(workspace, &receipt, crate::openlineage::EventType::Start);
-    receipt
+    }
+}
+
+/// Ask whoever owns a run to stop it.
+///
+/// A server can only stop a run it started: the handle that kills the engine is in that
+/// process. So a request reaching another server leaves this beside the receipt, the owner
+/// polls for it, and `finish` clears it.
+pub fn request_cancel(workspace: &Path, run_id: &str) -> std::io::Result<()> {
+    std::fs::write(cancel_path(workspace, run_id), b"")
+}
+
+/// Whether somebody has asked for this run to stop.
+pub fn cancel_requested(workspace: &Path, run_id: &str) -> bool {
+    cancel_path(workspace, run_id).exists()
+}
+
+fn cancel_path(workspace: &Path, run_id: &str) -> PathBuf {
+    path_for(workspace, run_id).with_extension("cancel")
 }
 
 /// Emit one OpenLineage event, if the workspace has asked for them (#311).
@@ -383,6 +438,7 @@ pub fn finish(
     receipt.status = status.to_string();
     receipt.pid = None;
     crate::runlock::release_started(&receipt.run_id);
+    let _ = std::fs::remove_file(cancel_path(workspace, &receipt.run_id));
     receipt.nodes = nodes;
     let _ = write(workspace, &receipt);
     // After the receipt is durable, so a crash between the two loses the
@@ -447,9 +503,7 @@ pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<Strin
         // whose entrypoint is PID 1. `process_alive` says pid 1 is alive because
         // it is, so the run stayed `running` for ever - and prune and retention
         // both skip `running`, so nothing could ever clear it.
-        if r.pid.is_some_and(|pid| {
-            live_pids(pid) && !crate::runlock::started_by_a_previous_life(pid, &r.run_id)
-        }) {
+        if r.pid.is_some_and(|pid| crate::runlock::owner_alive(workspace, &r.run_id, pid, live_pids)) {
             continue;
         }
         r.state = INTERRUPTED.to_string();
@@ -1168,6 +1222,7 @@ mod tests {
         let mut killed = begin(&ws, "run-killed", "scheduled", "orders", "pipelines/orders.json", "h", None);
         killed.pid = Some(u32::MAX);
         write(&ws, &killed).unwrap();
+        crate::runlock::release_started("run-killed");
 
         let changed = reconcile(&ws, &|_pid| false);
         assert_eq!(changed, vec!["run-killed".to_string()]);
@@ -1257,6 +1312,38 @@ mod tests {
         assert!(started.queued_at.is_some());
     }
 
+    /// #360: a run on another machine, whose pid means nothing here. It used to be rewritten
+    /// to interrupted, and a backfill slice treated that way became claimable and ran twice.
+    #[test]
+    fn a_run_another_process_is_still_doing_is_not_declared_dead() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut r = begin(tmp.path(), "run-far", "api", "p", "pipelines/p.json", "h", None);
+        r.pid = Some(u32::MAX);
+        write(tmp.path(), &r).unwrap();
+
+        assert_eq!(reconcile(tmp.path(), &|_| false), Vec::<String>::new());
+        assert_eq!(load(tmp.path(), "run-far").unwrap().state, RUNNING);
+
+        // The holder goes, which is the only thing that lets a witness go.
+        crate::runlock::release_started("run-far");
+        assert_eq!(reconcile(tmp.path(), &|_| false), vec!["run-far".to_string()]);
+    }
+
+    /// A run another server has accepted exists on disk before anybody hears its id, and is
+    /// not reported to lineage until it starts.
+    #[test]
+    fn an_accepted_run_is_queued_until_it_begins() {
+        let tmp = tempfile::tempdir().unwrap();
+        accept(tmp.path(), "run-a-1", "p", "pipelines/p.json");
+        assert_eq!(load(tmp.path(), "run-a-1").unwrap().state, QUEUED);
+
+        let begun = begin(tmp.path(), "run-a-1", "manual", "p", "pipelines/p.json", "h", None);
+        assert_eq!(begun.state, RUNNING);
+        assert_eq!(load(tmp.path(), "run-a-1").unwrap().pipeline_hash, "h");
+        assert!(reconcile(tmp.path(), &|_| false).is_empty(), "begin dropped the witness accept took");
+        finish(tmp.path(), begun, "ok", BTreeMap::new());
+    }
+
     #[test]
     fn a_queued_run_whose_process_died_is_interrupted_not_left_queued() {
         // Otherwise it sits in the queue forever, which is the stale capacity
@@ -1264,6 +1351,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut r = begin(tmp.path(), "run-q-2", "api", "p", "pipelines/p.json", "h", None);
         enqueue(tmp.path(), &mut r, "heavy", "resource_pool_capacity");
+        crate::runlock::release_started("run-q-2");
         let changed = reconcile(tmp.path(), &|_| false);
         assert_eq!(changed, vec!["run-q-2".to_string()]);
         assert_eq!(load(tmp.path(), "run-q-2").unwrap().state, INTERRUPTED);
@@ -1400,6 +1488,7 @@ mod tests {
     fn an_abandoned_run_becomes_interrupted_rather_than_staying_running() {
         let tmp = tempfile::tempdir().unwrap();
         begin(tmp.path(), "run-dead", "api", "daily", "/p.json", "hash", None);
+        crate::runlock::release_started("run-dead");
 
         let changed = reconcile(tmp.path(), &|_| false); // nothing is alive
         assert_eq!(changed, vec!["run-dead".to_string()]);
@@ -1424,6 +1513,8 @@ mod tests {
         let mut r = load(tmp.path(), "run-live").unwrap();
         r.pid = Some(other.id());
         write(tmp.path(), &r).unwrap();
+        // Standing in for a runner from before witnesses, so the pid is what answers.
+        crate::runlock::release_started("run-live");
 
         let changed = reconcile(tmp.path(), &crate::runlock::process_alive);
         assert!(changed.is_empty(), "another runner's live run was declared dead: {changed:?}");

@@ -230,7 +230,7 @@
 
     <!-- SCHEDULES -->
     <section id="tab-schedules" class="hidden">
-      <div class="sub" style="margin-bottom:14px">Run a pipeline on an interval. The console runs schedules itself while it is open.</div>
+      <div class="sub" style="margin-bottom:14px">Run a pipeline on an interval, on the clock in UTC: every 15 minutes means :00, :15, :30 and :45. The console runs schedules itself while it is open.</div>
       <div id="sched-note" class="hidden" style="margin-bottom:12px;padding:14px 16px;border-radius:9px;
            background:rgba(255,77,109,.08);border:1px solid rgba(255,77,109,.25);border-left:3px solid var(--red)"></div>
       <div class="card" style="padding:0;overflow:hidden">
@@ -509,7 +509,7 @@ function toast(msg, kind){ const el=document.createElement('div'); el.className=
 // ── Tabs ──
 const TITLES={overview:['Overview','Pipelines grouped by job, with their latest status.'],
   runs:['Runs','Every execution across all pipelines, newest first.'],
-  schedules:['Schedules','Run a pipeline on an interval. The console runs schedules itself while it is open.'],
+  schedules:['Schedules','Run a pipeline on an interval, on the clock in UTC: every 15 minutes means :00, :15, :30 and :45. The console runs schedules itself while it is open.'],
   catalog:['Catalog','What this workspace reads and writes, and who owns it.'],
   batches:['Batches','Queued work, and how far the workers have got.'],
   backfills:['Backfills','Re-run a partitioned pipeline over a range of dates, slice by slice.'],

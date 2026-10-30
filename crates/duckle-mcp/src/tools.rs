@@ -827,7 +827,7 @@ fn t_backfill(args: &Value) -> Result<Value, String> {
             if n == 0 {
                 return Ok(json!({ "retried": 0, "note": "nothing was failed or interrupted" }));
             }
-            plan.pid = backfill::this_process_owns(&plan.id);
+            plan.pid = backfill::this_process_owns(&ws, &plan.id);
             backfill::save(&ws, &plan)?;
             let Some(duckdb) = resolve_duckdb(arg_str(args, "duckdb")) else {
                 return Err("no DuckDB binary; set DUCKLE_DUCKDB_BIN or pass 'duckdb'".into());
@@ -2549,6 +2549,7 @@ mod backfill_tool {
             None,
         )
         .unwrap();
+        backfill::released(&plan.id);
         plan.pid = Some(u32::MAX);
         plan.partitions[0].state = State::Running;
         backfill::save(&ws, &plan).unwrap();

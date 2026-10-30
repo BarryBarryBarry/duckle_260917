@@ -577,6 +577,10 @@ function ScheduleForm({
                             <option value="days">days</option>
                         </select>
                     </div>
+                    <p className="modal-field-hint">
+                        On the clock, in UTC: every 15 minutes means :00, :15, :30 and :45, and every
+                        day means midnight.
+                    </p>
                 </div>
             ) : (
                 <>

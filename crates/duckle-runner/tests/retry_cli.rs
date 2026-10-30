@@ -20,6 +20,8 @@ fn retry_reclaims_a_run_whose_process_is_gone() {
     );
     // Owned by a pid that is never alive, on either platform.
     receipt.pid = Some(u32::MAX);
+    // This test wrote the receipt and is still running, which is not the case it is about.
+    duckle_duckdb_engine::runlock::release_started(&receipt.run_id);
     duckle_duckdb_engine::retry::write(ws, &receipt).unwrap();
 
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_duckle-runner"))

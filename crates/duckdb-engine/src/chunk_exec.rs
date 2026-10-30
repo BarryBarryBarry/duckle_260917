@@ -116,7 +116,7 @@ pub fn plan_for(
         &std::env::var("DUCKLE_ENVIRONMENT").unwrap_or_else(|_| "default".into()),
     );
     let id = backfill::new_id(&format!("{name}-{node_id}"));
-    let pid = backfill::this_process_owns(&id);
+    let pid = backfill::this_process_owns(workspace, &id);
     let staging = staging_dir(workspace, &id);
     Ok(Backfill {
         pipeline: name.clone(),

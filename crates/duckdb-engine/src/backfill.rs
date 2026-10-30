@@ -588,8 +588,8 @@ pub fn load_for_retry(
 /// which plans this process actually started tells the two apart - the fix run
 /// receipts got, applied here. Every place that stamps a plan's pid goes
 /// through this, so none of them can stamp without claiming.
-pub fn this_process_owns(id: &str) -> Option<u32> {
-    crate::runlock::claim_started(&owner_key(id));
+pub fn this_process_owns(workspace: &Path, id: &str) -> Option<u32> {
+    crate::runlock::claim_started(workspace, &owner_key(id));
     Some(std::process::id())
 }
 
@@ -602,17 +602,14 @@ fn owner_key(id: &str) -> String {
     format!("backfill/{id}")
 }
 
-/// Whether a plan's executor is still at work: its pid is alive, and is not a
-/// previous life of this process's own pid.
-fn executor_alive(b: &Backfill, live_pids: &dyn Fn(u32) -> bool) -> bool {
-    b.pid.is_some_and(|pid| {
-        live_pids(pid) && !crate::runlock::started_by_a_previous_life(pid, &owner_key(&b.id))
-    })
+/// Whether a plan's executor is still at work, on this machine or another.
+fn executor_alive(workspace: &Path, b: &Backfill, live_pids: &dyn Fn(u32) -> bool) -> bool {
+    b.pid.is_some_and(|pid| crate::runlock::owner_alive(workspace, &owner_key(&b.id), pid, live_pids))
 }
 
 /// Reclaim one backfill's abandoned `running` slices; true when any were.
 fn reclaim_abandoned(workspace: &Path, b: &Backfill, live_pids: &dyn Fn(u32) -> bool) -> bool {
-    if executor_alive(b, live_pids) {
+    if executor_alive(workspace, b, live_pids) {
         return false;
     }
     if !b.partitions.iter().any(|p| p.state == State::Running) {
@@ -623,7 +620,7 @@ fn reclaim_abandoned(workspace: &Path, b: &Backfill, live_pids: &dyn Fn(u32) -> 
     // whatever landed since: a slice that finished, or an executor that
     // started back up and claimed the plan under its own pid.
     let reclaimed = update(workspace, &b.id, |plan| {
-        if executor_alive(plan, live_pids) {
+        if executor_alive(workspace, plan, live_pids) {
             return false;
         }
         let mut touched = false;
@@ -857,7 +854,7 @@ mod tests {
 
         let mut mine = plan(("2020-01-01", "2020-01-02"));
         mine.id = "bf-mine".into();
-        mine.pid = this_process_owns(&mine.id);
+        mine.pid = this_process_owns(tmp.path(), &mine.id);
         mine.partitions[0].state = State::Running;
         save(tmp.path(), &mine).unwrap();
 
