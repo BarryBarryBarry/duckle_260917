@@ -735,15 +735,23 @@ function LockScreen({
     useEffect(() => {
         const host = hostRef.current;
         const made: Element[] = [];
+        const blurred: Element[] = [];
         for (const el of Array.from(document.body.children)) {
             if (host && el.contains(host)) continue;
             if (!(el as HTMLElement).inert) {
                 (el as HTMLElement).inert = true;
                 made.push(el);
             }
+            // backdrop-filter alone is unreliable in WebView2 (Windows), so
+            // blur the covered content itself as well.
+            if (!el.classList.contains('auth-lock-behind')) {
+                el.classList.add('auth-lock-behind');
+                blurred.push(el);
+            }
         }
         return () => {
             for (const el of made) (el as HTMLElement).inert = false;
+            for (const el of blurred) el.classList.remove('auth-lock-behind');
         };
     }, []);
 

@@ -10690,6 +10690,11 @@ select.modal-select:focus {
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
 }
+.auth-lock-behind {
+    filter: blur(14px);
+    pointer-events: none;
+    user-select: none;
+}
 .auth-drag {
     position: absolute;
     top: 0;
