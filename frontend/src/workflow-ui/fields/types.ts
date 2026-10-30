@@ -17,6 +17,7 @@ export type FieldKind =
     | 'columns'
     | 'aggregations'
     | 'casts'
+    | 'generator-columns'
     | 'key-value'
     | 'rename-columns'
     | 'connection-ref'
@@ -39,6 +40,14 @@ export type SortKey = {
 };
 
 export type SelectOption = { label: string; value: string };
+
+/** One column of a Data Generator. Each generator takes options of its own. */
+export type GeneratorColumn = {
+    name: string;
+    generator: string;
+    nullPercent?: string | number;
+    [option: string]: unknown;
+};
 
 /**
  * One visibility condition on another field's EFFECTIVE value (the stored

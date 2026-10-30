@@ -733,7 +733,7 @@ kind: StatefulSet
 metadata: { name: duckle, namespace: data }
 spec:
   serviceName: duckle
-  replicas: 1                # one scheduler. See Scaling.
+  replicas: 1                # accounts stay on one host. See Scaling.
   selector: { matchLabels: { app: duckle } }
   template:
     metadata: { labels: { app: duckle } }
@@ -869,8 +869,8 @@ az containerapp update --name duckle --resource-group data \
     <p class="muted">Duckle scales up before it scales out, and that goes a long way: the engine is parallel and uses every core you give it, so a larger instance is a faster pipeline with no change to the pipeline.</p>
 
     <div class="warn">
-      <b>Run one console replica, not three.</b>
-      <p>The scheduler lives in the <code>serve</code> process, and each one decides for itself when a schedule is due. Two replicas on one workspace both fire it: measured on a single machine with working locks, every cron occurrence ran twice and an interval schedule ran twice as often. The run lock only stops two runs of a pipeline overlapping, and a short run is over before the other replica starts its copy. Keep <code>replicas: 1</code> and add capacity the way below.</p>
+      <b>Keep console replicas on one host.</b>
+      <p>Several <code>serve</code> processes can share a workspace. Each works out for itself that a schedule is due, and the first to claim the occurrence runs it, so two replicas measured on one machine ran every occurrence once. A run started through one can be followed and cancelled through another, behind a load balancer. What does not cross machines yet is the console's accounts: they are SQLite in WAL mode, which is not safe on network storage. So on Kubernetes keep <code>replicas: 1</code>, and add capacity across hosts the way below.</p>
     </div>
 
     <h3 class="dep-h3">Adding capacity properly</h3>

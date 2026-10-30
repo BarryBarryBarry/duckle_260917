@@ -2,11 +2,26 @@ import type { NodeAnalysis, SqlDiagnostic } from './tauri-bridge';
 import type { Edge, Node } from '@xyflow/react';
 import type { Column, DataType, DuckleNodeData } from './pipeline-types';
 import { getManifest } from './workflow-ui/fields/component-manifests';
-import type { Aggregation } from './workflow-ui/fields/types';
+import type { Aggregation, GeneratorColumn } from './workflow-ui/fields/types';
 
 type KvPair = { key: string; value: string };
 
 const NUMERIC: DataType[] = ['int32', 'int64', 'float32', 'float64', 'decimal'];
+
+/** What a Data Generator column comes out as. Everything unlisted is text. */
+function generatedType(generator: string): DataType {
+    const types: Record<string, DataType> = {
+        sequence: 'int64',
+        integer: 'int64',
+        decimal: 'decimal',
+        boolean: 'bool',
+        date: 'date',
+        timestamp: 'timestamp',
+        'address.latitude': 'float64',
+        'address.longitude': 'float64',
+    };
+    return types[generator] ?? 'string';
+}
 
 function aggOutputType(func: string, sourceCol: Column | undefined): DataType {
     if (func === 'count' || func === 'count_distinct') return 'int64';
@@ -186,6 +201,12 @@ function computeNodeSchema(
     }
     if (manifest?.schemaSource === 'autodetect') {
         return node.data.schema ?? [];
+    }
+
+    if (id === 'src.generate') {
+        return ((props.columns as GeneratorColumn[] | undefined) ?? [])
+            .filter(c => c.name)
+            .map(c => ({ name: c.name, type: generatedType(c.generator), nullable: Boolean(Number(c.nullPercent)) }));
     }
 
     // ---- Computed transforms ---------------------------------------------

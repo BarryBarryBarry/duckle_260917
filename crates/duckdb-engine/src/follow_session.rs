@@ -127,7 +127,7 @@ pub fn begin(
 ) -> FollowSession {
     // #360: claimed, so a session naming this pid that this process never began
     // reads as a previous life's - the same fix run receipts got.
-    crate::runlock::claim_started(&owner_key(session_id));
+    crate::runlock::claim_started(workspace, &owner_key(session_id));
     let session = FollowSession {
         session_id: session_id.to_string(),
         pipeline_name: pipeline_name.to_string(),
@@ -192,10 +192,8 @@ pub fn reconcile(workspace: &Path, live_pids: &dyn Fn(u32) -> bool) -> Vec<Strin
         if session.state != RUNNING {
             continue;
         }
-        if session.pid.is_some_and(|pid| {
-            live_pids(pid)
-                && !crate::runlock::started_by_a_previous_life(pid, &owner_key(&session.session_id))
-        }) {
+        let key = owner_key(&session.session_id);
+        if session.pid.is_some_and(|pid| crate::runlock::owner_alive(workspace, &key, pid, live_pids)) {
             continue;
         }
         session.state = INTERRUPTED.to_string();
@@ -265,6 +263,9 @@ mod tests {
         let dead = begin(tmp.path(), "follow-dead", "b", "b.json");
         alive.pid = Some(4242);
         write(tmp.path(), &alive).unwrap();
+        // Neither has a witness any more, so the pids are what is being tested.
+        crate::runlock::release_started(&owner_key("follow-alive"));
+        crate::runlock::release_started(&owner_key("follow-dead"));
 
         let changed = reconcile(tmp.path(), &|pid| pid == 4242);
         assert_eq!(changed, vec![dead.session_id.clone()]);

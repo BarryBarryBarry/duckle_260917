@@ -274,7 +274,7 @@ fn retry(args: &Args) -> ExitCode {
         println!("nothing to retry in {id}");
         return ExitCode::from(0);
     }
-    b.pid = backfill::this_process_owns(&b.id);
+    b.pid = backfill::this_process_owns(&args.workspace, &b.id);
     if let Err(e) = backfill::save(&args.workspace, &b) {
         eprintln!("duckle-runner backfill retry: {e}");
         return ExitCode::from(2);
@@ -383,6 +383,7 @@ mod tests {
             None,
         )
         .unwrap();
+        backfill::released(&plan.id);
         plan.pid = Some(u32::MAX);
         plan.partitions[0].state = State::Running;
         backfill::save(ws, &plan).unwrap();

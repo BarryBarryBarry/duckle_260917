@@ -922,11 +922,14 @@ impl Scheduler {
     /// schedule is what came due but the pipeline is what gets locked.
     fn claim_due(&self, now: DateTime<Utc>) -> Vec<(String, Option<String>)> {
         let mut g = self.inner.lock().expect("scheduler poisoned");
-        let due: Vec<(String, Option<String>)> = g
+        let due: Vec<(String, Option<String>, DateTime<Utc>)> = g
             .schedules
             .iter()
-            .filter(|s| s.enabled && matches!(s.next_run_at, Some(t) if t <= now))
-            .map(|s| (s.id.clone(), lock_key(s).map(str::to_string)))
+            .filter(|s| s.enabled)
+            .filter_map(|s| {
+                let at = s.next_run_at.filter(|t| *t <= now)?;
+                Some((s.id.clone(), lock_key(s).map(str::to_string), at))
+            })
             .collect();
             // Claim the occurrence immediately, under the lock, by advancing
             // next_run_at to the next FUTURE time. The tick wakes every 15s and
@@ -946,7 +949,7 @@ impl Scheduler {
             // also makes the claim visible to the other process, so the lock
             // goes back to being the backstop it was meant to be.
         if !due.is_empty() {
-            let claimed: Vec<String> = due.iter().map(|(id, _)| id.clone()).collect();
+            let claimed: Vec<String> = due.iter().map(|(id, ..)| id.clone()).collect();
             if let Err(e) = self.commit(&mut g, move |list| {
                 for s in list.iter_mut() {
                     if claimed.iter().any(|id| id == &s.id) {
@@ -960,13 +963,28 @@ impl Scheduler {
                 // schedule.
                 warn!("Could not record the fire claim: {}", e);
                 for s in g.schedules.iter_mut() {
-                    if due.iter().any(|(id, _)| id == &s.id) {
+                    if due.iter().any(|(id, ..)| id == &s.id) {
                         claim_next_run(s, now);
                     }
                 }
             }
         }
-        due
+        // Advanced whoever takes it, so a process that loses does not ask again next tick.
+        // What is left is what this process runs. Another scheduler on the workspace, a
+        // second desktop or a server, decides from its own copy, so the decision above
+        // cannot settle it, and this does. With no workspace there is nothing to share.
+        let workspace = g.workspace_path.clone();
+        due.into_iter()
+            .filter(|(id, _, at)| {
+                workspace.as_deref().is_none_or(|ws| {
+                    duckle_duckdb_engine::occurrences::claim(ws, id, *at).unwrap_or_else(|e| {
+                        warn!("Could not claim the occurrence of {}, firing anyway: {}", id, e);
+                        true
+                    })
+                })
+            })
+            .map(|(id, key, _)| (id, key))
+            .collect()
     }
 
     async fn fire_due(&self) {
@@ -1125,7 +1143,7 @@ fn claim_next_run(s: &mut Schedule, now: DateTime<Utc>) {
         // schedulers call the same evaluator so they cannot drift apart again.
         ScheduleKind::Cron { expr } => cron_next(expr, s.timezone.as_deref(), &s.exclude, now),
         ScheduleKind::Interval { seconds } => {
-            Some(now + chrono::Duration::seconds(*seconds as i64))
+            Some(duckle_duckdb_engine::occurrences::next_interval_slot(now, *seconds))
         }
         ScheduleKind::FileWatch { .. } => None,
     };
@@ -1139,8 +1157,13 @@ fn compute_next_run(s: &mut Schedule) {
     s.next_run_at = match &s.kind {
         ScheduleKind::Cron { expr } => cron_next(expr, s.timezone.as_deref(), &s.exclude, Utc::now()),
         ScheduleKind::Interval { seconds } => {
-            let base = s.last_run_at.unwrap_or_else(Utc::now);
-            Some(base + chrono::Duration::seconds(*seconds as i64))
+            use duckle_duckdb_engine::occurrences::{interval_slot, next_interval_slot};
+            let now = Utc::now();
+            let next = next_interval_slot(s.last_run_at.unwrap_or(now), *seconds);
+            // Overdue: the newest instant that has passed, so it fires once now rather
+            // than once per instant it slept through. Still on the grid, because that
+            // instant is what every scheduler has to agree on.
+            Some(if next <= now { interval_slot(now, *seconds) } else { next })
         }
         // Event-driven - no scheduled next-run time.
         ScheduleKind::FileWatch { .. } => None,
@@ -1425,9 +1448,83 @@ mod tests {
         };
         compute_next_run(&mut s);
         let next = s.next_run_at.expect("next_run_at set");
+        // On the grid, so every scheduler on a workspace names the same instant.
+        assert_eq!(next.timestamp() % 300, 0, "{next} is off the grid");
+        let delta = next - Utc::now();
+        assert!(delta.num_seconds() <= 300 && delta.num_seconds() >= -1, "{delta}");
+    }
+
+    #[test]
+    fn an_overdue_interval_fires_once_for_all_the_instants_it_slept_through() {
+        let mut s = Schedule {
+            id: "t".into(),
+            pipeline_id: "p1".into(),
+            plan_id: None,
+            name: "every 5".into(),
+            enabled: true,
+            kind: ScheduleKind::Interval { seconds: 300 },
+            timezone: None,
+            exclude: Default::default(),
+            misfire: Default::default(),
+            catchup: Default::default(),
+            params: None,
+            last_run_at: Some(Utc::now() - chrono::Duration::hours(3)),
+            last_run_status: None,
+            last_run_duration_ms: None,
+            last_run_error: None,
+            next_run_at: None,
+        };
+        compute_next_run(&mut s);
+        let next = s.next_run_at.expect("next_run_at set");
+        assert!(next <= Utc::now(), "an overdue schedule must be due now: {next}");
+        assert_eq!(next.timestamp() % 300, 0, "{next} is off the grid");
+        assert!(Utc::now() - next < chrono::Duration::seconds(301), "it is due for the newest instant");
+    }
+
+    /// The bug this stops: each process decides from its own copy of the store, so two of
+    /// them on one workspace both found the schedule due and both ran it.
+    #[test]
+    fn two_schedulers_on_one_workspace_run_an_occurrence_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = Scheduler::new(DuckdbEngine::new("duckdb".into()));
+        first.set_workspace(Some(dir.path().to_path_buf()));
+        let id = first
+            .upsert(Schedule {
+                id: String::new(),
+                pipeline_id: "p1".into(),
+                plan_id: None,
+                name: "every 5".into(),
+                enabled: true,
+                kind: ScheduleKind::Interval { seconds: 300 },
+                timezone: None,
+                exclude: Default::default(),
+                misfire: Default::default(),
+                catchup: Default::default(),
+                params: None,
+                last_run_at: None,
+                last_run_status: None,
+                last_run_duration_ms: None,
+                last_run_error: None,
+                next_run_at: None,
+            })
+            .unwrap()
+            .id;
+        let second = Scheduler::new(DuckdbEngine::new("duckdb".into()));
+        second.set_workspace(Some(dir.path().to_path_buf()));
+        // Due in each process's OWN copy, the way five minutes passing makes it. That copy
+        // is the race: neither hears what the other has decided until it reads the store.
+        let due = Utc::now() - chrono::Duration::seconds(1);
+        for sched in [&first, &second] {
+            for s in sched.inner.lock().unwrap().schedules.iter_mut() {
+                s.next_run_at = Some(due);
+            }
+        }
         let now = Utc::now();
-        let delta = next - now;
-        assert!(delta.num_seconds() <= 301 && delta.num_seconds() >= 299);
+        let won = first.claim_due(now).len() + second.claim_due(now).len();
+        assert_eq!(won, 1, "{id} ran on both schedulers");
+        // The loser moved on too, or it would ask again on every tick.
+        let after = second.list().unwrap().into_iter().find(|s| s.id == id).unwrap();
+        assert!(matches!(after.next_run_at, Some(t) if t > now), "{:?}", after.next_run_at);
     }
 
     #[test]

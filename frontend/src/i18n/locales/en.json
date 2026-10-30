@@ -975,8 +975,8 @@
         "body": "Select a node to configure it here: the connection, the query, its columns, and the write mode (overwrite, append or upsert). Use ${name} placeholders for anything that changes per environment or per run."
       },
       "tabs": {
-        "title": "Canvas, Plan, Run, History",
-        "body": "Four views of the same pipeline. Plan shows the SQL each block compiles to, which is the fastest way to understand what Otter ETL agent is actually doing. Run shows the last result with a data preview. History lists every previous run of this pipeline."
+        "title": "Canvas, Plan, Run, History, Tests",
+        "body": "Five views of the same pipeline. Plan shows the SQL each block compiles to, which is the fastest way to understand what Otter ETL agent is actually doing. Run shows the last result with a data preview. History lists every previous run of this pipeline. Tests checks what a node produces from inputs you choose."
       },
       "save": {
         "title": "Save, validate, tidy up",

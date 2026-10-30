@@ -28,6 +28,8 @@ fn a_plain_pipeline_run_reclaims_what_an_earlier_kill_left_behind() {
         None,
     );
     abandoned.pid = Some(u32::MAX);
+    // This test wrote the receipt and is still running, which is not the case it is about.
+    duckle_duckdb_engine::runlock::release_started(&abandoned.run_id);
     duckle_duckdb_engine::retry::write(ws, &abandoned).unwrap();
 
     // The smallest pipeline that runs: no source, no sink, nothing to execute.

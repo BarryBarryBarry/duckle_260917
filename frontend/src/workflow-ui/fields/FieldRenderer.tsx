@@ -1,6 +1,6 @@
 import { Component, useContext } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { Field, Aggregation, Cast, SortKey } from './types';
+import type { Field, Aggregation, Cast, GeneratorColumn, SortKey } from './types';
 import {
     BoolField,
     IntegerField,
@@ -15,6 +15,7 @@ import { ExpressionField } from './ExpressionField';
 import { ColumnField, ColumnsField } from './ColumnField';
 import { AggregationsField } from './AggregationsField';
 import { CastsField } from './CastsField';
+import { GeneratorColumnsField } from './GeneratorColumnsField';
 import { SortKeysField } from './SortKeysField';
 import { KeyValueField } from './KeyValueField';
 import { RenameColumnsField } from './RenameColumnsField';
@@ -289,6 +290,14 @@ function renderInput(field: Field, value: unknown, onChange: (v: unknown) => voi
         case 'casts':
             return (
                 <CastsField value={value as Cast[] | undefined} onChange={onChange} />
+            );
+        case 'generator-columns':
+            return (
+                <GeneratorColumnsField
+                    field={field}
+                    value={value as GeneratorColumn[] | undefined}
+                    onChange={onChange}
+                />
             );
         case 'key-value':
             return (

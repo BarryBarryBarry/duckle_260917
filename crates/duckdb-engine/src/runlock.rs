@@ -212,18 +212,70 @@ pub fn lock_store(workspace: &Path, name: &str) -> Result<RunLock, String> {
 /// process finds its own pid in a receipt the previous life abandoned, and
 /// `process_alive` answers, correctly, that pid 1 is alive. Knowing which
 /// records this process actually started is what tells the two apart.
-static OURS: std::sync::Mutex<std::collections::BTreeSet<String>> =
-    std::sync::Mutex::new(std::collections::BTreeSet::new());
+static OURS: std::sync::Mutex<std::collections::BTreeMap<String, Witness>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
 
-/// Remember that this process started `key`.
-pub fn claim_started(key: &str) {
-    OURS.lock().unwrap_or_else(|e| e.into_inner()).insert(key.to_string());
+/// The lock that says a piece of work is still being done, and where it lives.
+struct Witness {
+    lock: Option<RunLock>,
+    path: PathBuf,
+}
+
+/// Remember that this process started `key`, and leave a witness that says so.
+///
+/// #360: a pid means nothing on another machine. The witness is a lock held for as long as
+/// the work lasts, in the workspace, where every process sharing it can try it: a live
+/// holder refuses, and the OS lets go however the holder ends, on whichever host it was.
+/// That answers what a pid cannot without naming hosts, which a replaced container would
+/// not keep anyway, and without a heartbeat to tune. It is as good as the storage's locks,
+/// which is what a workspace shared between hosts already has to have.
+///
+/// A record stays one lock each, and a lock that cannot be taken costs nothing but the
+/// witness: the question then falls back to the pid, as it did before there was one.
+pub fn claim_started(workspace: &Path, key: &str) {
+    let mut ours = OURS.lock().unwrap_or_else(|e| e.into_inner());
+    // Already this process's: a second lock would fail, and replacing the first with the
+    // failure would let go of the witness while the work goes on.
+    if ours.contains_key(key) {
+        return;
+    }
+    let path = nested_lock_path(workspace, "live", key);
+    let lock = acquire_at(path.clone(), key);
+    ours.insert(key.to_string(), Witness { lock, path });
 }
 
 /// The work is over. A long-lived process - `serve`, the desktop - would
 /// otherwise hold every id it had ever run.
 pub fn release_started(key: &str) {
-    OURS.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+    let witness = OURS.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
+    if let Some(Witness { lock, path }) = witness {
+        // Released before it is removed: Windows will not delete an open file.
+        drop(lock);
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Whether the process that stamped `pid` on the record for `key` is still doing the work.
+///
+/// The witness decides when there is one. Held means alive, wherever the holder is running;
+/// free means the holder is gone, whatever has that pid now. With no witness, the record
+/// was written before there were any or on storage that would not take one, and all that
+/// is left is the pid, judged on this machine.
+pub fn owner_alive(
+    workspace: &Path,
+    key: &str,
+    pid: u32,
+    live_pids: &dyn Fn(u32) -> bool,
+) -> bool {
+    let path = nested_lock_path(workspace, "live", key);
+    if path.exists() {
+        match acquire_at_reason(path, key) {
+            AcquireOutcome::HeldByOther => return true,
+            AcquireOutcome::Claimed(_) => return false,
+            AcquireOutcome::Unusable(_) => {}
+        }
+    }
+    live_pids(pid) && !started_by_a_previous_life(pid, key)
 }
 
 /// Whether a record that names `pid` was left by a process that is gone, even
@@ -233,7 +285,7 @@ pub fn release_started(key: &str) {
 /// else is left to the OS, so a second runner's live run is still safe.
 pub fn started_by_a_previous_life(pid: u32, key: &str) -> bool {
     pid == std::process::id()
-        && !OURS.lock().unwrap_or_else(|e| e.into_inner()).contains(key)
+        && !OURS.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key)
 }
 
 pub fn process_alive(pid: u32) -> bool {
@@ -649,6 +701,45 @@ mod tests {
         // not report the timeout message, which blames a writer that is not there.
         assert!(started.elapsed() < std::time::Duration::from_secs(2), "it waited out the retry loop");
         assert!(err.contains("cannot lock"), "wrong reason: {err}");
+    }
+
+    /// #360, the half a pid cannot answer: a process on another machine reads as dead here
+    /// whatever it is doing. A held witness says otherwise, and that is what stops a live
+    /// slice being reclaimed and run a second time beside itself.
+    #[test]
+    fn a_witness_held_anywhere_means_alive_whatever_the_pid_says() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        let elsewhere = try_acquire_nested(ws, "live", "run-1").expect("the witness is free");
+        assert!(owner_alive(ws, "run-1", 999_999, &|_| false), "a live holder was read as dead");
+        drop(elsewhere);
+        // And the other way round: a container's PID 1 is alive after every restart, and
+        // the free witness says the work it was doing is not.
+        assert!(!owner_alive(ws, "run-1", std::process::id(), &|_| true), "a dead holder was read as alive");
+    }
+
+    /// A record from before witnesses, or from storage that would not take one, keeps the
+    /// answer it always had.
+    #[test]
+    fn with_no_witness_the_pid_still_answers() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(owner_alive(tmp.path(), "old", 42, &|_| true));
+        assert!(!owner_alive(tmp.path(), "old", 42, &|_| false));
+        assert!(
+            !owner_alive(tmp.path(), "old", std::process::id(), &|_| true),
+            "this process's own pid on a record it never started is a previous life"
+        );
+    }
+
+    #[test]
+    fn claiming_twice_keeps_the_witness_and_releasing_takes_it_away() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path();
+        claim_started(ws, "run-2");
+        claim_started(ws, "run-2");
+        assert!(owner_alive(ws, "run-2", 999_999, &|_| false), "the second claim dropped the witness");
+        release_started("run-2");
+        assert!(!nested_lock_path(ws, "live", "run-2").exists(), "a finished run left its lock file");
     }
 
     /// Two different pipelines must never share one lock.

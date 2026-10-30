@@ -67,7 +67,7 @@ USAGE:
     duckle-runner validate [<file.json> ...] [--json]
     duckle-runner quickstart [--force]
     duckle-runner mcp                      (stdio MCP server for AI agents)
-    duckle-runner test [<file.test.json> ...]
+    duckle-runner test [<file.test.json> ...] [--case <name>] [--workspace <dir>]
     duckle-runner cache <list|clear>       (stage outputs kept for reuse)
     duckle-runner sequence <status|plan|apply> <file.json>
     duckle-runner deliveries <status|retry>  (#325 subscription pump ledger)
@@ -81,7 +81,8 @@ TEST:
 
     A case names the node it asserts on, so the run STOPS there: nothing
     downstream executes and no sink writes. `given` maps a source node id to
-    the text it should read, so the case exercises the real reader.
+    the text it should read, so the case exercises the real reader, or to
+    {\"generate\": {...}} for generated rows in place of the source.
 
     With no path, every *.test.json under ./tests. Exit 1 on a failed
     assertion, the same code a failed run uses.

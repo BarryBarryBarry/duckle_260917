@@ -1368,6 +1368,18 @@ export default function App() {
                             { node_id: evt.node_id, level: evt.level, message: evt.message },
                         ];
                         break;
+                    case 'assertion':
+                        next.messages = [
+                            ...(next.messages ?? []),
+                            {
+                                node_id: evt.node_id,
+                                level: evt.passed ? 'info' : 'warn',
+                                message: evt.passed
+                                    ? `Assertion held: ${evt.description}`
+                                    : `Assertion failed: ${evt.description}: ${evt.detail}`,
+                            },
+                        ];
+                        break;
                     case 'finished':
                         next.status = evt.status;
                         next.duration_ms = evt.duration_ms;
@@ -1644,7 +1656,7 @@ export default function App() {
             .map(n => n.id);
     }, [nodes, edges]);
 
-    const handleSave = useCallback(() => {
+    const saveActive = useCallback(async () => {
         // Flush the active pipeline + repo + metadata to disk now, and clear the
         // tab's unsaved marker only once that worked. (Autosave is debounced; the
         // explicit Save button / Ctrl+S gesture writes immediately.) It used to
@@ -1652,17 +1664,17 @@ export default function App() {
         // write, so a tab read as saved with nothing on disk.
         if ((!isInTauri() && !isWebBackend()) || !workspacePathState) return;
         const ws = workspacePathState;
-        void (async () => {
-            const ok = await saveNow(
-                ws,
-                activeJobId,
-                pipelineData[activeJobId],
-                repo as unknown as Array<Record<string, unknown>>,
-                { engine, jobs, activeJobId },
-            );
-            if (ok) setJobs(js => js.map(j => (j.id === activeJobId ? { ...j, dirty: false } : j)));
-        })();
+        const ok = await saveNow(
+            ws,
+            activeJobId,
+            pipelineData[activeJobId],
+            repo as unknown as Array<Record<string, unknown>>,
+            { engine, jobs, activeJobId },
+        );
+        if (ok) setJobs(js => js.map(j => (j.id === activeJobId ? { ...j, dirty: false } : j)));
     }, [activeJobId, workspacePathState, pipelineData, repo, engine, jobs]);
+
+    const handleSave = useCallback(() => void saveActive(), [saveActive]);
 
     const activeJobName = useMemo(
         () => jobs.find(j => j.id === activeJobId)?.name ?? 'pipeline',
@@ -2026,6 +2038,10 @@ export default function App() {
 
                 case 'run-from-here':
                     handleRunFromHere(nodeId);
+                    break;
+
+                case 'create-test':
+                    window.dispatchEvent(new CustomEvent('duckle:create-test', { detail: nodeId }));
                     break;
 
                 case 'copy-id':
@@ -2919,6 +2935,7 @@ export default function App() {
                         nodeAutodetectAvailable={nodeAutodetectAvailable}
                         fitRequest={layoutFitRequest}
                         layoutDirection={layoutDirection}
+                        onSaveBeforeTests={saveActive}
                     />
                 </section>
                 {rightTool === 'properties' ? (

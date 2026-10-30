@@ -258,6 +258,7 @@ pub(crate) fn build_view_sql(
         "src.avro" => Ok(build_avro_source(props)),
         "src.excel" => Ok(build_excel_source(props, declared)),
         "src.inline" => Ok(build_inline_source(props)),
+        "src.generate" => generate::build_source(props),
         "src.filelist" => build_filelist_source(props),
         "src.artifact" => Ok(build_artifact_source(props)),
         "src.iceberg" => build_iceberg_source(props),

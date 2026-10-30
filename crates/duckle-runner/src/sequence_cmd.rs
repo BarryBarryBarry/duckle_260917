@@ -194,7 +194,7 @@ pub fn run() -> ExitCode {
         return ExitCode::from(0);
     }
     let id = backfill::new_id(&format!("{pipeline}-seq"));
-    let pid = backfill::this_process_owns(&id);
+    let pid = backfill::this_process_owns(&args.workspace, &id);
     let plan = Backfill {
         id,
         pipeline: pipeline.clone(),

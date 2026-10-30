@@ -102,6 +102,85 @@ pub fn log_path(workspace: &Path) -> PathBuf {
     workspace.join(".duckle").join("occurrences.ndjson")
 }
 
+/// The instant an interval schedule last came due, at or before `now`.
+///
+/// Intervals run on a grid of whole multiples of the interval since the Unix epoch, in
+/// UTC: every 15 minutes means :00, :15, :30 and :45, whichever process is looking and
+/// whenever it started. Counting from when a process first saw the schedule gave every
+/// process its own occurrences, so there was nothing for two of them to agree on.
+pub fn interval_slot(
+    now: chrono::DateTime<chrono::Utc>,
+    seconds: u64,
+) -> chrono::DateTime<chrono::Utc> {
+    let seconds = interval_seconds(seconds);
+    let t = now.timestamp();
+    chrono::DateTime::from_timestamp(t - t.rem_euclid(seconds), 0).unwrap_or(now)
+}
+
+/// The first instant on an interval schedule's grid after `now`.
+pub fn next_interval_slot(
+    now: chrono::DateTime<chrono::Utc>,
+    seconds: u64,
+) -> chrono::DateTime<chrono::Utc> {
+    interval_slot(now, seconds) + chrono::Duration::seconds(interval_seconds(seconds))
+}
+
+/// Ten thousand years is a typo rather than a schedule, and the date arithmetic ends there.
+fn interval_seconds(seconds: u64) -> i64 {
+    seconds.clamp(1, 315_360_000_000) as i64
+}
+
+/// How far a schedule has been claimed, in `.duckle/claims/`.
+#[derive(Debug, Serialize, Deserialize)]
+struct Claimed {
+    through: chrono::DateTime<chrono::Utc>,
+}
+
+/// Take one occurrence for this process. True means it is this process's to run.
+///
+/// This is what lets several schedulers share a workspace. Each one works out for itself
+/// that an occurrence is due, and the first to get here takes it, so a run happens once
+/// however many are looking: two `serve` replicas, or a laptop and a server. The run lock
+/// could not do this, because it stops two runs overlapping and not a second run after the
+/// first has finished.
+///
+/// It records one instant per schedule rather than one file per occurrence, because a
+/// minutely schedule would otherwise leave half a million files a year. Occurrences are
+/// claimed in order, so "claimed through" says everything: an instant at or before it has
+/// been taken. That also means a process whose clock runs behind cannot take an occurrence
+/// a faster one already ran.
+///
+/// The record goes under the store lock, so this is as good as the storage's locks, which
+/// is what `duckle-runner work` already asks of a shared workspace. An `Err` means the claim
+/// could not be made at all. The callers run the schedule anyway: a full disk should not
+/// silently stop every schedule, and on one scheduler the claim was never needed.
+pub fn claim(
+    workspace: &Path,
+    schedule_id: &str,
+    due: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, String> {
+    let name = occurrence_id(schedule_id, "claim");
+    let _guard = crate::runlock::lock_store(workspace, &name)?;
+    let path = workspace.join(".duckle").join("claims").join(format!("{name}.json"));
+    let claimed: Option<Claimed> = match std::fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).ok(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    if claimed.is_some_and(|c| c.through >= due) {
+        return Ok(false);
+    }
+    let dir = path.parent().ok_or("a claim has a folder")?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let record = Claimed { through: due };
+    let text = serde_json::to_string(&record).map_err(|e| e.to_string())?;
+    // Temp then rename, so a process killed here leaves the last claim and not half of one.
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, text).map_err(|e| format!("{}: {e}", temp.display()))?;
+    std::fs::rename(&temp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(true)
+}
+
 /// Append one occurrence. Append-only, like the materialization log and for the
 /// same reason: a writer never rewrites, so a concurrent reader cannot see half
 /// a record.
@@ -324,6 +403,58 @@ mod tests {
         assert_ne!(a, occurrence_id("s1", "2026-09-05T03:00:00Z"));
         // Length-prefixed, so a separator in an id cannot collide two.
         assert_ne!(occurrence_id("a", "bc"), occurrence_id("ab", "c"));
+    }
+
+    #[test]
+    fn an_interval_falls_on_the_same_instants_whoever_is_looking() {
+        let at = |h, m, s| chrono::Utc.with_ymd_and_hms(2026, 10, 30, h, m, s).single().unwrap();
+        // Two processes that started at different times agree on every instant.
+        assert_eq!(interval_slot(at(12, 7, 13), 300), at(12, 5, 0));
+        assert_eq!(interval_slot(at(12, 9, 59), 300), at(12, 5, 0));
+        assert_eq!(interval_slot(at(12, 10, 0), 300), at(12, 10, 0), "the boundary is on the grid");
+        assert_eq!(next_interval_slot(at(12, 7, 13), 300), at(12, 10, 0));
+        assert_eq!(
+            next_interval_slot(at(12, 10, 0), 300),
+            at(12, 15, 0),
+            "next means strictly after, or a schedule fires twice on its own boundary"
+        );
+        // Whatever an interval is, a due time still comes out of it.
+        assert!(next_interval_slot(at(12, 0, 0), 0) > at(12, 0, 0));
+        assert!(next_interval_slot(at(12, 0, 0), u64::MAX) > at(12, 0, 0));
+    }
+
+    #[test]
+    fn an_occurrence_can_be_claimed_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ws, t) = (tmp.path(), utc(2026, 10, 30, 12));
+        assert_eq!(claim(ws, "s1", t), Ok(true), "the first to ask takes it");
+        assert_eq!(claim(ws, "s1", t), Ok(false), "and the second does not");
+        assert_eq!(claim(ws, "s2", t), Ok(true), "another schedule's occurrence is its own");
+        assert_eq!(claim(ws, "s1", utc(2026, 10, 30, 13)), Ok(true), "the next one is free");
+        // A process running behind cannot take what a faster one already ran.
+        assert_eq!(claim(ws, "s1", t), Ok(false));
+    }
+
+    /// The property the whole design rests on, with the race actually run: however many
+    /// schedulers reach an occurrence at the same moment, one of them gets it.
+    #[test]
+    fn schedulers_racing_for_an_occurrence_take_it_exactly_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().to_path_buf();
+        for hour in 0..20 {
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(6));
+            let racers: Vec<_> = (0..6)
+                .map(|_| {
+                    let (ws, barrier) = (ws.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        claim(&ws, "s1", utc(2026, 10, 30, hour)).unwrap()
+                    })
+                })
+                .collect();
+            let wins = racers.into_iter().map(|r| r.join().unwrap()).filter(|won| *won).count();
+            assert_eq!(wins, 1, "hour {hour}");
+        }
     }
 
     #[test]

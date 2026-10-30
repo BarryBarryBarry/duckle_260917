@@ -13,10 +13,10 @@ catalog the application itself reads, so the names and counts here are exact.
 - Free and open source, dual-licensed MIT OR Apache-2.0. No per-row, per-connector, or per-seat billing.
 - Local-first desktop app: runs fully offline, no account and no telemetry, suitable for air-gapped and compliance-sensitive work.
 - Engine: pipelines compile to SQL and execute on DuckDB, an in-process analytical database, at native speed.
-- 420 components, 403 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
-- 202 connectors (125 sources / 77 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
+- 422 components, 405 available today: sources, transforms, destinations, data-quality checks, control-flow nodes, and code runners.
+- 203 connectors (126 sources / 77 destinations): databases, warehouses, lakehouses, object stores, streaming brokers, NoSQL, vector databases, geospatial formats, and SaaS APIs.
 - Transformation: 145 transforms including joins, window functions, aggregates, CDC/SCD, incremental loads, upsert with delete propagation, and a visual Map (tMap-style) editor.
-- Data quality: 29 checks, plus 21 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
+- Data quality: 30 checks, plus 21 control-flow nodes for branching, iteration, parallel branches, and calling child pipelines.
 - Three ways to author the same pipeline: the visual canvas, the Python API (`pip install duckle`), or plain English via the built-in assistant. All three produce the same pipeline JSON and the same SQL.
 - dbt: runs dbt on DuckDB with a GUI, using a fast build engine by default and dbt-core as a fallback.
 - AI: an on-device assistant (Qwen via llama.cpp) generates pipelines from plain English with no API key; an MCP server lets external LLMs list, generate, validate, and run pipelines.
@@ -81,7 +81,7 @@ Every component, by id. `src.*` reads, `snk.*` writes, `xf.*` transforms,
 `qa.*` checks, `ctl.*` controls flow, `code.*` runs your own code. Entries
 marked [planned] or [preview] are not usable yet.
 
-### Sources (read) (134)
+### Sources (read) (135)
 
 - `src.access` Microsoft Access: Read an Access database (.accdb / .mdb): a table, or on Windows a query in Access SQL. Windows reads through the Microsoft Access ODBC driver, Linux and macOS through mdbtools. Text, currency, yes/no and dates keep their types
 - `src.adbc` ADBC (Arrow): Read any database that ships an ADBC (Arrow Database Connectivity) driver. Point at a prebuilt driver shared library (.dll / .so / .dylib) plus a connection URI and SQL; rows stream back as Arrow for fast loads. Friendly wrappers can map their own fields onto driver / options
@@ -122,6 +122,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.ftp` FTP: List + download files from an FTP server via the pure-Rust suppaftp client. Glob pattern filter (`*`, `?`); each file becomes one row {filename, size, modified, content_b64}. Use DuckDB `from_base64(content_b64)` downstream for the raw bytes. SFTP is a separate protocol and a separate component
 - `src.gcs` Google Cloud Storage: Read via DuckDB httpfs
 - `src.gdb` Esri File Geodatabase (.gdb): Read a feature class (layer) from an Esri File Geodatabase via the spatial extension (ST_Read with layer=)
+- `src.generate` Data Generator: Believable fake rows, with no source to connect to: names, emails, addresses, companies, numbers, dates, picks from a list and patterns, in fourteen locales. The same seed gives the same rows on every run, so a test can rely on them, and a preview stays instant at any row count
 - `src.git` Git Repository: Read commit log or file tree from a local git working copy. Shells out to the system `git` CLI - no extra Rust dep. mode=log emits {hash, short_hash, author_name, author_email, date, subject}; mode=files emits {mode, type, hash, size, path}
 - `src.github` GitHub: GitHub REST. Bearer Personal Access Token. Link header pagination (paginationType `link`). Accept: application/vnd.github+json header recommended; defaults to https://api.github.com
 - `src.gitlab` GitLab: GitLab REST. Bearer Personal Access Token. Link header pagination (paginationType `link`). Base URL https://gitlab.com/api/v4 (or self-hosted)
@@ -182,7 +183,7 @@ marked [planned] or [preview] are not usable yet.
 - `src.redpanda` Redpanda: Same wire protocol as Kafka - rides the rskafka driver. Use src.kafka semantics: batch-consume up to maxRecords from a single partition
 - `src.redshift` Redshift: Read Redshift via the postgres ATTACH path (Redshift speaks Postgres wire on port 5439)
 - `src.rest` REST: Generic HTTP GET/POST source. Parses JSON response, optionally walks a JSON pointer (responsePath) to find the row array, and follows cursor-style pagination if configured (cursorNextPath + cursorParam)
-- `src.runevents` Run Events: Rows describing the stages that have already failed in this run: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure
+- `src.runevents` Run Events: Rows describing the stages that have already failed in this run, and every Assert checked so far: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure
 - `src.s3` Amazon S3: Read via DuckDB httpfs
 - `src.salesforce` Salesforce: Salesforce REST. Rides the generic src.rest path with a Bearer token or OAuth 2.0 client-credentials (a fresh token minted per run from a connected app); users typically point url at https://{instance}.my.salesforce.com/services/data/v60.0/query/?q=SELECT+... and walk responsePath /records
 - `src.salesforce.bulk` Salesforce Bulk: Salesforce Bulk API 2.0 query source for migration-scale reads: a SOQL query runs as an async query job (query / queryAll incl. deleted+archived), the paged CSV result sets stream to disk via Sforce-Locator, and DuckDB reads them out-of-core - a multi-GB result never lands in memory. Same auth as the Bulk sink (Bearer / client-credentials / saved connection)
@@ -451,9 +452,10 @@ marked [planned] or [preview] are not usable yet.
 - `xf.uuid` UUID: Add a fresh UUID v4 column per row - the standard surrogate row id
 - `xf.zip` Zip Arrays to Table: Zip a headings list and a list of row-arrays (e.g. {headings:[...], rows:[[...]]}) into one row per record with a real column per heading
 
-### Data quality (30)
+### Data quality (31)
 
 - `qa.addressclean` Address Cleanse [planned]: Validates / profiles data with Address Cleanse
+- `qa.assert` Assert: A condition the rows must meet, checked in the run. With an aggregate it is one statement about all the rows (count(*) > 0, sum(amount) = 1200); without one, every row has to meet it (amount >= 0). The rows pass through unchanged. A failure stops the run, or is recorded and the run carries on, and Run Events can collect every check for a sink
 - `qa.baseline` Run Baseline: Compare this run against what previous runs looked like. Every row can satisfy the schema and every row-level rule while the dataset is nothing like what normally arrives - 842,114 rows where five million usually come, a null rate that went from 4 percent to 71, a country partition that vanished - and that publishes successfully, which is more dangerous than a crash. Profiles row count, and per column the null count, null rate, distinct count, min, max and mean; compares against the MEDIAN of the last N accepted profiles so one odd day does not move the baseline. Rules take percentage or absolute limits in either direction. groupBy with requireExistingGroups catches a partition disappearing even when the total stays in range. Gate fails the run; report only emits the findings. Deterministic - rolling statistics and explicit thresholds, no model. The new profile is accepted only if the whole run succeeds, so a run that failed downstream never leaves today numbers as the new normal
 - `qa.block` Candidate Pairs (Blocking): Cut an entity-resolution job down to the pairs worth comparing. Every fuzzy match compares pairs, and comparing all of them grows with the product of the row counts, so blocking proposes only records that already agree on something cheap and discriminating (same postcode, same surname). One input dedupes within a table; wire the lookup port to link two. Rules are named and can overlap - a pair caught by several is still emitted once. Output: id_a, id_b, blocking_rule, and a_<col>/b_<col> for carried columns, which is exactly what Match Grouping reads by default
 - `qa.classify` Classify / PII Detect: Heuristically classify each column by semantic / PII type - pure regex + statistics, no model. Measures the fraction of values matching known shapes (email, SSN, credit card, IPv4, UUID, URL, phone, date) and tags the best match above a threshold. Emits a report (column, detected_type, match_rate, sample_count, is_pii); pair it with Mask / Anonymize

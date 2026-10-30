@@ -116,3 +116,147 @@ fn update_golden_refuses_a_report_format() {
     assert!(!ok);
     assert!(out.contains("prints no report"), "the refusal, not an unknown-flag error: {out}");
 }
+
+/// A workspace laid out the way the editor saves one, with a pipeline whose source nothing
+/// here can reach, so a pass can only mean the case's own input was used.
+fn editor_workspace(dir: &Path, suite: Value) {
+    std::fs::create_dir_all(dir.join("pipelines")).unwrap();
+    std::fs::create_dir_all(dir.join("tests")).unwrap();
+    std::fs::create_dir_all(dir.join("data")).unwrap();
+    std::fs::write(dir.join("data").join("rates.csv"), "plan,rate\nfree,0\npro,2\n").unwrap();
+    std::fs::write(
+        dir.join("pipelines").join("orders.json"),
+        json!({
+            "nodes": [
+                { "id": "s", "position": { "x": 0, "y": 0 },
+                  "data": { "label": "S", "componentId": "src.postgres",
+                            "properties": { "host": "nowhere.invalid", "query": "SELECT 1" } } },
+                { "id": "r", "position": { "x": 0, "y": 1 },
+                  "data": { "label": "R", "componentId": "src.csv",
+                            "properties": { "path": "${workspace}/data/rates.csv", "hasHeader": true } } },
+                { "id": "f", "position": { "x": 1, "y": 0 },
+                  "data": { "label": "F", "componentId": "xf.filter",
+                            "properties": { "predicate": "amt > 5" } } }
+            ],
+            "edges": [{ "id": "e", "source": "s", "target": "f" }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(dir.join("tests").join("orders.test.json"), suite.to_string()).unwrap();
+}
+
+fn generated_input() -> Value {
+    json!({ "generate": { "rowCount": 200, "columns": [
+        { "name": "id", "generator": "sequence" },
+        { "name": "amt", "generator": "integer", "min": 1, "max": 10 },
+    ] } })
+}
+
+/// The Tests tab's run: a source swapped for generated rows, in a workspace whose pipelines
+/// live in their own folder, so `${workspace}` has to come from the flag.
+#[test]
+fn a_case_runs_on_generated_rows_in_a_workspace_the_editor_laid_out() {
+    let Some(_) = duckdb() else {
+        eprintln!("skipping: set DUCKLE_DUCKDB_BIN to run");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    editor_workspace(dir, json!({
+        "pipeline": "../pipelines/orders.json",
+        "cases": [
+            { "name": "only large amounts", "given": { "s": generated_input() },
+              "expect": { "node": "f", "sql": "SELECT min(amt) > 5 AND count(*) > 0 FROM {rows}", "unique": ["id"] } },
+            { "name": "the workspace is the workspace", "expect": { "node": "r", "rowCount": 2 } },
+        ],
+    }));
+    let suite = dir.join("tests").join("orders.test.json");
+    let suite = suite.to_string_lossy();
+    let ws = dir.to_string_lossy();
+    let (ok, out) = runner(&["test", "--json", "--workspace", &ws, &suite], dir);
+    assert!(ok, "{out}");
+    let report: Value = serde_json::from_str(out.trim()).expect("one JSON report");
+    assert_eq!(report["passed"], json!(2), "{report}");
+}
+
+#[test]
+fn a_case_can_be_run_by_itself() {
+    let Some(_) = duckdb() else {
+        eprintln!("skipping: set DUCKLE_DUCKDB_BIN to run");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    editor_workspace(dir, json!({
+        "pipeline": "../pipelines/orders.json",
+        "cases": [
+            { "name": "good", "expect": { "node": "r", "rowCount": 2 } },
+            { "name": "bad", "expect": { "node": "r", "rowCount": 3 } },
+        ],
+    }));
+    let suite = dir.join("tests").join("orders.test.json");
+    let suite = suite.to_string_lossy();
+    let ws = dir.to_string_lossy();
+    let (ok, out) = runner(&["test", "--json", "--workspace", &ws, "--case", "good", &suite], dir);
+    assert!(ok, "{out}");
+    let report: Value = serde_json::from_str(out.trim()).unwrap();
+    assert_eq!(report["results"].as_array().map(Vec::len), Some(1), "{report}");
+    let (ok, _) = runner(&["test", "--json", "--workspace", &ws, "--case", "bad", &suite], dir);
+    assert!(!ok, "the failing case was not the one that ran");
+    // A name that matches nothing is a mistake, and passing would hide it.
+    let (ok, out) = runner(&["test", "--json", "--workspace", &ws, "--case", "typo", &suite], dir);
+    assert!(!ok, "{out}");
+    assert!(out.contains("typo"), "{out}");
+}
+
+/// A pipeline's own assertions are part of what a test checks, even one the run was told
+/// to carry on past.
+#[test]
+fn a_failed_assertion_in_the_pipeline_fails_the_case() {
+    let Some(_) = duckdb() else {
+        eprintln!("skipping: set DUCKLE_DUCKDB_BIN to run");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    std::fs::write(dir.join("rows.csv"), "id,amt\n1,5\n2,7\n").unwrap();
+    std::fs::write(
+        dir.join("p.json"),
+        json!({
+            "nodes": [
+                { "id": "s", "position": { "x": 0, "y": 0 },
+                  "data": { "label": "S", "componentId": "src.csv",
+                            "properties": { "path": "rows.csv", "hasHeader": true } } },
+                { "id": "a", "position": { "x": 1, "y": 0 },
+                  "data": { "label": "A", "componentId": "qa.assert",
+                            "properties": { "description": "small amounts", "expression": "amt < 6", "onFail": "continue" } } }
+            ],
+            "edges": [{ "id": "e", "source": "s", "target": "a" }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("p.test.json"),
+        json!({ "pipeline": "p.json", "cases": [{ "name": "c", "expect": { "node": "a", "rowCount": 2 } }] }).to_string(),
+    )
+    .unwrap();
+    let (ok, out) = runner(&["test", "p.test.json"], dir);
+    assert!(!ok, "{out}");
+    assert!(out.contains("small amounts"), "{out}");
+}
+
+#[test]
+fn an_input_that_is_not_text_or_generated_rows_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path();
+    editor_workspace(dir, json!({
+        "pipeline": "../pipelines/orders.json",
+        "cases": [{ "name": "c", "given": { "s": { "rows": 5 } }, "expect": { "node": "r", "rowCount": 2 } }],
+    }));
+    let suite = dir.join("tests").join("orders.test.json");
+    let (ok, out) = runner(&["test", &suite.to_string_lossy()], dir);
+    assert!(!ok, "{out}");
+    assert!(out.contains("generate"), "{out}");
+}

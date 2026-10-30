@@ -696,9 +696,11 @@ impl StageTap {
                 })
             }
             // How the run ended reaches the store from the ledger, which also
-            // closes the stages it never got to.
+            // closes the stages it never got to. An assertion's node still
+            // reports through StageFinished.
             crate::PipelineEvent::Cancelled
             | crate::PipelineEvent::Log { .. }
+            | crate::PipelineEvent::Assertion { .. }
             | crate::PipelineEvent::Finished { .. } => None,
         }
     }

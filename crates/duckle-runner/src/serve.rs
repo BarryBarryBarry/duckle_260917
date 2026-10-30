@@ -1132,6 +1132,44 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
                 None => respond_err("400 Bad Request", "missing or invalid pipelineId"),
             }
         }
+        // The Tests tab, on the same file `duckle test` runs. The workspace is this
+        // server's, as for every command here.
+        "tests_load" | "tests_save" | "tests_run" => {
+            use duckle_duckdb_engine::testsuite;
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let Some(id) = args.get("pipelineId").and_then(Value::as_str) else {
+                return respond_err("400 Bad Request", "missing pipelineId");
+            };
+            let answer = match cmd {
+                "tests_load" => testsuite::load(&state.workspace, id).map(|s| json!(s)),
+                "tests_save" => testsuite::save(&state.workspace, id, &args["suite"]).map(|()| json!({ "ok": true })),
+                _ => std::env::current_exe().map_err(|e| e.to_string()).and_then(|runner| {
+                    // A test run is a pipeline run, so it waits its turn in that pipeline's
+                    // pool. A pipeline that cannot be read has no pool, and the run below
+                    // says what is wrong with it.
+                    testsuite::path(&state.workspace, id)?;
+                    let file = state.workspace.join("pipelines").join(format!("{id}.json"));
+                    let resource_pool = std::fs::read_to_string(file)
+                        .ok()
+                        .and_then(|t| serde_json::from_str::<PipelineDoc>(strip_bom(&t)).ok())
+                        .map(|doc| doc.resource_pool)
+                        .unwrap_or_default();
+                    let (_guard, _pool, _queued) = state.run_lock.acquire(&resource_pool);
+                    testsuite::run(
+                        &runner,
+                        &state.duckdb,
+                        &state.workspace,
+                        id,
+                        args.get("record").and_then(Value::as_bool).unwrap_or(false),
+                        args.get("caseName").and_then(Value::as_str),
+                    )
+                }),
+            };
+            match answer {
+                Ok(v) => respond_json(&v),
+                Err(e) => respond_err("400 Bad Request", &e),
+            }
+        }
         "watermark_list" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
             match editor_state_name(&state.workspace, &args) {
@@ -2236,7 +2274,7 @@ fn api_backfill_action(state: &Arc<State>, req: &Request) -> Reply {
             if n == 0 {
                 return respond_json(&json!({ "retried": 0, "id": id }));
             }
-            plan.pid = backfill::this_process_owns(&plan.id);
+            plan.pid = backfill::this_process_owns(&ws, &plan.id);
             if let Err(e) = backfill::save(&ws, &plan) {
                 return respond_err("500 Internal Server Error", &e);
             }
@@ -3055,8 +3093,20 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
                     },
                 );
             }
+            // A request for this run can land on another server behind a load balancer. The
+            // run's own receipt is what that server reads, and it has to exist before the
+            // caller hears of this id, not whenever the run gets round to writing one.
+            duckle_duckdb_engine::retry::accept(
+                &state.workspace,
+                &run_id,
+                &pipeline_id,
+                &path.to_string_lossy(),
+            );
             let bg = Arc::clone(state);
             let rid = run_id.clone();
+            let watching = Arc::clone(state);
+            let watched = run_id.clone();
+            std::thread::spawn(move || watch_for_remote_cancel(&watching, &watched));
             std::thread::spawn(move || {
                 // Moved in so it is held for the whole run and released by
                 // dropping, however the run ends - the kernel owns the lock, so
@@ -3065,6 +3115,10 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
                 let outcome = outcome_or_panic_error("the run", || {
                     execute_one_with(&bg, &file, "manual", &sourced(&params, "run input"), Some(engine), Some(&rid))
                 });
+                // A run that never started left only what `accept` wrote.
+                if let Err(e) = &outcome {
+                    duckle_duckdb_engine::retry::abandon(&bg.workspace, &rid, e);
+                }
                 if let Ok(mut runs) = bg.runs.lock() {
                     let pid = runs.get(&rid).map(|r| r.pipeline_id.clone()).unwrap_or_default();
                     if let Some(live) = runs.get_mut(&rid) {
@@ -3108,6 +3162,8 @@ fn dispatch_console(req: &Request, state: &Arc<State>, who: console_auth::Identi
                         (live.pipeline_id.clone(), live.finished.is_some())
                     })
                 });
+                // Not one of this server's: the server that has it stops it.
+                let hit = hit.or_else(|| cancel_elsewhere(state, rid));
                 match hit {
                     Some((pid, done)) => respond_json(&json!({
                         "runId": rid,
@@ -3317,7 +3373,7 @@ fn api_pipelines(state: &State) -> Value {
                 .cloned()
                 .unwrap_or(json!({ "enabled": false, "intervalSeconds": 0, "intervalMinutes": 0 }));
             let running = state.running.lock().map(|s| s.contains(&id)).unwrap_or(false);
-            let next_at = next_run_at(&sched, last.as_ref().map(|r| r.at.as_str()));
+            let next_at = next_run_at(&sched);
             let name = names
                 .get(&id)
                 .cloned()
@@ -3410,6 +3466,19 @@ fn run_status(state: &State, run_id: &str) -> Option<Value> {
             "startedAt": started_at,
         }));
     }
+    // Another server's run, still going or cut short. Its receipt says which, and a run that
+    // finished is answered below, where the history has its figures.
+    let receipt = plain_file_name(run_id)
+        .then(|| duckle_duckdb_engine::retry::load(&state.workspace, run_id).ok())
+        .flatten();
+    if let Some(r) = receipt.as_ref().filter(|r| r.state != duckle_duckdb_engine::retry::FINISHED) {
+        return Some(json!({
+            "runId": run_id,
+            "pipelineId": receipt_pipeline(r),
+            "state": r.state,
+            "startedAt": r.at,
+        }));
+    }
     for (_path, id, _v) in discover_pipelines(&state.workspace) {
         for r in load_run_history(&state.workspace, &id) {
             if r.run_id.as_deref() == Some(run_id) {
@@ -3426,7 +3495,51 @@ fn run_status(state: &State, run_id: &str) -> Option<Value> {
             }
         }
     }
-    None
+    // Finished without a history entry: it never got as far as starting.
+    receipt.map(|r| {
+        json!({
+            "runId": run_id,
+            "pipelineId": receipt_pipeline(&r),
+            "state": r.state,
+            "startedAt": r.at,
+            "status": r.status,
+        })
+    })
+}
+
+/// The pipeline a receipt belongs to, as the rest of this API names it.
+fn receipt_pipeline(r: &duckle_duckdb_engine::retry::RunReceipt) -> String {
+    Path::new(&r.pipeline_path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| r.pipeline_name.clone())
+}
+
+/// Pass a cancel on to the server running this run: (pipeline, whether it has ended). The
+/// id comes off a query string, so one that is not a plain file name names no file.
+fn cancel_elsewhere(state: &State, run_id: &str) -> Option<(String, bool)> {
+    use duckle_duckdb_engine::retry;
+    let r = plain_file_name(run_id).then(|| retry::load(&state.workspace, run_id).ok()).flatten()?;
+    let going = r.state == retry::QUEUED || r.state == retry::RUNNING;
+    if going {
+        if let Err(e) = retry::request_cancel(&state.workspace, run_id) {
+            eprintln!("duckle-runner: {run_id}: could not ask for it to stop: {e}");
+        }
+    }
+    Some((receipt_pipeline(&r), !going))
+}
+
+/// Stop this run if another server is asked to. See `retry::request_cancel`.
+fn watch_for_remote_cancel(state: &State, run_id: &str) {
+    loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let Ok(runs) = state.runs.lock() else { return };
+        let Some(live) = runs.get(run_id).filter(|r| r.finished.is_none()) else { return };
+        if duckle_duckdb_engine::retry::cancel_requested(&state.workspace, run_id) {
+            live.engine.request_cancel();
+            return;
+        }
+    }
 }
 
 /// Keep the in-memory run map bounded. Only FINISHED runs are dropped: a live
@@ -3839,10 +3952,10 @@ use duckle_duckdb_engine::cronzone::normalize_cron;
 
 /// The next time an enabled schedule is expected to fire, as an RFC3339 string
 /// for the console to display beside "last run" (discussion #155). Cron uses the
-/// exact next occurrence in local time; interval mode estimates from the last
-/// run (or now) rolled forward by whole intervals. Returns None when the
-/// schedule is disabled or has neither a cron nor a positive interval.
-fn next_run_at(sched: &Value, last_at: Option<&str>) -> Option<String> {
+/// exact next occurrence in local time; an interval the next instant on its grid.
+/// Returns None when the schedule is disabled or has neither a cron nor a
+/// positive interval.
+fn next_run_at(sched: &Value) -> Option<String> {
     if !sched.get("enabled").and_then(Value::as_bool).unwrap_or(false) {
         return None;
     }
@@ -3872,18 +3985,7 @@ fn next_run_at(sched: &Value, last_at: Option<&str>) -> Option<String> {
     if interval == 0 {
         return None;
     }
-    let step = chrono::Duration::seconds(interval as i64);
-    let now = chrono::Utc::now();
-    let mut next = last_at
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .map(|dt| dt.with_timezone(&chrono::Utc) + step)
-        .unwrap_or(now + step);
-    // A steady interval schedule fires every `interval`; roll past any missed
-    // slots so the shown time is the next one still in the future.
-    while next <= now {
-        next += step;
-    }
-    Some(next.to_rfc3339())
+    Some(duckle_duckdb_engine::occurrences::next_interval_slot(chrono::Utc::now(), interval).to_rfc3339())
 }
 
 fn save_schedule(state: &State, body: &Value) -> Result<Value, String> {
@@ -4200,6 +4302,14 @@ fn delivery_params(
 /// which is the state that otherwise looks identical to "never triggered".
 fn pump_deliveries(state: &State) {
     use duckle_duckdb_engine::subscribe::{self, DeliveryState};
+    // One process pumps a workspace at a time. Two would read the same pending deliveries
+    // and each run the consumer, and the run lock only stops that overlapping. Held for the
+    // whole pump, so a second server takes over on the tick after this one dies.
+    let Some(_turn) =
+        duckle_duckdb_engine::runlock::try_acquire_nested(&state.workspace, "duty", "deliveries")
+    else {
+        return;
+    };
     // An outcome is written to the ledger, or held until it can be. The write
     // used to be ignored, and a delivery whose consumer HAD run but was never
     // written down still looked owed, so every tick ran the consumer again: a
@@ -4650,12 +4760,54 @@ fn cron_decision(
 }
 
 
+/// Take this occurrence for this process, or leave it to whichever got there first.
+///
+/// Claimed under the store's own id, which is what the desktop scheduler claims under, so
+/// a laptop and a server on one workspace agree as well. A claim that cannot be made at all
+/// fires anyway: bookkeeping that failed must not become a silent outage of every schedule.
+fn take_occurrence(
+    state: &State,
+    schedule_id: &str,
+    cfg: &Value,
+    due: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let key = cfg.get("id").and_then(Value::as_str).unwrap_or(schedule_id);
+    duckle_duckdb_engine::occurrences::claim(&state.workspace, key, due).unwrap_or_else(|e| {
+        eprintln!("duckle-runner: schedule {schedule_id}: occurrence not claimed ({e}); firing anyway");
+        true
+    })
+}
+
+/// How long a live scheduler can go without ticking. See [`scheduler_stall`].
+fn stall_allowance(tick: Duration) -> u64 {
+    (tick.as_millis() as u64).saturating_mul(5).max(60_000)
+}
+
+/// Up to where a tick may decide what a schedule missed.
+///
+/// An occurrence that is merely recent may belong to another scheduler that has not ticked
+/// yet: deciding it here, under a misfire policy of skip, would claim it and record it as
+/// skipped while that scheduler was about to run it. So only an occurrence older than a live
+/// scheduler can be counted as missed. A restart comes back to a fresh one a minute later.
+///
+/// And never the occurrence this tick has armed, which is this tick's to fire. The walk ran
+/// past it, so a schedule on time was recorded as overdue on every firing as well as fired.
+fn catch_up_horizon(
+    now: chrono::DateTime<chrono::Utc>,
+    tick: Duration,
+    armed: Option<chrono::DateTime<chrono::Utc>>,
+) -> chrono::DateTime<chrono::Utc> {
+    let settled = now - chrono::Duration::milliseconds(stall_allowance(tick) as i64);
+    armed.map_or(settled, |at| settled.min(at - chrono::Duration::milliseconds(1)))
+}
+
 /// #296: run and record whatever this schedule missed.
 ///
 /// The policy decides; this only carries it out. Every overdue occurrence gets
 /// a recorded outcome whether or not it runs, which is AC1 - "it was skipped"
 /// and "nothing happened" are different states and a moved pointer renders them
 /// the same.
+#[allow(clippy::too_many_arguments)]
 fn catch_up_schedule(
     state: &Arc<State>,
     in_flight: &Arc<Mutex<std::collections::HashSet<String>>>,
@@ -4664,6 +4816,7 @@ fn catch_up_schedule(
     zone: &duckle_duckdb_engine::cronzone::Zone,
     exclude: &duckle_duckdb_engine::cronzone::Exclusions,
     now: chrono::DateTime<chrono::Utc>,
+    armed: Option<chrono::DateTime<chrono::Utc>>,
     pipes: &HashMap<String, PathBuf>,
 ) {
     use duckle_duckdb_engine::occurrences::{self, Decision};
@@ -4678,8 +4831,9 @@ fn catch_up_schedule(
         .cloned()
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
+    let horizon = catch_up_horizon(now, state.tick_interval, armed);
     let overdue = match occurrences::catch_up(
-        &state.workspace, schedule_id, expr, zone, exclude, misfire, &bounds, now,
+        &state.workspace, schedule_id, expr, zone, exclude, misfire, &bounds, horizon,
     ) {
         Ok(o) if o.is_empty() => return,
         Ok(o) => o,
@@ -4698,6 +4852,9 @@ fn catch_up_schedule(
             to_run.push(occ);
             continue;
         }
+        if !take_occurrence(state, schedule_id, cfg, occ.at) {
+            continue;
+        }
         // Nothing has to run for these, so record them here and be done: an
         // occurrence the policy skipped is decided the moment it is decided.
         let entry =
@@ -4709,6 +4866,18 @@ fn catch_up_schedule(
     if to_run.is_empty() {
         return;
     }
+    // One scheduler catches a schedule up at a time, across processes. Taking occurrences
+    // one by one is not enough: a second scheduler would take the next one while the first
+    // was still running this one, and the run lock would then turn it away, already claimed.
+    // Released when this is over, or by the OS if the holder dies, so the rest stay overdue
+    // for whoever ticks next.
+    let Some(turn) = duckle_duckdb_engine::runlock::try_acquire_nested(
+        &state.workspace,
+        "catch-up",
+        schedule_id,
+    ) else {
+        return;
+    };
     // #329: ONE thread for the whole catch-up, not one per occurrence.
     //
     // Per occurrence looks right and is not: `dispatch` refuses a schedule that
@@ -4735,8 +4904,12 @@ fn catch_up_schedule(
     let (id, cfg, pipes) = (schedule_id.to_string(), cfg.clone(), pipes.clone());
     let zone_name = zone_name.map(str::to_string);
     std::thread::spawn(move || {
+        let _turn = turn;
         let _clear = InFlight::hold(in_flight, id.clone());
         for occ in to_run {
+            if !take_occurrence(&state, &id, &cfg, occ.at) {
+                continue;
+            }
             // Recorded BEFORE its run, so a crash mid-catch-up leaves that
             // occurrence decided rather than due again - the same ordering the
             // ledger uses everywhere else. The ones after it are untouched, so
@@ -5017,7 +5190,7 @@ fn unix_millis() -> u64 {
 /// hung stops stamping altogether, which is what this is for: from the outside
 /// it is otherwise indistinguishable from a night on which nothing was due.
 fn scheduler_stall(last_tick_ms: u64, now_ms: u64, tick: Duration) -> Option<String> {
-    let allowed = (tick.as_millis() as u64).saturating_mul(5).max(60_000);
+    let allowed = stall_allowance(tick);
     let since = now_ms.saturating_sub(last_tick_ms);
     (since > allowed).then(|| {
         format!(
@@ -5028,9 +5201,33 @@ fn scheduler_stall(last_tick_ms: u64, now_ms: u64, tick: Duration) -> Option<Str
     })
 }
 
+/// What a server looks after once a minute, off the scheduler's thread.
+fn minute_sweep(workspace: &Path) {
+    // Another server sharing this workspace can die at any moment, and what it was doing
+    // would otherwise read as `running` until something here restarted.
+    duckle_duckdb_engine::recovery::reclaim_abandoned(workspace);
+    let (assets, sent) = duckle_duckdb_engine::sla::check_and_alert(workspace, chrono::Utc::now());
+    let stale: Vec<&str> = assets
+        .iter()
+        .filter(|a| a.state == duckle_duckdb_engine::sla::State::Stale)
+        .map(|a| a.asset.as_str())
+        .collect();
+    if !stale.is_empty() {
+        eprintln!(
+            "duckle: {} asset(s) past their freshness limit ({} alert(s) sent): {}",
+            stale.len(),
+            sent,
+            stale.join(", ")
+        );
+    }
+}
+
 fn spawn_scheduler(state: Arc<State>) {
     std::thread::spawn(move || {
-        let mut last_fired: HashMap<String, Instant> = HashMap::new();
+        // The last grid instant each interval schedule was seen at. See
+        // occurrences::interval_slot. In memory because it only arms: what has run is
+        // decided by the claim, which every scheduler on the workspace shares.
+        let mut interval_armed: HashMap<String, chrono::DateTime<chrono::Utc>> = HashMap::new();
         // The armed occurrence AND the expression it came from. See cron_decision.
         // UTC, not Local: the armed instant now comes from the shared
         // evaluator, which resolves the schedule's own zone. Keeping it in the
@@ -5089,23 +5286,7 @@ fn spawn_scheduler(state: Arc<State>) {
                         // Cleared by dropping, so a panic in the sweep does not
                         // wedge the flag and stop freshness for good.
                         let _busy = busy;
-                        let (assets, sent) = duckle_duckdb_engine::sla::check_and_alert(
-                            &ws,
-                            chrono::Utc::now(),
-                        );
-                        let stale: Vec<&str> = assets
-                            .iter()
-                            .filter(|a| a.state == duckle_duckdb_engine::sla::State::Stale)
-                            .map(|a| a.asset.as_str())
-                            .collect();
-                        if !stale.is_empty() {
-                            eprintln!(
-                                "duckle: {} asset(s) past their freshness limit ({} alert(s) sent): {}",
-                                stale.len(),
-                                sent,
-                                stale.join(", ")
-                            );
-                        }
+                        minute_sweep(&ws);
                     });
                 }
             }
@@ -5129,7 +5310,7 @@ fn spawn_scheduler(state: Arc<State>) {
                     let enabled = cfg.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
                     let cron = cfg.get("cron").and_then(|v| v.as_str()).unwrap_or("").trim();
                     if enabled && !cron.is_empty() {
-                        last_fired.remove(id);
+                        interval_armed.remove(id);
                         // Zone and exclusions come off the projection, which
                         // now carries them. Absent means the machine's zone and
                         // no exclusions, which is what every schedule written
@@ -5157,6 +5338,10 @@ fn spawn_scheduler(state: Arc<State>) {
                             }
                             Ok(zone) => {
                                 let now = chrono::Utc::now();
+                                // What was armed IS the occurrence that comes
+                                // due, so it is recorded before the decision
+                                // moves past it. Read out first for that reason.
+                                let due = cron_next.get(id).map(|(_, at)| *at);
                                 // #296: occurrences that came due while nobody
                                 // was listening. Decided over the ledger, so a
                                 // restart measures from what was recorded
@@ -5164,12 +5349,8 @@ fn spawn_scheduler(state: Arc<State>) {
                                 // the window - which is what this loop did,
                                 // because its arming state is in memory.
                                 catch_up_schedule(
-                                    &state, &in_flight, id, cfg, &zone, &exclude, now, &pipes,
+                                    &state, &in_flight, id, cfg, &zone, &exclude, now, due, &pipes,
                                 );
-                                // What was armed IS the occurrence that comes
-                                // due, so it is recorded before the decision
-                                // moves past it. Read out first for that reason.
-                                let due = cron_next.get(id).map(|(_, at)| *at);
                                 let (fire, rearm) = cron_decision(
                                     cron_next.get(id),
                                     cron,
@@ -5177,16 +5358,19 @@ fn spawn_scheduler(state: Arc<State>) {
                                     &exclude,
                                     now,
                                 );
-                                if fire {
-                                    // #296: the occurrence is recorded whether
-                                    // or not anything downstream succeeds. A
-                                    // schedule that fired and a schedule that
-                                    // did not are otherwise the same silence
-                                    // once the tick loop has moved on.
-                                    if let Some(at) = due {
+                                // `fire` only ever comes from something armed.
+                                if let Some(at) = due.filter(|_| fire) {
+                                    // Another scheduler may have got here first, and
+                                    // then this occurrence is already its to run.
+                                    if take_occurrence(&state, id, cfg, at) {
+                                        // #296: the occurrence is recorded whether
+                                        // or not anything downstream succeeds. A
+                                        // schedule that fired and a schedule that
+                                        // did not are otherwise the same silence
+                                        // once the tick loop has moved on.
                                         record_occurrence(&state, id, cfg, at, now);
+                                        dispatch(&state, &in_flight, id, cfg, &pipes);
                                     }
-                                    dispatch(&state, &in_flight, id, cfg, &pipes);
                                 }
                                 match rearm {
                                     Some(next) => {
@@ -5213,26 +5397,15 @@ fn spawn_scheduler(state: Arc<State>) {
                 // 30-second schedule into one that never fires.
                 let seconds = cfg.get("intervalSeconds").and_then(|v| v.as_u64()).unwrap_or(0);
                 if !enabled || seconds == 0 {
-                    last_fired.remove(id);
+                    interval_armed.remove(id);
                     continue;
                 }
-                let interval = Duration::from_secs(seconds);
-                let due = match last_fired.get(id) {
-                    Some(t) => t.elapsed() >= interval,
-                    None => false, // first sighting: start the clock, fire next interval
-                };
-                let now = Instant::now();
-                if last_fired.get(id).is_none() {
-                    last_fired.insert(id.clone(), now);
-                    continue;
-                }
-                if due {
-                    // The clock is re-armed whether or not the pipeline is
-                    // there. It used to be advanced only inside the match, so a
-                    // missing pipeline left this schedule permanently due and it
-                    // re-evaluated on every tick, silently, for as long as the
-                    // process lived.
-                    last_fired.insert(id.clone(), now);
+                let slot = duckle_duckdb_engine::occurrences::interval_slot(chrono::Utc::now(), seconds);
+                // First sighting arms and fires at the next instant on the grid, so a
+                // restart neither fires early nor pushes the schedule back. Re-armed whether
+                // or not the pipeline is there, so a missing one is not due on every tick.
+                let due = interval_armed.insert(id.clone(), slot).is_some_and(|armed| armed < slot);
+                if due && take_occurrence(&state, id, cfg, slot) {
                     dispatch(&state, &in_flight, id, cfg, &pipes);
                 }
             }
@@ -6730,6 +6903,7 @@ mod tests {
             None,
         )
         .unwrap();
+        backfill::released(&plan.id);
         plan.pid = Some(u32::MAX);
         plan.partitions[0].state = State::Running;
         backfill::save(&ws, &plan).unwrap();
@@ -7258,33 +7432,10 @@ mod tests {
     /// even a failing one, leaves a run-history record to count.
     #[test]
     fn a_delivery_that_could_not_be_recorded_is_not_run_again() {
-        use duckle_duckdb_engine::{materialize, subscribe};
+        use duckle_duckdb_engine::subscribe;
         let tmp = tempfile::tempdir().unwrap();
         let ws = tmp.path().canonicalize().unwrap();
-        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
-        std::fs::write(ws.join("pipelines").join("consumer.json"), r#"{"nodes":[],"edges":[]}"#).unwrap();
-        let sub = subscribe::Subscription {
-            id: "s1".into(),
-            pipeline_id: "consumer".into(),
-            assets: vec!["/lake/orders".into()],
-            producer: None,
-            enabled: true,
-            parameters: Default::default(),
-        };
-        std::fs::write(subscribe::store_path(&ws), serde_json::to_string(&vec![sub]).unwrap()).unwrap();
-        let event = materialize::Event {
-            event_id: "mat-nightly-1".into(),
-            pipeline_id: "nightly".into(),
-            run_id: Some("run-1".into()),
-            release_id: None,
-            partition_key: None,
-            trigger: "scheduled".into(),
-            committed_at: "2026-09-17T10:00:00Z".into(),
-            assets: vec!["/lake/orders".into()],
-        };
-        let log = materialize::log_path(&ws);
-        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
-        std::fs::write(&log, format!("{}\n", serde_json::to_string(&event).unwrap())).unwrap();
+        publish_to_a_consumer(&ws);
         // The ledger cannot be written: a directory stands where the file goes.
         std::fs::create_dir_all(subscribe::deliveries_path(&ws)).unwrap();
 
@@ -7302,6 +7453,195 @@ mod tests {
         let recorded = subscribe::deliveries(&ws);
         assert_eq!(recorded.len(), 1, "the delivery never reached the ledger: {recorded:?}");
         assert_eq!(recorded.values().next().unwrap().state, subscribe::DeliveryState::Delivered);
+    }
+
+    /// Two servers read the same pending deliveries, so both would run the consumer, and
+    /// the run lock only stops that overlapping. One pumps at a time, and the other takes
+    /// over when it can.
+    #[test]
+    fn only_one_server_pumps_deliveries_at_a_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        publish_to_a_consumer(&ws);
+        let state = local_state(&ws);
+        let runs = || duckle_duckdb_engine::load_run_history(&ws, "consumer").len();
+
+        let other_server = duckle_duckdb_engine::runlock::try_acquire_nested(&ws, "duty", "deliveries");
+        assert!(other_server.is_some());
+        super::pump_deliveries(&state);
+        assert_eq!(runs(), 0, "a second server pumped alongside the first");
+
+        drop(other_server);
+        super::pump_deliveries(&state);
+        assert_eq!(runs(), 1, "the delivery was never made once the first server had gone");
+    }
+
+    /// A run accepted by one server, asked about and stopped through another, which is what
+    /// a load balancer in front of two of them does to a caller.
+    #[test]
+    fn a_run_on_another_server_can_be_followed_and_stopped() {
+        use duckle_duckdb_engine::retry;
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let (owner, other) = (local_state(&ws), local_state(&ws));
+        let engine = duckle_duckdb_engine::DuckdbEngine::new("duckdb".into());
+        owner.runs.lock().unwrap().insert(
+            "run-1".into(),
+            super::LiveRun {
+                pipeline_id: "daily".into(),
+                started_at: "2026-10-30T12:00:00Z".into(),
+                engine: engine.clone(),
+                finished: None,
+            },
+        );
+        retry::accept(&ws, "run-1", "daily", "pipelines/daily.json");
+
+        let seen = super::run_status(&other, "run-1").expect("the other server has heard of it");
+        assert_eq!(seen["state"], "queued", "{seen}");
+        assert_eq!(seen["pipelineId"], "daily", "{seen}");
+
+        assert_eq!(super::cancel_elsewhere(&other, "run-1"), Some(("daily".to_string(), false)));
+        // Returns once it has seen the request, and a test that hangs here has not.
+        super::watch_for_remote_cancel(&owner, "run-1");
+        assert!(engine.cancel_requested(), "the stop never reached the run");
+
+        // A run that has ended has nothing to stop, and says so.
+        retry::abandon(&ws, "run-1", "the test is over");
+        assert_eq!(super::cancel_elsewhere(&other, "run-1"), Some(("daily".to_string(), true)));
+        assert!(!retry::cancel_requested(&ws, "run-1"), "a finished run left its stop request");
+        assert_eq!(super::run_status(&other, "run-1").unwrap()["state"], "finished");
+        duckle_duckdb_engine::runlock::release_started("run-1");
+    }
+
+    #[test]
+    fn a_run_id_that_is_not_a_file_name_is_nobodys_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = local_state(&tmp.path().canonicalize().unwrap());
+        for id in ["../secrets", "a/b", "..", ""] {
+            assert_eq!(super::cancel_elsewhere(&state, id), None, "{id:?}");
+            assert_eq!(super::run_status(&state, id), None, "{id:?}");
+        }
+    }
+
+    /// A server that dies leaves its runs marked running, and the servers still up are the
+    /// ones to put that right. One still doing its own run is left to get on with it.
+    #[test]
+    fn a_live_server_reclaims_what_a_dead_one_left() {
+        use duckle_duckdb_engine::retry;
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        retry::begin(&ws, "run-ours", "manual", "daily", "/p.json", "hash", None);
+        retry::begin(&ws, "run-theirs", "manual", "daily", "/p.json", "hash", None);
+        let mut theirs = retry::load(&ws, "run-theirs").unwrap();
+        theirs.pid = Some(u32::MAX);
+        retry::write(&ws, &theirs).unwrap();
+        // The process that held this one is gone, which is what lets its witness go.
+        duckle_duckdb_engine::runlock::release_started("run-theirs");
+
+        super::minute_sweep(&ws);
+
+        assert_eq!(retry::load(&ws, "run-theirs").unwrap().state, retry::INTERRUPTED);
+        assert_eq!(retry::load(&ws, "run-ours").unwrap().state, retry::RUNNING);
+        duckle_duckdb_engine::runlock::release_started("run-ours");
+    }
+
+    /// What the console shows as next is when it will fire, not when the last run plus the
+    /// interval would have been.
+    #[test]
+    fn the_console_shows_the_next_instant_on_an_intervals_grid() {
+        let shown = super::next_run_at(&serde_json::json!({ "enabled": true, "intervalSeconds": 300 }))
+            .expect("an enabled interval has a next run");
+        let at = chrono::DateTime::parse_from_rfc3339(&shown).unwrap();
+        assert_eq!(at.timestamp() % 300, 0, "{shown} is off the grid");
+        let wait = at.timestamp() - chrono::Utc::now().timestamp();
+        assert!((0..=300).contains(&wait), "{shown} is {wait}s away");
+    }
+
+    #[test]
+    fn a_tick_leaves_a_recent_occurrence_to_whoever_is_about_to_fire_it() {
+        use chrono::TimeZone;
+        let now = chrono::Utc.with_ymd_and_hms(2026, 10, 30, 12, 0, 0).unwrap();
+        let (tick, fast) = (std::time::Duration::from_secs(15), std::time::Duration::from_secs(2));
+        // Older than a live scheduler can go without ticking, and not a moment newer.
+        assert_eq!(super::catch_up_horizon(now, tick, None), now - chrono::Duration::seconds(75));
+        assert_eq!(super::catch_up_horizon(now, fast, None), now - chrono::Duration::seconds(60));
+        // The occurrence this tick has armed is this tick's to fire, however old it is.
+        let armed = now - chrono::Duration::minutes(10);
+        assert!(super::catch_up_horizon(now, tick, Some(armed)) < armed);
+    }
+
+    /// One occurrence, one decision, with two schedulers reaching it together and the
+    /// ledger not yet written by either.
+    #[test]
+    fn two_schedulers_catching_up_decide_each_occurrence_once() {
+        use duckle_duckdb_engine::occurrences;
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        let anchor = chrono::Utc::now() - chrono::Duration::minutes(6);
+        let seed = duckle_duckdb_engine::cronzone::Occurrence {
+            at: anchor,
+            local: anchor.to_rfc3339(),
+            offset_seconds: 0,
+            adjustment: None,
+        };
+        occurrences::record(
+            &ws,
+            &occurrences::entry("s", &seed, Some("UTC"), occurrences::Decision::Fired, None, &anchor.to_rfc3339()),
+        )
+        .unwrap();
+        let cfg = serde_json::json!({ "id": "s", "cron": "* * * * *", "timezone": "UTC" });
+        let now = chrono::Utc::now();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let racers: Vec<_> = (0..2)
+            .map(|_| {
+                let (state, cfg, barrier) = (local_state(&ws), cfg.clone(), barrier.clone());
+                std::thread::spawn(move || {
+                    let zone = duckle_duckdb_engine::cronzone::resolve_zone(Some("UTC")).unwrap();
+                    let in_flight = std::sync::Arc::new(Mutex::new(std::collections::HashSet::new()));
+                    barrier.wait();
+                    super::catch_up_schedule(
+                        &state, &in_flight, "s", &cfg, &zone, &Default::default(), now, None, &Default::default(),
+                    );
+                })
+            })
+            .collect();
+        for r in racers {
+            r.join().unwrap();
+        }
+        let ids: Vec<String> = occurrences::read(&ws).into_iter().map(|o| o.occurrence_id).collect();
+        let unique: std::collections::BTreeSet<&String> = ids.iter().collect();
+        assert!(ids.len() >= 3, "the test needs occurrences to race over, got {ids:?}");
+        assert_eq!(ids.len(), unique.len(), "an occurrence was decided twice: {ids:?}");
+    }
+
+    /// A workspace where a publication is owed to a subscribed consumer. No DuckDB needed:
+    /// every attempt, even a failing one, leaves a run-history record to count.
+    fn publish_to_a_consumer(ws: &std::path::Path) {
+        use duckle_duckdb_engine::{materialize, subscribe};
+        std::fs::create_dir_all(ws.join("pipelines")).unwrap();
+        std::fs::write(ws.join("pipelines").join("consumer.json"), r#"{"nodes":[],"edges":[]}"#).unwrap();
+        let sub = subscribe::Subscription {
+            id: "s1".into(),
+            pipeline_id: "consumer".into(),
+            assets: vec!["/lake/orders".into()],
+            producer: None,
+            enabled: true,
+            parameters: Default::default(),
+        };
+        std::fs::write(subscribe::store_path(ws), serde_json::to_string(&vec![sub]).unwrap()).unwrap();
+        let event = materialize::Event {
+            event_id: "mat-nightly-1".into(),
+            pipeline_id: "nightly".into(),
+            run_id: Some("run-1".into()),
+            release_id: None,
+            partition_key: None,
+            trigger: "scheduled".into(),
+            committed_at: "2026-09-17T10:00:00Z".into(),
+            assets: vec!["/lake/orders".into()],
+        };
+        let log = materialize::log_path(ws);
+        std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+        std::fs::write(&log, format!("{}\n", serde_json::to_string(&event).unwrap())).unwrap();
     }
 
     /// #259: a web editor run is recorded against the pipeline FILE, so
@@ -7606,7 +7946,7 @@ mod tests {
         let pipes: std::collections::HashMap<String, std::path::PathBuf> =
             [("med".to_string(), pipeline)].into_iter().collect();
 
-        super::catch_up_schedule(&state, &in_flight, "med", &cfg, &zone, &exclude, now, &pipes);
+        super::catch_up_schedule(&state, &in_flight, "med", &cfg, &zone, &exclude, now, None, &pipes);
 
         // The work is handed to a thread, so wait for it rather than joining:
         // a catch-up that never finishes must fail this test, not hang it.
@@ -8447,6 +8787,8 @@ mod tests {
         let mut r = retry::load(ws, "run-live").unwrap();
         r.pid = Some(other.id());
         retry::write(ws, &r).unwrap();
+        // Standing in for a runner from before witnesses, so the pid is what answers.
+        duckle_duckdb_engine::runlock::release_started("run-live");
 
         super::reconcile_at_startup(ws);
         assert_eq!(

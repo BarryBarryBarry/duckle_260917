@@ -1,7 +1,8 @@
 # Design: Scaling Duckle out, on DuckDB 2.0
 
-Status: explored and measured 2026-10-23. Three fixes it turned up are shipped; the
-scheduler claim proposed below is **not built yet**.
+Status: explored and measured 2026-10-23. **Phase 1 is built** (2026-10-30): several `serve`
+replicas can share a workspace on one host. Across hosts the account store is what is left,
+and nothing here has been measured on two real hosts yet.
 
 ## The short version
 
@@ -11,9 +12,11 @@ scheduler claim proposed below is **not built yet**.
   with three workers on one machine (12 items, none run twice); across two hosts it rests
   on the storage's locks, and `scripts/measure-multi-host-batch.sh` has not been run on
   two real hosts yet.
-- **The console does not.** Two `serve` processes on one workspace fire every schedule
-  twice. Measured on one machine, where locks work perfectly. This is the one thing that
-  stops Duckle running as several replicas, and it is a scheduler change, not a DuckDB one.
+- **The console does, on one host.** Two `serve` processes on one workspace used to fire
+  every schedule twice. Each occurrence is now claimed, so it runs once, and any replica can
+  answer for and cancel a run another one is doing. What stops replicas spreading across
+  hosts is the account store, which is SQLite in WAL mode. These were scheduler changes,
+  not DuckDB ones.
 - **DuckDB 2.0 changes the data side, not the scheduling side.** Its asynchronous I/O
   makes object storage fast for small stateless workers (3 to 6 times through Duckle, see
   below), Quack lets many processes write one DuckDB database, and DuckLake with a Postgres
@@ -34,6 +37,13 @@ All on one Windows machine (20 cores), DuckDB 2.0.0 and 1.5.5 CLIs, the debug ru
 | E4 | A DuckLake catalog kept in a Quack-served DuckDB (`ATTACH 'ducklake:quack:host:port'`), 4 writers x 10 commits x 1,000 rows | Correct: 40,000 rows, 43 snapshots. But **27.6 s**, against 2.9 s for one writer's 10 commits, so contention lowered total throughput. A SQLite catalog took 1.8 s for the same 4 x 10. |
 | E5 | 104 MB of a 24M-row Parquet file (196 row groups) from an S3 stand-in that answers every request after 50 ms, through `duckle-runner run`, 2 threads | 1.5.5: **6.4 s**. 2.0: **2.1 s**. 2.0 with `DUCKLE_ASYNC_THREADS=32` and `DUCKLE_READ_AHEAD_DEPTH=32` (`c5cb57a`): **1.1 s**. Depth 0: 6.4 s again. |
 
+E1 again after Phase 1, the same two replicas and schedules for 150 s: the interval ran **8
+times**, once per instant on its grid, the cron ran **3 times**, and the ledger holds **3
+records for 3 occurrences**. Both replicas did work, 7 runs on one and 4 on the other, and
+neither died starting up beside the other. A run accepted by one replica read as `running`
+through the other, where it used to be a `404`, and a cancel sent to the other stopped it in
+1.4 s.
+
 E5's stand-in is a small Python server speaking HEAD and ranged GET, path style; DuckDB's
 own S3 reader and Duckle's `src.minio` drove it. Directly on the CLI with 4 threads, 2.0
 kept 16 requests in flight to 1.5.5's 4 (1.05 s against 3.16 s), and `read_ahead_depth=64`
@@ -46,16 +56,18 @@ What two processes on one workspace share, and what keeps them from tripping ove
 
 | State | Where | Guard between processes | Safe with two replicas? |
 |---|---|---|---|
-| When a schedule is due (`serve`) | In memory: `last_fired`, `cron_next` (`crates/duckle-runner/src/serve.rs:4937-4944`), decided at 5076-5094 and 5114-5141 | None | **No.** E1. |
-| When a schedule is due (desktop) | In memory; `claim_due` picks due schedules from this process's copy, then writes the claim (`crates/scheduler/src/lib.rs:915-962`) | The write re-reads the store, the decision does not | **No**, same race |
-| Occurrence ledger | `.duckle/occurrences.ndjson`, deterministic id per (schedule, instant) (`crates/duckdb-engine/src/occurrences.rs:90-115`) | Append-only; written best-effort after the decision (`serve.rs:4672-4697`), read only on catch-up | Records both firings, prevents neither |
+| When a schedule is due (`serve`) | Each process works it out, and takes it with `occurrences::claim` | `.duckle/claims/`, one claimed-through instant per schedule, written under the store lock | Yes. E1 again |
+| When a schedule is due (desktop) | The same claim, in `claim_due`, under the schedule's own id | The same | Yes, and a laptop and a server agree too |
+| Occurrence ledger | `.duckle/occurrences.ndjson`, deterministic id per (schedule, instant) (`crates/duckdb-engine/src/occurrences.rs`) | Written by whoever won the claim | Yes: one record per occurrence |
+| Catching up a schedule | Decided over the ledger | One replica at a time, under a lock held for the whole catch-up | Yes |
+| Publications owed to subscribers | `pump_deliveries`, from the delivery ledger | One replica at a time, under a lock held for the pump | Yes |
 | A pipeline running | `.duckle/locks/`, an OS advisory lock (`crates/scheduler/src/lib.rs:153-162`, `crates/duckdb-engine/src/runlock.rs`) | Exclusive while held | Stops two runs **overlapping**, not a second run after the first |
 | Run history | `runs/<pipeline>.json` (`crates/duckdb-engine/src/history.rs:197-222`) | `lock_store`, read-modify-write under it | Yes |
 | Schedules | `schedules.json`, `schedules::update` | Lock, re-read, apply, rename | Yes |
-| Accepted async runs | In memory (`serve.rs:226-230`); `run_status` falls back to run history for finished runs only (`serve.rs:3282-3334`); cancel looks only in memory (`serve.rs:3007-3027`) | None | **No.** Behind a load balancer, a queued or running run is `404` on the other replica, and cancel only works on the one that took it |
-| Accounts, sessions, API keys | `.duckle/console.db`, SQLite in WAL mode (`crates/duckle-runner/src/auth_store.rs:85-115`) | SQLite locking | One host: yes, since `f29d613`. Across hosts: **no**, because SQLite's WAL mode needs every process on one host |
+| Accepted async runs | The run's receipt, written before the caller hears its id (`retry::accept`) and read by `run_status`; a cancel for another replica's run leaves a flag beside the receipt and the owner polls for it | Receipts are written temp-then-rename | Yes |
+| Accounts, sessions, API keys | `.duckle/console.db`, SQLite in WAL mode (`crates/duckle-runner/src/auth_store.rs`) | SQLite locking | One host: yes, since `f29d613`. Across hosts: **no**, because SQLite's WAL mode needs every process on one host. This is what is left |
 | Queued batch items | `batches/`, claimed with `try_acquire_nested` (`runlock.rs:288`), ledger written after success | Exclusive lock per item; `work.rs:85` refuses storage whose locks do not exclude | Yes, at least once, on lock-capable storage |
-| "Is that run still alive" | A pid, judged against this machine's processes (`runlock.rs:233-240`) | None across hosts | **No** across hosts (#360): a live run on another machine reads as dead |
+| "Is that run still alive" | A witness lock held for as long as the work lasts (`runlock::owner_alive`), with the pid only for a record older than witnesses | The OS lets go when the holder dies, on any host | Yes, on storage whose locks work (#360) |
 | Concurrent runs | `RunGate`, per process (`serve.rs:119-139`) | Per replica | Yes. N replicas is N times `DUCKLE_MAX_CONCURRENT_RUNS`, which is the point |
 | An upsert's staging table | In the TARGET Postgres or MySQL database (`crates/duckdb-engine/src/connectors.rs`, `run_upsert`) | Named per execution since `a610577` | Yes since then. Before, it was named after the upstream node alone, so concurrent upserts whose upstream nodes shared an id (any two workers running one child pipeline) emptied each other's staging rows and reported ok |
 
@@ -86,46 +98,61 @@ DuckDB-file catalog on its first write, after which 1.x cannot attach it.
 big for a machine goes to pushdown, or is split by Duckle into tasks (`ctl.foreach` with
 `dispatch: "queue"`).
 
-## Proposed: claim each occurrence exactly once
+## Built: each occurrence is claimed exactly once
 
-The scheduler already knows what an occurrence is. The fix is to claim it, atomically and
-before dispatch, so that only the replica that wins runs it.
+The scheduler already knew what an occurrence is. It is now claimed, atomically and before
+dispatch, and only the replica that wins runs it.
 
-1. **The key.** For cron, `occurrences::occurrence_id(schedule, due)`, which `serve` already
-   computes for the ledger. For an interval, there is no shared instant today: `serve`
-   counts from when each process first saw the schedule (`serve.rs:5124-5131`). It needs one,
-   either a grid on wall-clock time (`floor(now / seconds)`) or the last recorded
-   occurrence plus the interval. The grid is simpler and makes the firing times
-   predictable, but it moves when the first run of a new schedule happens, which is a
-   visible change.
-2. **The claim.** Create `.duckle/occurrences/claims/<id>` with `create_new`, an exclusive
-   create, which local disk guarantees and which NFSv4 (EFS) and SMB (Azure Files) offer
-   as a protocol operation. That is the same kind of storage `duckle-runner work` already
-   requires, and the two-host script is where to prove it. The winner records `fired` and
-   dispatches. A loser skips without a word, because skipping is the correct outcome.
-3. **Both schedulers.** `serve`'s tick loop and the desktop scheduler's `claim_due` take the
-   same claim, so a laptop and a server on one workspace stop doubling up too.
-4. **Later, a different store.** The same claim maps onto `INSERT ... ON CONFLICT DO
-   NOTHING` in Postgres, a conditional `UPDATE` over Quack (E3), or a `PUT` with
-   `If-None-Match: *` on object storage. That is the step that removes the shared
-   filesystem, and the first version does not need it.
+1. **The key.** A cron occurrence is its instant. An interval had no shared instant, because
+   `serve` counted from when each process first saw the schedule, so an interval now runs on
+   a grid of wall-clock time: `floor(now / seconds)`, in UTC. This changes when every
+   interval schedule fires, on one console as much as on several: every 15 minutes means
+   :00, :15, :30 and :45, and every 24 hours means midnight UTC. The other choice was the
+   last recorded occurrence plus the interval, which keeps today's rhythm and has to read
+   shared state on every tick. The grid is simpler and the times are predictable.
+2. **The claim.** `occurrences::claim` keeps one instant per schedule, "claimed through",
+   and an occurrence at or before it is taken. The proposal here was one file per occurrence
+   made with an exclusive create. That would have left half a million files a year for a
+   minutely schedule, and pruning them brings back the race it was meant to remove.
+   Occurrences come in order, so one instant says everything, and a replica whose clock runs
+   behind cannot take what a faster one already ran. It goes under the store lock, which
+   asks of the storage what `duckle-runner work` already asks. If a claim cannot be made at
+   all the schedule fires anyway: a full disk must not silently stop every schedule.
+3. **Both schedulers.** `serve`'s tick and the desktop scheduler's `claim_due` take the same
+   claim under the schedule's id, so a laptop and a server on one workspace agree too.
+4. **Catching up, and deliveries.** Taking occurrences one at a time is not enough for these.
+   A second replica would take the next overdue occurrence while the first was still running
+   this one, and the run lock would then refuse it, already claimed. So one replica catches
+   a schedule up, and one pumps deliveries, each under a lock held for the whole job. The OS
+   lets go if that replica dies, and the work stays owed to the next tick. Catch-up also
+   leaves anything younger than a live scheduler's longest gap alone, so a replica starting
+   up does not record as skipped an occurrence another replica is about to run. One cost: a
+   schedule more frequent than that gap can lose an occurrence missed just before a restart.
+5. **Later, a different store.** The same claim maps onto a conditional `UPDATE` in Postgres
+   or over Quack (E3), or a `PUT` with `If-Match` on object storage. That is the step that
+   removes the shared filesystem, and this version does not need it.
 
-What several replicas need beyond the claim:
+Beside the claim:
 
-- **Run status that any replica can answer.** Write the accepted run to disk when it is
-  accepted, not only when it finishes, and let cancel reach the owning replica through a
-  flag it polls. Or route by run id at the load balancer.
-- **Liveness that knows about hosts** (#360). Record the host with the pid and judge only
-  this host's records; a record from another host is left alone and reported as theirs.
-- **The account store on one host, or in Postgres.** SQLite in WAL mode is not safe across
-  machines on network storage.
+- **Run status that any replica can answer.** Run receipts already said queued, running or
+  interrupted on disk, so a replica now reads them. The receipt is written before the caller
+  hears the run id, and a cancel for another replica's run leaves a flag the owner polls.
+- **Liveness that knows about hosts** (#360). Not by recording the host, which is what this
+  document proposed: a replaced container has a new hostname, so its dead runs would have
+  stayed `running` for ever. The owner holds a witness lock for as long as the work lasts. A
+  held witness means alive, on any host. A free one means the owner has gone, whatever has
+  that pid now, which covers a container's PID 1 as well. There is no heartbeat to tune. A
+  server now checks once a minute as well as at start, so what a dead replica was doing stops
+  reading as `running` without anything having to restart: measured at 56 s.
+- **Still open: the account store.** SQLite in WAL mode is not safe across machines on
+  network storage, and every `serve` opens it. That is why replicas stay on one host for now.
 
 ## Plan
 
 | Phase | Scope | Proves it |
 |---|---|---|
-| 1 | Occurrence claims in both schedulers; durable async run status; host-aware liveness | E1 again: one run per occurrence with two replicas; then `scripts/measure-multi-host-batch.sh` across two real hosts |
-| 2 | Stateless workers on object storage: scheduled runs handed to the worker queue, sinks in DuckLake on Postgres or a Quack-served database, the async settings sized for small workers | A worker fleet on S3 with no shared disk for data |
+| 1, **built** | Occurrence claims in both schedulers; durable async run status; host-aware liveness | E1 again: one run per occurrence with two replicas, done. `scripts/measure-multi-host-batch.sh` across two real hosts is **not done** |
+| 2 | The account store off the workspace, so replicas can cross hosts. Stateless workers on object storage: scheduled runs handed to the worker queue, sinks in DuckLake on Postgres or a Quack-served database, the async settings sized for small workers | Two replicas on two hosts, and a worker fleet on S3 with no shared disk for data |
 | 3 | No shared filesystem at all: claims, ledgers and run records in Postgres, or on object storage with conditional writes | Replicas with nothing mounted in common |
 
 ## Shipped while exploring

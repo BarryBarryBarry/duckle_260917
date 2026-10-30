@@ -7,6 +7,7 @@ import type { Column } from './pipeline-types';
 import type { Edge, Node } from '@xyflow/react';
 import type { DuckleNodeData } from './pipeline-types';
 import type { PipelineRunFields } from './run-resolve';
+import type { CaseResult, TestSuite } from './test-cases';
 
 /**
  * #317: what a run carries besides its graph - the pipeline's own top-level
@@ -155,6 +156,7 @@ export type PipelineEvent =
       }
     | { type: 'cancelled' }
     | { type: 'log'; node_id: string; level: 'info' | 'warn' | 'error'; message: string }
+    | { type: 'assertion'; node_id: string; description: string; passed: boolean; detail: string }
     | { type: 'finished'; status: 'ok' | 'error' | 'cancelled'; duration_ms: number };
 
 /**
@@ -577,6 +579,35 @@ export async function workspaceCatalogInspect(
     asset: string,
 ): Promise<string[]> {
     return await invoke<string[]>('workspace_catalog_inspect', { workspace, asset });
+}
+
+// ---- Pipeline tests: tests/<id>.test.json, the file `duckle test` runs ---
+
+export type TestReport = {
+    results: CaseResult[];
+    /** The suite as it now stands on disk, when the run recorded expected rows. */
+    suite?: TestSuite | null;
+};
+
+export async function testsLoad(workspacePath: string, pipelineId: string): Promise<TestSuite | null> {
+    return await invoke<TestSuite | null>('tests_load', { workspacePath, pipelineId });
+}
+
+export async function testsSave(workspacePath: string, pipelineId: string, suite: TestSuite): Promise<void> {
+    await invoke('tests_save', { workspacePath, pipelineId, suite });
+}
+
+export async function testsRun(
+    workspacePath: string,
+    pipelineId: string,
+    options: { record?: boolean; caseName?: string },
+): Promise<TestReport> {
+    return await invoke<TestReport>('tests_run', {
+        workspacePath,
+        pipelineId,
+        record: options.record ?? false,
+        caseName: options.caseName ?? null,
+    });
 }
 
 export async function runHistory(

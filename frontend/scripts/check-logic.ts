@@ -40,6 +40,8 @@ import {
     toLocalInput,
     totalPages,
 } from '../src/workflow-ui/run-metrics-format';
+import { placeTip } from '../src/tour-place';
+import { caseProblem, cleaned, dummyInput, guessGenerator, listOf, newCase, newSuite } from '../src/test-cases';
 import {
     buildBundle,
     cancelPipeline,
@@ -828,7 +830,7 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     check('save: a refused write is not reported as saved', refused === false, 'reported saved');
 
     const app = readFileSync(resolve(__FRONTEND_DIR__, 'src/App.tsx'), 'utf8');
-    const start = app.indexOf('const handleSave = useCallback(');
+    const start = app.indexOf('const saveActive = useCallback(');
     const body = start < 0 ? '' : app.slice(start, app.indexOf('}, [', start));
     check(
         'save: the Save button clears the unsaved marker only after saveNow succeeded',
@@ -1604,6 +1606,101 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     check('workspace: a user gets their own, whatever is open', pickWorkspace(remembered, 'ANN', '/ws/a') === '/ws/b', String(pickWorkspace(remembered, 'ANN', '/ws/a')));
     check('workspace: a new user gets the picker, not someone else\'s', pickWorkspace(remembered, 'bob', '/ws/a') === null, 'inherited');
     check('workspace: recording the same path changes nothing', withWorkspace(remembered, 'admin', '/ws/a') === remembered, 'rewrote');
+}
+
+// #384: a tour card is as tall as its text and the font size make it, and on a first run
+// its Next button is the only way forward. A collapsed bottom panel in a 915px window, with
+// a card taller than the old fixed guess, pushed the buttons off the window.
+{
+    const panel = { top: 850, left: 0, width: 980, height: 60 };
+    const view = { width: 980, height: 915 };
+    const tip = { width: 340, height: 420 };
+    const above = placeTip(panel, 'top', view, tip);
+    check('#384: the card sits above the panel by its real height', above.top + tip.height + 10 === panel.top, JSON.stringify(above));
+    for (const place of ['top', 'bottom', 'left', 'right'] as const) {
+        const at = placeTip(panel, place, view, tip);
+        check(`#384: a ${place} card stays inside the window`, at.top >= 0 && at.top + tip.height <= view.height, JSON.stringify(at));
+    }
+}
+
+// The Tests tab writes the file `duckle test` reads, and that harness refuses a case that
+// asserts nothing, so the tab has to know the same rule.
+{
+    const fresh = newCase('f', ['Test 1']);
+    check('a new case is named apart from the others', fresh.name === 'Test 2', fresh.name);
+    check('a new case can run as it stands', caseProblem(fresh) === null, String(caseProblem(fresh)));
+    const empty = { name: 'c', expect: { node: 'f' } };
+    check('a case asserting nothing is a problem', caseProblem(empty) !== null, 'no problem reported');
+    check(
+        'an empty list is not an assertion',
+        caseProblem({ name: 'c', expect: { node: 'f', unique: [], sql: '  ' } }) !== null,
+        'no problem reported',
+    );
+    check(
+        'dummy data with no columns is said before it fails a run',
+        (caseProblem({
+            name: 'c',
+            given: { s: { generate: { rowCount: 10, columns: [] } } },
+            expect: { node: 'f', rowCount: 10 },
+        }) ?? '').includes('columns'),
+        'no problem reported',
+    );
+    const written = cleaned({ name: 'c', given: {}, expect: { node: 'f', unique: [], notNull: ['a'], sql: '' } });
+    check(
+        'what is written carries no empty assertions',
+        JSON.stringify(written) === JSON.stringify({ name: 'c', expect: { node: 'f', notNull: ['a'] } }),
+        JSON.stringify(written),
+    );
+    check('a suite names its pipeline from the tests folder', newSuite('orders').pipeline === '../pipelines/orders.json', newSuite('orders').pipeline);
+    check('a column list is read from what a person types', JSON.stringify(listOf(' a, b ,,c ')) === JSON.stringify(['a', 'b', 'c']), 'bad list');
+
+    const gen = (name: string, type: string) => guessGenerator({ name, type, nullable: true } as never).generator;
+    for (const [name, type, want] of [
+        ['id', 'int64', 'sequence'],
+        ['customer_id', 'string', 'uuid'],
+        ['first_name', 'string', 'person.firstName'],
+        ['LastName', 'string', 'person.lastName'],
+        ['customer_name', 'string', 'person.fullName'],
+        ['Email', 'string', 'internet.email'],
+        ['phone_number', 'string', 'phone.number'],
+        ['city', 'string', 'address.city'],
+        ['amount', 'decimal', 'decimal'],
+        ['quantity', 'int32', 'integer'],
+        ['active', 'bool', 'boolean'],
+        ['created', 'timestamp', 'timestamp'],
+        ['ordered_on', 'date', 'date'],
+        ['notes', 'string', 'text.word'],
+    ] as const) {
+        check(`a column called ${name} is filled by ${want}`, gen(name, type) === want, gen(name, type));
+    }
+    const input = dummyInput([{ name: 'id', type: 'int64', nullable: false }]);
+    check('dummy input is shaped like the source', input.generate.columns[0].generator === 'sequence', JSON.stringify(input));
+}
+
+// The Data Generator's columns are known from its form, so what is wired after it can offer
+// them before anything has run.
+{
+    const generator = node('g', 'src.generate', {
+        columns: [
+            { name: 'id', generator: 'sequence' },
+            { name: 'who', generator: 'person.fullName', nullPercent: '10' },
+            { name: 'lat', generator: 'address.latitude' },
+            { name: 'joined', generator: 'date' },
+        ],
+    });
+    const schema = resolveOutputSchema('g', [generator], []);
+    check(
+        'a generator names its columns and their types',
+        JSON.stringify(schema.map(c => [c.name, c.type, c.nullable]))
+            === JSON.stringify([['id', 'int64', false], ['who', 'string', true], ['lat', 'float64', false], ['joined', 'date', false]]),
+        JSON.stringify(schema),
+    );
+    const empty = validatePipeline([node('g', 'src.generate', {})], []).issues;
+    check(
+        'a generator with no columns is a problem the editor reports',
+        empty.some(i => i.code === 'missing-required-field' && i.message.includes('Columns')),
+        JSON.stringify(empty),
+    );
 }
 
 if (failures.length) {

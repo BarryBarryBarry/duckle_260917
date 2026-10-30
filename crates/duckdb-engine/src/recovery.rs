@@ -52,6 +52,11 @@ mod tests {
             let mut r = crate::retry::begin(ws, id, "manual", "orders", "orders.json", "h", None);
             r.pid = Some(pid);
             crate::retry::write(ws, &r).unwrap();
+            // Written by this test rather than by a process it could kill, so the dead
+            // one's pid is all there is to go on.
+            if pid == u32::MAX {
+                crate::runlock::release_started(id);
+            }
         }
         let def = crate::partition::PartitionDef::Time {
             cadence: crate::partition::Cadence::Day,
@@ -67,6 +72,7 @@ mod tests {
         .unwrap();
         let mut plan = crate::backfill_exec::plan_for(ws, &ws.join("pipelines").join("daily.json"), "2026-09-01", "2026-09-01", 1, None)
             .unwrap();
+        crate::backfill::released(&plan.id);
         plan.pid = Some(u32::MAX);
         plan.partitions[0].state = crate::backfill::State::Running;
         crate::backfill::save(ws, &plan).unwrap();

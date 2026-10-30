@@ -260,6 +260,7 @@ fn reporting_changes_nothing_about_the_run() {
         PipelineEvent::StageStarted { node_id, kind, .. } => format!("start {node_id} {kind}"),
         PipelineEvent::StageFinished { node_id, status, rows, .. } => format!("finish {node_id} {status} {rows:?}"),
         PipelineEvent::Log { node_id, message, .. } => format!("log {node_id} {message}"),
+        PipelineEvent::Assertion { node_id, passed, .. } => format!("assert {node_id} {passed}"),
         PipelineEvent::Cancelled => "cancelled".into(),
         PipelineEvent::Finished { status, .. } => format!("finished {status}"),
     };
