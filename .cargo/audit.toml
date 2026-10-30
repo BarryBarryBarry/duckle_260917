@@ -30,4 +30,27 @@ ignore = [
     # Remove when: lancedb takes a lance-namespace-impls release on 0.41+.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+
+    # crypto-bigint 0.5.5 - timing variability in constant-time operations. The fix
+    # is on 0.7.6, and this copy is pinned by jsonwebtoken 11.1.0 through p256 and
+    # p384 0.13. NOT REACHABLE: those are the ES256 and ES384 paths, and Duckle signs
+    # and verifies RS256 only (Snowflake key-pair auth, and OIDC, which refuses any
+    # other algorithm).
+    # Remove when: jsonwebtoken moves to p256 and p384 on crypto-bigint 0.7.6+.
+    "RUSTSEC-2026-0387",
+
+    # zstd 0.13.3 - a reused context carries an abandoned stream into the next one.
+    # The fix is on 0.14.3, and this copy is pinned by parquet, arrow-ipc and rskafka.
+    # NOT REACHABLE: the flaw is in the stream `with_context` constructors, and no
+    # dependency calls one. Parquet and Arrow use zstd::bulk, the rest build plain
+    # streams with Encoder::new and Decoder::new.
+    # Remove when: parquet, arrow-ipc and rskafka reach zstd 0.14.3+.
+    "RUSTSEC-2026-0391",
+
+    # zstd-safe 7.2.1 - stale heap memory after a failed legacy frame. The fix is on
+    # 8.2.0, and this copy is what zstd 0.13.3 requires. NOT REACHABLE: only
+    # stream::write::Decoder exposes it, and no dependency uses one. The advisory
+    # itself clears stream::read::Decoder and the bulk API, which are what is used.
+    # Remove when: zstd 0.13.3 is gone, as above.
+    "RUSTSEC-2026-0403",
 ]
