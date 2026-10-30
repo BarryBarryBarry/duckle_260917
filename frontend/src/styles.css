@@ -8430,6 +8430,7 @@ select.modal-select:focus {
     background: var(--panel, #161b2b); color: var(--text, #eef1f8);
     border: 1px solid var(--border, #2c3349); border-radius: 14px; padding: 18px 18px 14px;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px); overflow-y: auto; display: flex; flex-direction: column;
     animation: tour-pop .2s ease;
 }
 @keyframes tour-pop { from { opacity: 0; transform: translateY(6px) scale(.98); } }
@@ -8439,7 +8440,7 @@ select.modal-select:focus {
 .tour-chapter { color: var(--lemon, #ffd84d); }
 .tour-chapter::after { content: ' \00B7 '; color: var(--text-dim, #9aa4bd); }
 .tour-title { margin: 6px 0 8px; font-size: 1.2308rem; font-weight: 700; }
-.tour-body { margin: 0 0 14px; font-size: 1rem; line-height: 1.6; color: var(--text-dim, #c2cae0); }
+.tour-body { margin: 0 0 14px; font-size: 1rem; line-height: 1.6; color: var(--text-dim, #c2cae0); min-height: 3em; overflow-y: auto; }
 .tour-dots { display: flex; gap: 5px; margin-bottom: 14px; }
 .tour-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--border, #3a4360); transition: .15s; }
 .tour-dot.on { background: var(--lemon, #ffd84d); width: 18px; border-radius: 4px; }

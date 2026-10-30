@@ -23,6 +23,7 @@ import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
 import { deriveNodeSubtitle } from '../src/node-subtitle';
 import { resolveOutputSchema } from '../src/schema-resolve';
+import { placeTip } from '../src/tour-place';
 import {
     buildBundle,
     cancelPipeline,
@@ -1338,6 +1339,21 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         JSON.stringify((deployed ?? {}).params) === JSON.stringify({ region: 'us' }),
         JSON.stringify(deployed),
     );
+}
+
+// #384: a tour card is as tall as its text and the font size make it, and on a first run
+// its Next button is the only way forward. A collapsed bottom panel in a 915px window, with
+// a card taller than the old fixed guess, pushed the buttons off the window.
+{
+    const panel = { top: 850, left: 0, width: 980, height: 60 };
+    const view = { width: 980, height: 915 };
+    const tip = { width: 340, height: 420 };
+    const above = placeTip(panel, 'top', view, tip);
+    check('#384: the card sits above the panel by its real height', above.top + tip.height + 10 === panel.top, JSON.stringify(above));
+    for (const place of ['top', 'bottom', 'left', 'right'] as const) {
+        const at = placeTip(panel, place, view, tip);
+        check(`#384: a ${place} card stays inside the window`, at.top >= 0 && at.top + tip.height <= view.height, JSON.stringify(at));
+    }
 }
 
 if (failures.length) {

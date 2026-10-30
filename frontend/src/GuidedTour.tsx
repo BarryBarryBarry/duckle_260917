@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isWebBackend } from './web-fs';
+import { placeTip, type Box, type Placement } from './tour-place';
 
 // First-run guided tour: a spotlight walkthrough of the core surfaces. Anchors
 // to [data-tour="..."] markers; if a marker is missing the step degrades to a
@@ -37,7 +38,6 @@ export function tourAlreadySeen(): boolean {
     }
 }
 
-type Placement = 'top' | 'bottom' | 'left' | 'right' | 'center';
 // 'both' shows everywhere; 'desktop' only in the Tauri app; 'web' only in the
 // self-hosted web editor. Undefined is treated as 'both'.
 type Surface = 'both' | 'desktop' | 'web';
@@ -271,13 +271,6 @@ function stepsOnScreen(): Step[] {
     });
 }
 
-interface Box {
-    top: number;
-    left: number;
-    width: number;
-    height: number;
-}
-
 type TourProps = {
     /**
      * Whether the app is past its startup screens and the workspace is really usable.
@@ -303,6 +296,8 @@ export function GuidedTour({ ready = true }: TourProps) {
     const [i, setI] = useState(0);
     const [box, setBox] = useState<Box | null>(null);
     const [steps, setSteps] = useState<Step[]>(forThisSurface);
+    const tipRef = useRef<HTMLDivElement>(null);
+    const [tipH, setTipH] = useState(280);
 
     // Open on first run, once the app says its startup screens are done AND the workspace
     // UI is really mounted (poll for the canvas anchor).
@@ -372,6 +367,12 @@ export function GuidedTour({ ready = true }: TourProps) {
         };
     }, [active, measure]);
 
+    // Every render, because anything that re-renders can change the card's height. It runs
+    // before paint, so a first guess is never seen.
+    useLayoutEffect(() => {
+        if (tipRef.current) setTipH(tipRef.current.offsetHeight);
+    });
+
     if (!active) return null;
 
     const step = steps[i];
@@ -386,45 +387,17 @@ export function GuidedTour({ ready = true }: TourProps) {
     const next = () => (last ? close() : setI((n) => n + 1));
     const back = () => setI((n) => Math.max(0, n - 1));
 
-    // Tooltip position: anchored beside the spotlight, then ALWAYS clamped into
-    // the viewport so the card (and its Skip/Back/Next buttons) is reachable even
-    // when the target fills the screen (e.g. the canvas). Very large targets get
-    // a centered card since "beside" has no room.
+    // Very large targets get a centered card since "beside" has no room (e.g. the canvas).
     const PAD = 10;
     const TIP_W = 340;
-    const TIP_H = 280; // generous estimate used only for clamping
     const vh = window.innerHeight;
     const vw = window.innerWidth;
-    let tipStyle: React.CSSProperties;
     const big = !!box && box.height > vh * 0.7 && box.width > vw * 0.45;
-    if (!box || big) {
-        tipStyle = { top: '50%', left: '50%', transform: 'translate(-50%,-50%)' };
-    } else {
-        const place = step.placement ?? 'bottom';
-        let top: number;
-        let left: number;
-        if (place === 'right' && box.left + box.width + TIP_W + 24 < vw) {
-            left = box.left + box.width + PAD;
-            top = box.top;
-        } else if (place === 'left' && box.left - TIP_W - 24 > 0) {
-            left = box.left - TIP_W - PAD;
-            top = box.top;
-        } else if (place === 'top' && box.top - TIP_H - PAD > 0) {
-            top = box.top - TIP_H - PAD;
-            left = box.left;
-        } else {
-            // bottom (default); if it would overflow, flip above the target
-            top = box.top + box.height + PAD;
-            left = box.left;
-            if (top + TIP_H + 12 > vh && box.top - TIP_H - PAD > 0) {
-                top = box.top - TIP_H - PAD;
-            }
-        }
-        // Final guard: keep the whole card on screen.
-        top = Math.max(12, Math.min(top, vh - TIP_H - 12));
-        left = Math.max(12, Math.min(left, vw - TIP_W - 12));
-        tipStyle = { top, left };
-    }
+    // Numbers rather than a centring transform, which tour-pop overrides while it plays.
+    const tipStyle: React.CSSProperties =
+        !box || big
+            ? { top: Math.max(12, (vh - tipH) / 2), left: Math.max(12, (vw - TIP_W) / 2) }
+            : placeTip(box, step.placement ?? 'bottom', { width: vw, height: vh }, { width: TIP_W, height: tipH });
 
     return (
         <div className="tour-root" role="dialog" aria-modal="true" aria-label="Duckle guided tour">
@@ -444,7 +417,7 @@ export function GuidedTour({ ready = true }: TourProps) {
                 // there, and a stray click on the dimmed area must not become one.
                 <div className="tour-dim" onClick={mandatory ? undefined : close} />
             )}
-            <div className="tour-tip" style={{ ...tipStyle, width: TIP_W }}>
+            <div className="tour-tip" ref={tipRef} style={{ ...tipStyle, width: TIP_W }}>
                 <div className="tour-progress">
                     {step.chapter ? <span className="tour-chapter">{step.chapter}</span> : null}
                     Step {i + 1} of {steps.length}
