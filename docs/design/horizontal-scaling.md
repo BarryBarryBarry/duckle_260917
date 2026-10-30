@@ -141,7 +141,9 @@ Beside the claim:
   document proposed: a replaced container has a new hostname, so its dead runs would have
   stayed `running` for ever. The owner holds a witness lock for as long as the work lasts. A
   held witness means alive, on any host. A free one means the owner has gone, whatever has
-  that pid now, which covers a container's PID 1 as well. There is no heartbeat to tune.
+  that pid now, which covers a container's PID 1 as well. There is no heartbeat to tune. A
+  server now checks once a minute as well as at start, so what a dead replica was doing stops
+  reading as `running` without anything having to restart: measured at 56 s.
 - **Still open: the account store.** SQLite in WAL mode is not safe across machines on
   network storage, and every `serve` opens it. That is why replicas stay on one host for now.
 

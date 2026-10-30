@@ -5105,6 +5105,27 @@ fn scheduler_stall(last_tick_ms: u64, now_ms: u64, tick: Duration) -> Option<Str
     })
 }
 
+/// What a server looks after once a minute, off the scheduler's thread.
+fn minute_sweep(workspace: &Path) {
+    // Another server sharing this workspace can die at any moment, and what it was doing
+    // would otherwise read as `running` until something here restarted.
+    duckle_duckdb_engine::recovery::reclaim_abandoned(workspace);
+    let (assets, sent) = duckle_duckdb_engine::sla::check_and_alert(workspace, chrono::Utc::now());
+    let stale: Vec<&str> = assets
+        .iter()
+        .filter(|a| a.state == duckle_duckdb_engine::sla::State::Stale)
+        .map(|a| a.asset.as_str())
+        .collect();
+    if !stale.is_empty() {
+        eprintln!(
+            "duckle: {} asset(s) past their freshness limit ({} alert(s) sent): {}",
+            stale.len(),
+            sent,
+            stale.join(", ")
+        );
+    }
+}
+
 fn spawn_scheduler(state: Arc<State>) {
     std::thread::spawn(move || {
         // The last grid instant each interval schedule was seen at. See
@@ -5169,23 +5190,7 @@ fn spawn_scheduler(state: Arc<State>) {
                         // Cleared by dropping, so a panic in the sweep does not
                         // wedge the flag and stop freshness for good.
                         let _busy = busy;
-                        let (assets, sent) = duckle_duckdb_engine::sla::check_and_alert(
-                            &ws,
-                            chrono::Utc::now(),
-                        );
-                        let stale: Vec<&str> = assets
-                            .iter()
-                            .filter(|a| a.state == duckle_duckdb_engine::sla::State::Stale)
-                            .map(|a| a.asset.as_str())
-                            .collect();
-                        if !stale.is_empty() {
-                            eprintln!(
-                                "duckle: {} asset(s) past their freshness limit ({} alert(s) sent): {}",
-                                stale.len(),
-                                sent,
-                                stale.join(", ")
-                            );
-                        }
+                        minute_sweep(&ws);
                     });
                 }
             }
@@ -7418,6 +7423,28 @@ mod tests {
             assert_eq!(super::cancel_elsewhere(&state, id), None, "{id:?}");
             assert_eq!(super::run_status(&state, id), None, "{id:?}");
         }
+    }
+
+    /// A server that dies leaves its runs marked running, and the servers still up are the
+    /// ones to put that right. One still doing its own run is left to get on with it.
+    #[test]
+    fn a_live_server_reclaims_what_a_dead_one_left() {
+        use duckle_duckdb_engine::retry;
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = tmp.path().canonicalize().unwrap();
+        retry::begin(&ws, "run-ours", "manual", "daily", "/p.json", "hash", None);
+        retry::begin(&ws, "run-theirs", "manual", "daily", "/p.json", "hash", None);
+        let mut theirs = retry::load(&ws, "run-theirs").unwrap();
+        theirs.pid = Some(u32::MAX);
+        retry::write(&ws, &theirs).unwrap();
+        // The process that held this one is gone, which is what lets its witness go.
+        duckle_duckdb_engine::runlock::release_started("run-theirs");
+
+        super::minute_sweep(&ws);
+
+        assert_eq!(retry::load(&ws, "run-theirs").unwrap().state, retry::INTERRUPTED);
+        assert_eq!(retry::load(&ws, "run-ours").unwrap().state, retry::RUNNING);
+        duckle_duckdb_engine::runlock::release_started("run-ours");
     }
 
     /// What the console shows as next is when it will fire, not when the last run plus the
