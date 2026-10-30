@@ -233,6 +233,7 @@ export const PALETTE: Category[] = [
                 id: 'src.misc',
                 label: 'Other',
                 components: [
+                    src('generate', 'Data Generator', 'available', 'Believable fake rows, with no source to connect to: names, emails, addresses, companies, numbers, dates, picks from a list and patterns, in fourteen locales. The same seed gives the same rows on every run, so a test can rely on them, and a preview stays instant at any row count.'),
                     src('ftp', 'FTP', 'available', 'List + download files from an FTP server via the pure-Rust suppaftp client. Glob pattern filter (`*`, `?`); each file becomes one row {filename, size, modified, content_b64}. Use DuckDB `from_base64(content_b64)` downstream for the raw bytes. SFTP is a separate protocol and a separate component.'),
                     src('http', 'HTTP', 'available', 'Read CSV / Parquet / JSON from any HTTP(S) URL via httpfs'),
                     src('email', 'Email (IMAP)', 'available', 'Fetch the N most recent messages from an IMAP mailbox. TLS via rustls (default port 993). Basic auth (user/password). Each message becomes a row {uid, from, to, subject, date, body_text}. OAuth (gmail / o365) is on the roadmap.'),

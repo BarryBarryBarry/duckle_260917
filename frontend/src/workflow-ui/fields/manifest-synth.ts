@@ -6,6 +6,7 @@ import type {
     FormSection,
     NodePorts,
     SchemaSource,
+    SelectOption,
     AutodetectResult,
 } from './types';
 
@@ -9872,6 +9873,96 @@ function synthSalesforceBulkSource(comp: ComponentDef): ComponentManifest {
     ], 'declared');
 }
 
+// What can fill a generated column. The label's prefix is its heading in the list, and
+// `the_form_offers_every_generator_the_engine_has` holds this to plan/generate.rs.
+const GENERATORS: SelectOption[] = [
+    { label: 'Basic: Sequence', value: 'sequence' },
+    { label: 'Basic: Whole number', value: 'integer' },
+    { label: 'Basic: Decimal', value: 'decimal' },
+    { label: 'Basic: True or false', value: 'boolean' },
+    { label: 'Basic: Date', value: 'date' },
+    { label: 'Basic: Date and time', value: 'timestamp' },
+    { label: 'Basic: UUID', value: 'uuid' },
+    { label: 'Basic: Pick from a list', value: 'pick' },
+    { label: 'Basic: Pattern', value: 'pattern' },
+    { label: 'Basic: Fixed text', value: 'constant' },
+    { label: 'Person: First name', value: 'person.firstName' },
+    { label: 'Person: Last name', value: 'person.lastName' },
+    { label: 'Person: Full name', value: 'person.fullName' },
+    { label: 'Person: Title', value: 'person.title' },
+    { label: 'Internet: Email', value: 'internet.email' },
+    { label: 'Internet: Username', value: 'internet.username' },
+    { label: 'Internet: IPv4 address', value: 'internet.ipv4' },
+    { label: 'Internet: IPv6 address', value: 'internet.ipv6' },
+    { label: 'Internet: MAC address', value: 'internet.mac' },
+    { label: 'Internet: User agent', value: 'internet.userAgent' },
+    { label: 'Address: Street', value: 'address.street' },
+    { label: 'Address: City', value: 'address.city' },
+    { label: 'Address: State', value: 'address.state' },
+    { label: 'Address: State abbreviation', value: 'address.stateAbbr' },
+    { label: 'Address: ZIP or postcode', value: 'address.zip' },
+    { label: 'Address: Country', value: 'address.country' },
+    { label: 'Address: Country code', value: 'address.countryCode' },
+    { label: 'Address: Time zone', value: 'address.timezone' },
+    { label: 'Address: Latitude', value: 'address.latitude' },
+    { label: 'Address: Longitude', value: 'address.longitude' },
+    { label: 'Phone: Number', value: 'phone.number' },
+    { label: 'Phone: Cell number', value: 'phone.cell' },
+    { label: 'Company: Name', value: 'company.name' },
+    { label: 'Company: Industry', value: 'company.industry' },
+    { label: 'Company: Profession', value: 'company.profession' },
+    { label: 'Company: Catch phrase', value: 'company.catchPhrase' },
+    { label: 'Company: Job title', value: 'job.title' },
+    { label: 'Finance: Card number', value: 'finance.creditCard' },
+    { label: 'Finance: Currency code', value: 'finance.currencyCode' },
+    { label: 'Finance: Currency name', value: 'finance.currencyName' },
+    { label: 'Finance: BIC', value: 'finance.bic' },
+    { label: 'Finance: ISIN', value: 'finance.isin' },
+    { label: 'Text: Word', value: 'text.word' },
+    { label: 'Text: Sentence', value: 'text.sentence' },
+    { label: 'Text: Paragraph', value: 'text.paragraph' },
+    { label: 'File: Name', value: 'file.name' },
+    { label: 'File: Path', value: 'file.path' },
+    { label: 'File: Extension', value: 'file.extension' },
+    { label: 'File: MIME type', value: 'file.mimeType' },
+    { label: 'Other: ISBN', value: 'book.isbn' },
+];
+
+function synthGenerator(comp: ComponentDef): ComponentManifest {
+    return base(comp, [
+        {
+            label: 'Rows',
+            fields: [
+                { key: 'rowCount', label: 'Rows', kind: 'integer', defaultValue: 100, description: 'How many rows to make. A preview shows the first few at once, however large this is.' },
+                { key: 'seed', label: 'Seed', kind: 'text', placeholder: 'duckle', description: 'Names one set of rows: the same seed gives the same rows on every run and every machine, which is what lets a test rely on them. Any text works, including a variable, for rows that change with it.' },
+                {
+                    key: 'locale',
+                    label: 'Locale',
+                    kind: 'select',
+                    defaultValue: 'en',
+                    options: [
+                        { label: 'English', value: 'en' },
+                        { label: 'Arabic', value: 'ar' },
+                        { label: 'Chinese (Simplified)', value: 'zh-CN' },
+                        { label: 'Chinese (Traditional)', value: 'zh-TW' },
+                        { label: 'Dutch', value: 'nl' },
+                        { label: 'French', value: 'fr' },
+                        { label: 'German', value: 'de' },
+                        { label: 'Italian', value: 'it' },
+                        { label: 'Japanese', value: 'ja' },
+                        { label: 'Persian', value: 'fa' },
+                        { label: 'Portuguese (Brazil)', value: 'pt-BR' },
+                        { label: 'Portuguese (Portugal)', value: 'pt-PT' },
+                        { label: 'Turkish', value: 'tr' },
+                        { label: 'Welsh', value: 'cy' },
+                    ],
+                },
+                { key: 'columns', label: 'Columns', kind: 'generator-columns', required: true, options: GENERATORS, description: 'One entry per column: its name, what fills it and how often it is NULL. In a pipeline file each entry is {name, generator, nullPercent} plus the options that generator takes: sequence start and step, integer and decimal min and max, decimal scale, boolean percent, date and timestamp min and max, pick values, pattern pattern, constant value.' },
+            ],
+        },
+    ], 'declared');
+}
+
 function dispatchManifest(componentId: string): ComponentManifest | undefined {
     const entry = findPaletteEntry(componentId);
     if (!entry) return undefined;
@@ -9907,6 +9998,7 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // Sits in the databases group, whose generic synth would give it a query
     // form; routed by id ahead of the group checks.
     if (comp.id === 'src.postgres.cdc') return synthPostgresCdc(comp);
+    if (comp.id === 'src.generate') return synthGenerator(comp);
     if (comp.id === 'src.model') return synthModelSource(comp);
     if (comp.id === 'snk.model') return synthModelSink(comp);
     if (groupId === 'src.files') return synthFileSource(comp);

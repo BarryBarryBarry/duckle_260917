@@ -194,6 +194,11 @@ jaq-json = "2.0"
 # SSNs, credit cards). Already in our dep graph transitively but
 # pinned explicitly here so it's stable across upstream churn.
 regex = "1"
+# src.generate: the Rust port of Faker. Pools come from its lists, and a new version
+# can change them, which would move the rows a seed names. Bump on purpose.
+fake = "=5.1.0"
+rand = "0.10"
+deunicode = "1"
 # Ownership rules are globs over asset names. Already in the workspace lock.
 glob = "0.3"
 # IMAP client for src.email, with none of its TLS features: the stream is

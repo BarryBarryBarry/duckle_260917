@@ -3560,7 +3560,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 
 ### Sources
 
-**124 sources available today.**
+**125 sources available today.**
 
 | Group | Connectors | Status |
 |---|---|---|
@@ -3592,6 +3592,7 @@ Duckle is not a CSV tool with extras. It reads a broad set of formats and source
 | **Webhook listener** | Binds `127.0.0.1:port`, collects N inbound HTTP requests with a timeout, parses JSON-object / JSON-array bodies into rows | Available |
 | **Desktop** | System clipboard (pure-Rust `arboard`, auto-detects JSON-array shape) | Available |
 | **Repos** | Git (commit log or file tree from a local working copy; shells out to system `git` CLI) | Available |
+| **Generated data** | `src.generate` makes believable fake rows with nothing to connect to: people, emails, addresses, companies, numbers, dates, picks from a list and patterns, in 14 locales, using the lists of the `fake` library (the Rust port of Faker). It compiles to SQL, so 10 million rows take seconds and a preview is instant however large the node is. The same seed gives the same rows on every run and machine, and adding a column leaves the others as they were, so a test can rely on them. One row's email belongs to that row's person, and every address is at a domain reserved for examples, so nothing generated can reach a real mailbox | Available |
 
 For CSV / TSV sources, the **Schema** panel accepts an optional per-column **Format** (a `strptime` token string such as `%d/%m/%Y`) on Date and Timestamp columns. Several date columns can each parse a different layout in one read - the column is read as text and re-parsed with its own format, working around DuckDB's single global date format. A value that does not match its format becomes null rather than failing the run. Set a Date or Timestamp column's Format to `excel` to convert Excel day-serials correctly. CSV sources also surface `ignoreErrors` (skip unparseable rows) and `nullPadding` (pad short rows with nulls) toggles in the GUI.
 

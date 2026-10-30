@@ -860,6 +860,11 @@ COMPONENTS = {
         'summary': 'Read a feature class (layer) from an Esri File Geodatabase via the spatial extension (ST_Read with layer=)',
         'params': ['path', 'layer'],
     },
+    'src.generate': {
+        'kind': 'source',
+        'summary': 'Believable fake rows, with no source to connect to: names, emails, addresses, companies, numbers, dates, picks from a list and patterns, in fourteen locales. The same seed gives the same rows on every run, so a test can rely on them, and a preview stays instant at any row count.',
+        'params': ['rowCount', 'seed', 'locale', 'columns'],
+    },
     'src.git': {
         'kind': 'source',
         'summary': 'Read commit log or file tree from a local git working copy. Shells out to the system `git` CLI - no extra Rust dep. mode=log emits {hash, short_hash, author_name, author_email, date, subject}; mode=files emits {mode, type, hash, size, path}.',

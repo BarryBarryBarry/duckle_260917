@@ -26481,3 +26481,274 @@ fn snk_manticore_splits_rows_into_batches() {
         second
     );
 }
+
+// ---------------------------------------------------------------------------
+// src.generate: believable fake rows, compiled to SQL.
+// ---------------------------------------------------------------------------
+
+/// Run a generator through a real sink and read back every row it wrote.
+fn generated_rows(engine: &DuckdbEngine, props: Value) -> Vec<Value> {
+    let tmp = tempfile::tempdir().unwrap();
+    let out = out_path(tmp.path(), "out.jsonl");
+    let r = engine.execute_pipeline(&doc(
+        json!([node("g", "src.generate", props), node("k", "snk.jsonl", json!({ "path": &out }))]),
+        json!([main_edge("e1", "g", "k")]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    std::fs::read_to_string(&out)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+fn generated_types(engine: &DuckdbEngine, props: Value) -> std::collections::BTreeMap<String, String> {
+    let r = engine.execute_pipeline(&doc(json!([node("g", "src.generate", props)]), json!([])));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    let p = r.preview.iter().find(|p| p.node_id == "g").expect("a preview");
+    p.columns.iter().map(|c| c.name.clone()).zip(p.sql_types.iter().cloned()).collect()
+}
+
+#[test]
+fn a_generator_gives_the_same_rows_for_the_same_seed() {
+    let engine = engine_or_skip!();
+    let props = |seed: &str| {
+        json!({
+            "rowCount": 50, "seed": seed,
+            "columns": [
+                { "name": "id", "generator": "sequence" },
+                { "name": "who", "generator": "person.fullName" },
+                { "name": "spend", "generator": "decimal", "min": 1, "max": 500 },
+            ],
+        })
+    };
+    let first = generated_rows(&engine, props("a"));
+    assert_eq!(first.len(), 50);
+    assert_eq!(first, generated_rows(&engine, props("a")), "a seed names one set of rows");
+    assert_ne!(first, generated_rows(&engine, props("b")), "another seed names another");
+}
+
+#[test]
+fn adding_a_generated_column_leaves_the_others_alone() {
+    // A column's values hang off its name, not its position, so a test recorded
+    // against these rows survives somebody adding a column to the node.
+    let engine = engine_or_skip!();
+    let city = json!({ "name": "city", "generator": "address.city" });
+    let before = generated_rows(&engine, json!({ "rowCount": 20, "columns": [city] }));
+    let after = generated_rows(&engine, json!({
+        "rowCount": 20,
+        "columns": [{ "name": "id", "generator": "uuid" }, city],
+    }));
+    for (a, b) in before.iter().zip(&after) {
+        assert_eq!(a["city"], b["city"]);
+    }
+}
+
+#[test]
+fn a_generated_email_belongs_to_the_generated_person() {
+    let engine = engine_or_skip!();
+    let rows = generated_rows(&engine, json!({
+        "rowCount": 200,
+        "columns": [
+            { "name": "first", "generator": "person.firstName" },
+            { "name": "last", "generator": "person.lastName" },
+            { "name": "email", "generator": "internet.email" },
+        ],
+    }));
+    let plain = |v: &Value| -> String {
+        v.as_str().unwrap().to_lowercase().chars().filter(char::is_ascii_alphanumeric).collect()
+    };
+    let mut emails = std::collections::BTreeSet::new();
+    for r in &rows {
+        let email = r["email"].as_str().unwrap();
+        let (first, last) = (plain(&r["first"]), plain(&r["last"]));
+        assert!(email.starts_with(&format!("{first}.{last}")), "{email} is not {first} {last}");
+        // Reserved for documentation by RFC 2606, so nothing here can reach anybody.
+        assert!(email.contains("@example."), "{email}");
+        assert!(emails.insert(email.to_string()), "{email} appeared twice");
+    }
+}
+
+#[test]
+fn generated_columns_have_real_types_and_stay_inside_their_ranges() {
+    let engine = engine_or_skip!();
+    let props = json!({
+        "rowCount": 500,
+        "columns": [
+            { "name": "n", "generator": "sequence", "start": 100, "step": 5 },
+            { "name": "age", "generator": "integer", "min": 18, "max": 21 },
+            { "name": "price", "generator": "decimal", "min": 0.5, "max": 2, "scale": 3 },
+            { "name": "active", "generator": "boolean", "percent": 100 },
+            { "name": "day", "generator": "date", "min": "2024-02-27", "max": "2024-03-02" },
+            { "name": "at", "generator": "timestamp", "min": "2024-01-01 00:00:00", "max": "2024-01-01 00:01:00" },
+            { "name": "plan", "generator": "pick", "values": "free, pro\nteam" },
+            { "name": "sku", "generator": "pattern", "pattern": "AB-##-??-**" },
+            { "name": "kept", "generator": "constant", "value": "it's fixed" },
+            { "name": "key", "generator": "uuid" },
+            { "name": "lat", "generator": "address.latitude" },
+            { "name": "lon", "generator": "address.longitude" },
+        ],
+    });
+    let types = generated_types(&engine, props.clone());
+    for (col, want) in [
+        ("n", "BIGINT"), ("age", "BIGINT"), ("price", "DECIMAL(18,3)"), ("active", "BOOLEAN"),
+        ("day", "DATE"), ("at", "TIMESTAMP"), ("plan", "VARCHAR"), ("sku", "VARCHAR"),
+        ("kept", "VARCHAR"), ("key", "VARCHAR"), ("lat", "DOUBLE"), ("lon", "DOUBLE"),
+    ] {
+        assert_eq!(types.get(col).map(String::as_str), Some(want), "{col}: {types:?}");
+    }
+    let sku = regex::Regex::new(r"^AB-[0-9]{2}-[A-Z]{2}-[A-Za-z0-9]{2}$").unwrap();
+    let key = regex::Regex::new(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").unwrap();
+    let rows = generated_rows(&engine, props);
+    let mut ages = std::collections::BTreeSet::new();
+    let mut plans = std::collections::BTreeSet::new();
+    let mut days = std::collections::BTreeSet::new();
+    for (i, r) in rows.iter().enumerate() {
+        assert_eq!(r["n"], json!(100 + 5 * i as i64));
+        ages.insert(r["age"].as_i64().unwrap());
+        let price: f64 = r["price"].to_string().trim_matches('"').parse().unwrap();
+        assert!((0.5..=2.0).contains(&price), "{price}");
+        assert_eq!(r["active"], json!(true));
+        days.insert(r["day"].as_str().unwrap().to_string());
+        let at = r["at"].as_str().unwrap();
+        assert!(at >= "2024-01-01 00:00:00" && at <= "2024-01-01 00:01:00.000", "{at}");
+        plans.insert(r["plan"].as_str().unwrap().to_string());
+        assert!(sku.is_match(r["sku"].as_str().unwrap()), "{}", r["sku"]);
+        assert_eq!(r["kept"], json!("it's fixed"));
+        assert!(key.is_match(r["key"].as_str().unwrap()), "{}", r["key"]);
+        assert!(r["lat"].as_f64().unwrap().abs() <= 90.0);
+        assert!(r["lon"].as_f64().unwrap().abs() <= 180.0);
+    }
+    assert_eq!(ages, (18..=21).collect(), "both ends of a range come up");
+    assert_eq!(plans, ["free", "pro", "team"].map(String::from).into_iter().collect());
+    // Across the leap day, which is why this range and not another.
+    assert_eq!(days.len(), 5, "{days:?}");
+    assert!(days.contains("2024-02-29"), "{days:?}");
+}
+
+#[test]
+fn a_generated_column_can_be_null_some_of_the_time() {
+    let engine = engine_or_skip!();
+    let rows = generated_rows(&engine, json!({
+        "rowCount": 2000,
+        "columns": [
+            { "name": "sometimes", "generator": "person.lastName", "nullPercent": 20 },
+            { "name": "never", "generator": "sequence" },
+        ],
+    }));
+    let nulls = rows.iter().filter(|r| r["sometimes"].is_null()).count();
+    assert!((300..=500).contains(&nulls), "{nulls} of 2000 is not about 20%");
+    assert!(rows.iter().all(|r| !r["never"].is_null()));
+}
+
+#[test]
+fn a_generator_speaks_the_locale_it_is_given() {
+    let engine = engine_or_skip!();
+    let rows = generated_rows(&engine, json!({
+        "rowCount": 20, "locale": "ja",
+        "columns": [
+            { "name": "who", "generator": "person.fullName" },
+            { "name": "email", "generator": "internet.email" },
+        ],
+    }));
+    for r in &rows {
+        assert!(!r["who"].as_str().unwrap().is_ascii(), "{}", r["who"]);
+        // A name in kanji still has to make an address a mail server would take.
+        assert!(r["email"].as_str().unwrap().is_ascii(), "{}", r["email"]);
+    }
+}
+
+#[test]
+fn every_generator_in_every_locale_compiles_and_runs() {
+    let engine = engine_or_skip!();
+    let params = |g: &str| match g {
+        "pick" => json!({ "values": "a,b" }),
+        "pattern" => json!({ "pattern": "##" }),
+        "constant" => json!({ "value": "x" }),
+        _ => json!({}),
+    };
+    for locale in duckle_duckdb_engine::plan::generate::locales() {
+        let columns: Vec<Value> = duckle_duckdb_engine::plan::generate::names()
+            .iter()
+            .enumerate()
+            .map(|(i, g)| {
+                let mut c = params(g);
+                c["name"] = json!(format!("c{i}"));
+                c["generator"] = json!(g);
+                c
+            })
+            .collect();
+        let want = columns.len();
+        let rows = generated_rows(&engine, json!({ "rowCount": 3, "locale": locale, "columns": columns }));
+        assert_eq!(rows.len(), 3, "{locale}");
+        assert_eq!(rows[0].as_object().unwrap().len(), want, "{locale}");
+        for (k, v) in rows[0].as_object().unwrap() {
+            assert!(!v.is_null(), "{locale} {k} came out empty: {}", rows[0]);
+        }
+    }
+}
+
+#[test]
+fn a_huge_generator_previews_at_once() {
+    // A preview stops at its limit, so the rows cost nothing until a real run asks for
+    // them. A generator that made its rows first would still be going at the deadline.
+    let engine = engine_or_skip!();
+    let started = std::time::Instant::now();
+    let r = engine.execute_pipeline(&doc(
+        json!([node("g", "src.generate", json!({
+            "rowCount": 10_000_000_000u64,
+            "columns": [{ "name": "who", "generator": "person.fullName" }],
+        }))]),
+        json!([]),
+    ));
+    assert_eq!(r.status, "ok", "{:?}", r.error);
+    assert!(!r.preview.iter().find(|p| p.node_id == "g").unwrap().rows.is_empty());
+    assert!(started.elapsed().as_secs() < 30, "took {:?}", started.elapsed());
+}
+
+#[test]
+fn a_bad_generator_says_which_column_is_wrong() {
+    let engine = engine_or_skip!();
+    for (props, want) in [
+        (json!({ "columns": [] }), "at least one column"),
+        (json!({ "columns": [{ "name": "", "generator": "uuid" }] }), "needs a name"),
+        (json!({ "columns": [{ "name": "a", "generator": "uuid" }, { "name": "A", "generator": "uuid" }] }), "twice"),
+        (json!({ "columns": [{ "name": "a", "generator": "person.nickname" }] }), "person.nickname"),
+        (json!({ "columns": [{ "name": "a", "generator": "integer", "min": 9, "max": 1 }] }), "max"),
+        (json!({ "columns": [{ "name": "a", "generator": "date", "min": "soon" }] }), "soon"),
+        (json!({ "columns": [{ "name": "a", "generator": "pick" }] }), "values"),
+        (json!({ "columns": [{ "name": "a", "generator": "uuid", "nullPercent": 140 }] }), "nullPercent"),
+        (json!({ "rowCount": -1, "columns": [{ "name": "a", "generator": "uuid" }] }), "rowCount"),
+        (json!({ "locale": "xx", "columns": [{ "name": "a", "generator": "uuid" }] }), "xx"),
+    ] {
+        let r = engine.execute_pipeline(&doc(json!([node("g", "src.generate", props)]), json!([])));
+        assert_eq!(r.status, "error", "{want}");
+        let err = r.error.unwrap_or_default();
+        assert!(err.contains(want), "{want} not in: {err}");
+    }
+}
+
+#[test]
+fn the_rows_for_a_seed_are_pinned() {
+    // The promise a test leans on: one seed, one set of rows. Two things could break it
+    // without any code here changing, a DuckDB upgrade moving hash() and a new `fake` moving
+    // its lists. Either one fails this, and then it is a decision rather than a surprise.
+    let engine = engine_or_skip!();
+    let rows = generated_rows(&engine, json!({
+        "rowCount": 3, "seed": "pin",
+        "columns": [
+            { "name": "id", "generator": "uuid" },
+            { "name": "who", "generator": "person.fullName" },
+            { "name": "city", "generator": "address.city" },
+            { "name": "age", "generator": "integer", "min": 18, "max": 90 },
+        ],
+    }));
+    assert_eq!(
+        Value::from(rows),
+        json!([
+            { "id": "ff6a876d-fd18-4fca-b6bb-96c016b186b9", "who": "Joanny Turner", "city": "Elizabethport", "age": 34 },
+            { "id": "b951f6c2-68a9-4d69-b080-e76f8300c41a", "who": "Mozell Crooks", "city": "Kundeborough", "age": 85 },
+            { "id": "e27f879b-d67a-4a8c-abae-96363dd303ff", "who": "Sierra Herman", "city": "Elyssaland", "age": 81 },
+        ])
+    );
+}

@@ -3494,6 +3494,18 @@ html[dir='rtl'] .topbar-lang {
     border-bottom: none;
 }
 
+.field-gen-column {
+    border-bottom: 1px solid var(--border);
+}
+
+.field-gen-column:last-child {
+    border-bottom: none;
+}
+
+.field-gen-column .field-agg-row {
+    border-bottom: none;
+}
+
 /* Guidance on a form, not a setting. These were `text` inputs, so a fact about
    the connector looked like an empty box waiting to be filled in. */
 .field-note {

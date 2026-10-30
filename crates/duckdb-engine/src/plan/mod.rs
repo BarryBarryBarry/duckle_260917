@@ -7508,6 +7508,7 @@ fn build_stage(
 }
 
 mod builders;
+pub mod generate;
 // #306: the chunk layer constrains a source by rewriting its read, and it must
 // use the SAME two functions the compiler does. A second opinion about what a
 // source reads is a second opinion about what the extract contains.

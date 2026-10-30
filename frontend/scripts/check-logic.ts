@@ -1356,6 +1356,32 @@ function context(name: string, vars: Record<string, string>): RepoItem {
     }
 }
 
+// The Data Generator's columns are known from its form, so what is wired after it can offer
+// them before anything has run.
+{
+    const generator = node('g', 'src.generate', {
+        columns: [
+            { name: 'id', generator: 'sequence' },
+            { name: 'who', generator: 'person.fullName', nullPercent: '10' },
+            { name: 'lat', generator: 'address.latitude' },
+            { name: 'joined', generator: 'date' },
+        ],
+    });
+    const schema = resolveOutputSchema('g', [generator], []);
+    check(
+        'a generator names its columns and their types',
+        JSON.stringify(schema.map(c => [c.name, c.type, c.nullable]))
+            === JSON.stringify([['id', 'int64', false], ['who', 'string', true], ['lat', 'float64', false], ['joined', 'date', false]]),
+        JSON.stringify(schema),
+    );
+    const empty = validatePipeline([node('g', 'src.generate', {})], []).issues;
+    check(
+        'a generator with no columns is a problem the editor reports',
+        empty.some(i => i.code === 'missing-required-field' && i.message.includes('Columns')),
+        JSON.stringify(empty),
+    );
+}
+
 if (failures.length) {
     console.error(`\ncheck-logic: ${failures.length} check(s) failed:\n`);
     for (const f of failures) console.error(`  - ${f}`);

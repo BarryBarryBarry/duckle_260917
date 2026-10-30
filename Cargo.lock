@@ -4054,6 +4054,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "deunicode"
+version = "1.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abd57806937c9cc163efc8ea3910e00a62e2aeb0b8119f1793a978088f8f6b04"
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4305,10 +4311,12 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "cron",
+ "deunicode",
  "dom_query",
  "duckle-metadata",
  "duckle-plugin-sdk",
  "duckle-secrets",
+ "fake",
  "flate2",
  "futures-util",
  "glob",
@@ -4332,6 +4340,7 @@ dependencies = [
  "pdf-extract",
  "prost",
  "quick-xml 0.42.0",
+ "rand 0.10.2",
  "rcgen",
  "redis",
  "regex",
@@ -4938,6 +4947,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a296e5a895621edf9fa8329c83aa1cb69a964643e36cf54d8d7a69b789089537"
 dependencies = [
  "ext-trait",
+]
+
+[[package]]
+name = "fake"
+version = "5.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea6be833b323a56361118a747470a45a1bcd5c52a2ec9b1e40c83dafe687e453"
+dependencies = [
+ "deunicode",
+ "either",
+ "rand 0.10.2",
 ]
 
 [[package]]
