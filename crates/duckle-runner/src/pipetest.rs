@@ -30,7 +30,9 @@
 //! declared columns - rather than a copy that has drifted from it. A source that reads
 //! no file (S3 behind a connection, REST, DuckLake) is REPLACED by a reader for the
 //! fixture, because setting a path such a source ignores left the test reading
-//! production while looking like it read the fixture.
+//! production while looking like it read the fixture. A value of
+//! `{ "generate": { "rowCount": 100, "columns": [...] } }` replaces the source with a Data
+//! Generator instead, for a case that needs volume or has no rows worth writing out.
 //!
 //! Comparison is strict: `5` and `"5"` are different, and so are `null`, a missing field
 //! and `""`. A test that cannot tell those apart cannot catch a column that silently
@@ -47,21 +49,25 @@ use serde_json::Value as JsonValue;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use duckle_duckdb_engine::{DuckdbEngine, PipelineDoc};
+use duckle_duckdb_engine::{DuckdbEngine, PipelineDoc, PipelineEvent};
+
+/// `--workspace`, for the whole invocation.
+static WORKSPACE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 /// Resolve a tested pipeline the way a run resolves it.
 ///
-/// The workspace is the pipeline file's parent, which is the convention the
-/// runner already uses - `resolve_workspace` in main.rs is "--workspace, else
-/// the pipeline file's parent", and `drift` falls back the same way. `test`
-/// takes no `--workspace`, so the fallback is all there is.
+/// The workspace is the pipeline file's parent unless `--workspace` says otherwise, which is
+/// the convention the runner already uses: `resolve_workspace` in main.rs is "--workspace,
+/// else the pipeline file's parent", and `drift` falls back the same way. The editor keeps
+/// pipelines in a folder of their own, so its suites need the flag.
 ///
 /// Order follows the CLI run path: saved connections first, then the env pass
 /// (which carries vault), then the workspace pass, then time builtins. A
 /// connection field stored as an ENV placeholder therefore still resolves.
 fn resolve_for_test(doc: &mut PipelineDoc, pipeline: &Path) -> Result<(), String> {
-    let workspace =
-        pipeline.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+    let workspace = WORKSPACE.get().cloned().unwrap_or_else(|| {
+        pipeline.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."))
+    });
     let env_file = workspace.join("secrets.env");
     duckle_secrets::resolve_connection_refs(&workspace, &mut doc.nodes)?;
     crate::apply_env_pass(doc, &workspace, &env_file)?;
@@ -69,10 +75,19 @@ fn resolve_for_test(doc: &mut PipelineDoc, pipeline: &Path) -> Result<(), String
     Ok(())
 }
 
+/// What stands in for a source in one case.
+#[derive(Debug)]
+pub enum Given {
+    /// Fixture text, or the name of a fixture file.
+    Fixture(String),
+    /// A Data Generator's properties.
+    Generated(JsonValue),
+}
+
 #[derive(Debug)]
 pub struct Case {
     pub name: String,
-    pub given: Vec<(String, String)>,
+    pub given: Vec<(String, Given)>,
     pub node: String,
     pub rows: Vec<JsonValue>,
     /// Compare by rendered text instead of by value AND type.
@@ -182,15 +197,23 @@ pub fn parse(path: &Path, text: &str) -> Result<(PathBuf, Vec<Case>), String> {
                 ))
             }
         };
-        let given = c
-            .get("given")
-            .and_then(JsonValue::as_object)
-            .map(|o| {
-                o.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut given = Vec::new();
+        for (node, input) in c.get("given").and_then(JsonValue::as_object).into_iter().flatten() {
+            given.push((
+                node.clone(),
+                match (input.as_str(), input.get("generate")) {
+                    (Some(text), _) => Given::Fixture(text.to_string()),
+                    (None, Some(spec)) => Given::Generated(spec.clone()),
+                    // Dropped, the source would run for real in a test that looks isolated.
+                    _ => {
+                        return Err(format!(
+                            "{name}: {label}: the input for {node} must be text, a fixture file \
+                             or {{\"generate\": ...}}"
+                        ))
+                    }
+                },
+            ));
+        }
         // Opt-in, per case: "compareAs": "text" on the expectation.
         let coerce = expect
             .get("compareAs")
@@ -316,6 +339,24 @@ pub fn apply_given(doc: &mut JsonValue, node_id: &str, path: &str) -> Result<(),
         return Ok(());
     }
     Err(format!("no node called {node_id} to give input to"))
+}
+
+/// Replace a source with a Data Generator, so a case can run on rows nobody wrote out.
+pub fn apply_generated(doc: &mut JsonValue, node_id: &str, spec: &JsonValue) -> Result<(), String> {
+    let data = doc
+        .get_mut("nodes")
+        .and_then(JsonValue::as_array_mut)
+        .and_then(|nodes| {
+            nodes.iter_mut().find(|n| n.get("id").and_then(JsonValue::as_str) == Some(node_id))
+        })
+        .and_then(|n| n.get_mut("data"))
+        .and_then(JsonValue::as_object_mut)
+        .ok_or_else(|| format!("no node called {node_id} to give input to"))?;
+    data.insert("componentId".into(), JsonValue::String("src.generate".into()));
+    data.insert("properties".into(), spec.clone());
+    // What the source declared describes the source, not these rows.
+    data.remove("schema");
+    Ok(())
 }
 
 /// Sources whose input IS a file path, so pointing that path at a fixture is
@@ -532,7 +573,14 @@ fn capture(
         .map_err(|e| format!("cannot read {}: {e}", pipeline.display()))?;
     let mut doc: JsonValue = serde_json::from_str(strip_bom(&text))
         .map_err(|e| format!("{} is not valid JSON: {e}", pipeline.display()))?;
-    for (node, body) in &case.given {
+    for (node, given) in &case.given {
+        let body = match given {
+            Given::Generated(spec) => {
+                apply_generated(&mut doc, node, spec)?;
+                continue;
+            }
+            Given::Fixture(body) => body,
+        };
         // A value naming a file that exists is the fixture itself - which is
         // how a Parquet or JSON fixture can stand in for a whole source. Any
         // other value is inline text, written out as before.
@@ -587,10 +635,19 @@ fn capture(
     // Applied AFTER the fixtures are substituted, so a `given` still replaces
     // the source it names and the resolution only touches what is left.
     resolve_for_test(&mut parsed, pipeline)?;
-    let result =
-        engine.execute_pipeline_with_events(&parsed, Some(sink_id), Some("test"), |_| {});
+    // A check the run was told to carry on past still fails the case: a test exists to
+    // notice, and a pipeline's own assertions are part of what it claims.
+    let mut failed_check = None;
+    let result = engine.execute_pipeline_with_events(&parsed, Some(sink_id), Some("test"), |evt| {
+        if let PipelineEvent::Assertion { description, passed: false, detail, .. } = evt {
+            failed_check.get_or_insert_with(|| format!("{description}: {detail}"));
+        }
+    });
     if result.status != "ok" {
         return Err(result.error.unwrap_or_else(|| "the run failed".into()));
+    }
+    if let Some(why) = failed_check {
+        return Err(format!("assertion failed: {why}"));
     }
     let rows = read_ndjson(&dump);
     Ok(Captured { dump, rows, result })
@@ -979,6 +1036,7 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
     let mut format = String::new();
     // #250: recording goldens is explicit, never a side effect of `test`.
     let mut update_golden = false;
+    let mut only: Option<String> = None;
     let mut args = std::env::args().skip(2);
     while let Some(arg) = args.next() {
         if arg == "--json" {
@@ -987,6 +1045,22 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
         }
         if arg == "--update-golden" {
             update_golden = true;
+            continue;
+        }
+        if arg == "--case" {
+            let Some(name) = args.next() else {
+                eprintln!("duckle-runner test: --case needs a case name");
+                return ExitCode::from(2);
+            };
+            only = Some(name);
+            continue;
+        }
+        if arg == "--workspace" {
+            let Some(dir) = args.next() else {
+                eprintln!("duckle-runner test: --workspace needs a folder");
+                return ExitCode::from(2);
+            };
+            let _ = WORKSPACE.set(PathBuf::from(dir));
             continue;
         }
         if arg == "--format" {
@@ -1019,6 +1093,10 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
         );
         return ExitCode::from(2);
     }
+    if update_golden && only.is_some() {
+        eprintln!("duckle-runner test: --update-golden records every case; run it without --case");
+        return ExitCode::from(2);
+    }
     // Nothing named: every suite under ./tests, which is where a workspace keeps them.
     if paths.is_empty() {
         if let Ok(entries) = std::fs::read_dir("tests") {
@@ -1045,6 +1123,7 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
 
     let (mut passed, mut failures) = (0usize, Vec::<Failure>::new());
     let (mut written, mut unchanged) = (0usize, 0usize);
+    let mut matched = 0usize;
     let mut results: Vec<JsonValue> = Vec::new();
     let mut findings: Vec<crate::report::Finding> = Vec::new();
     for path in &paths {
@@ -1055,13 +1134,17 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        let (pipeline, cases) = match parse(path, &text) {
+        let (pipeline, mut cases) = match parse(path, &text) {
             Ok(v) => v,
             Err(e) => {
                 eprintln!("duckle-runner test: {e}");
                 return ExitCode::from(2);
             }
         };
+        if let Some(name) = &only {
+            cases.retain(|c| &c.name == name);
+            matched += cases.len();
+        }
         if update_golden {
             match update_suite(&engine, path, &text, &pipeline, &cases, &tmp) {
                 Ok((w, u, f)) => {
@@ -1118,6 +1201,11 @@ pub fn run(duckdb: PathBuf) -> ExitCode {
         }
     }
     let _ = std::fs::remove_dir_all(&tmp);
+
+    if let Some(name) = only.filter(|_| matched == 0) {
+        eprintln!("duckle-runner test: no case called {name:?}");
+        return ExitCode::from(2);
+    }
 
     if update_golden {
         println!();

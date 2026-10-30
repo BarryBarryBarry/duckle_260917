@@ -145,6 +145,15 @@ impl RunLog {
                 set("message", json!(message));
                 self.enrich(&mut m, node_id);
             }
+            PipelineEvent::Assertion { node_id, description, passed, detail } => {
+                set("event", json!("assertion"));
+                set("level", json!(if *passed { "info" } else { "warn" }));
+                set("node_id", json!(node_id));
+                set("message", json!(description));
+                set("passed", json!(passed));
+                set("detail", json!(detail));
+                self.enrich(&mut m, node_id);
+            }
             PipelineEvent::Finished { status, duration_ms } => {
                 set("event", json!("run_finished"));
                 set("level", json!(if status == "error" { "error" } else { "info" }));

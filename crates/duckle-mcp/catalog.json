@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "componentCount": 419,
+  "componentCount": 420,
   "components": [
     {
       "id": "src.csv",
@@ -43306,7 +43306,7 @@
       "label": "Run Events",
       "kind": "source",
       "availability": "available",
-      "summary": "Rows describing the stages that have already failed in this run: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure.",
+      "summary": "Rows describing the stages that have already failed in this run, and every Assert checked so far: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure.",
       "ports": {
         "inputs": [],
         "outputs": [
@@ -43321,7 +43321,7 @@
         "id": "src.runevents",
         "kind": "source",
         "label": "Run Events",
-        "description": "Rows describing the stages that have already failed in this run: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure.",
+        "description": "Rows describing the stages that have already failed in this run, and every Assert checked so far: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure.",
         "schemaSource": "upstream",
         "sections": [
           {
@@ -45480,6 +45480,90 @@
                 "kind": "column",
                 "defaultValue": "id_b",
                 "description": "Column naming the second record of each matched pair."
+              }
+            ]
+          }
+        ],
+        "ports": {
+          "inputs": [
+            {
+              "id": "main",
+              "label": "main",
+              "type": "main"
+            }
+          ],
+          "outputs": [
+            {
+              "id": "main",
+              "label": "pass",
+              "type": "main"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "qa.assert",
+      "label": "Assert",
+      "kind": "quality",
+      "availability": "available",
+      "summary": "A condition the rows must meet, checked in the run. With an aggregate it is one statement about all the rows (count(*) > 0, sum(amount) = 1200); without one, every row has to meet it (amount >= 0). The rows pass through unchanged. A failure stops the run, or is recorded and the run carries on, and Run Events can collect every check for a sink.",
+      "ports": {
+        "inputs": [
+          {
+            "id": "main",
+            "label": "main",
+            "type": "main"
+          }
+        ],
+        "outputs": [
+          {
+            "id": "main",
+            "label": "pass",
+            "type": "main"
+          }
+        ]
+      },
+      "manifest": {
+        "id": "qa.assert",
+        "kind": "transform",
+        "label": "Assert",
+        "description": "A condition the rows must meet, checked in the run. With an aggregate it is one statement about all the rows (count(*) > 0, sum(amount) = 1200); without one, every row has to meet it (amount >= 0). The rows pass through unchanged. A failure stops the run, or is recorded and the run carries on, and Run Events can collect every check for a sink.",
+        "schemaSource": "upstream",
+        "sections": [
+          {
+            "label": "Assert",
+            "fields": [
+              {
+                "key": "description",
+                "label": "What is being checked",
+                "kind": "text",
+                "placeholder": "Every order has an amount",
+                "description": "Said in the run log and in the error. The expression is used if this is blank."
+              },
+              {
+                "key": "expression",
+                "label": "Condition",
+                "kind": "expression",
+                "required": true,
+                "placeholder": "sum(amount) = 1200",
+                "description": "A SQL condition. With an aggregate it is one statement about all the rows; without one, every row has to meet it. NULL counts as not met."
+              },
+              {
+                "key": "onFail",
+                "label": "If it does not hold",
+                "kind": "select",
+                "defaultValue": "fail",
+                "options": [
+                  {
+                    "label": "Stop the run",
+                    "value": "fail"
+                  },
+                  {
+                    "label": "Record it and carry on",
+                    "value": "continue"
+                  }
+                ]
               }
             ]
           }

@@ -143,6 +143,11 @@ COMPONENTS = {
         'summary': 'Emit a warning log line (does not fail the run), then pass rows through. Same {rows} templating and workspace log output as Log Message.',
         'params': ['message'],
     },
+    'qa.assert': {
+        'kind': 'quality',
+        'summary': 'A condition the rows must meet, checked in the run. With an aggregate it is one statement about all the rows (count(*) > 0, sum(amount) = 1200); without one, every row has to meet it (amount >= 0). The rows pass through unchanged. A failure stops the run, or is recorded and the run carries on, an...',
+        'params': ['description', 'expression', 'onFail'],
+    },
     'qa.baseline': {
         'kind': 'quality',
         'summary': 'Compare this run against what previous runs looked like. Every row can satisfy the schema and every row-level rule while the dataset is nothing like what normally arrives - 842,114 rows where five million usually come, a null rate that went from 4 percent to 71, a country partition that vanished ...',
@@ -1138,7 +1143,7 @@ COMPONENTS = {
     },
     'src.runevents': {
         'kind': 'source',
-        'summary': 'Rows describing the stages that have already failed in this run: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on failure.',
+        'summary': 'Rows describing the stages that have already failed in this run, and every Assert checked so far: node_id, kind, status, message, category, duration_ms. Wire it into a mail or table sink to report failures. It reports failures the run SURVIVED, so mark the stages that may fail with Continue on fa...',
         'params': [],
     },
     'src.s3': {

@@ -26752,3 +26752,134 @@ fn the_rows_for_a_seed_are_pinned() {
         ])
     );
 }
+
+// ---------------------------------------------------------------------------
+// qa.assert: a condition checked in the run, the way tAssert checks one.
+// ---------------------------------------------------------------------------
+
+/// Three rows, an assertion on them, and a sink after it.
+fn asserted(engine: &DuckdbEngine, dir: &Path, assert_props: Value) -> duckle_duckdb_engine::RunResult {
+    let csv = write_file(dir, "in.csv", "id,amt\n1,5\n2,7\n3,9\n");
+    engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": &csv, "hasHeader": true })),
+            node("a", "qa.assert", assert_props),
+            node("k", "snk.jsonl", json!({ "path": out_path(dir, "out.jsonl") })),
+        ]),
+        json!([main_edge("e1", "s", "a"), main_edge("e2", "a", "k")]),
+    ))
+}
+
+#[test]
+fn an_assertion_that_holds_changes_nothing() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    for expression in ["count(*) = 3", "amt > 0", "sum(amt) = 21"] {
+        let r = asserted(&engine, tmp.path(), json!({ "expression": expression }));
+        assert_eq!(r.status, "ok", "{expression}: {:?}", r.error);
+        let written = std::fs::read_to_string(out_path(tmp.path(), "out.jsonl")).unwrap();
+        assert_eq!(written.lines().count(), 3, "{expression}");
+    }
+}
+
+#[test]
+fn an_assertion_that_fails_stops_the_run_and_says_what_was_asserted() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    // Across every row, and as one statement about all of them.
+    for (expression, want) in [("amt < 8", "1 of 3 rows"), ("sum(amt) = 99", "orders add up")] {
+        let r = asserted(&engine, tmp.path(), json!({
+            "description": "orders add up",
+            "expression": expression,
+        }));
+        assert_eq!(r.status, "error", "{expression}");
+        let err = r.error.unwrap_or_default();
+        assert!(err.contains("orders add up"), "{err}");
+        assert!(err.contains(want), "{err}");
+    }
+}
+
+#[test]
+fn an_empty_value_does_not_satisfy_an_assertion() {
+    // NULL is not TRUE. A check that passes on a value it could not read is no check.
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,amt\n1,5\n2,\n");
+    let r = engine.execute_pipeline(&doc(
+        json!([
+            node("s", "src.csv", json!({ "path": &csv, "hasHeader": true })),
+            node("a", "qa.assert", json!({ "expression": "amt > 0" })),
+        ]),
+        json!([main_edge("e1", "s", "a")]),
+    ));
+    assert_eq!(r.status, "error");
+}
+
+#[test]
+fn an_assertion_it_cannot_evaluate_is_a_failure_not_a_pass() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let r = asserted(&engine, tmp.path(), json!({ "expression": "no_such_column > 0", "onFail": "continue" }));
+    assert_eq!(r.status, "error", "a typo must not read as a passed check");
+    assert!(r.error.unwrap_or_default().contains("no_such_column"));
+}
+
+#[test]
+fn an_assertion_with_no_expression_does_not_compile() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let r = asserted(&engine, tmp.path(), json!({ "description": "something" }));
+    assert_eq!(r.status, "error");
+    assert!(r.error.unwrap_or_default().contains("expression"));
+}
+
+/// tAssertCatcher's job, done by Run Events: the run carries on past a failed check, and
+/// every check made so far arrives as a row a sink can keep.
+#[test]
+fn run_events_catch_assertions_the_run_carried_on_past() {
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let csv = write_file(tmp.path(), "in.csv", "id,amt\n1,5\n2,7\n");
+    let out = out_path(tmp.path(), "events.jsonl");
+    let mut seen = Vec::new();
+    let r = engine.execute_pipeline_with_events(
+        &doc(
+            json!([
+                node("s", "src.csv", json!({ "path": &csv, "hasHeader": true })),
+                node("good", "qa.assert", json!({ "description": "has rows", "expression": "count(*) > 0" })),
+                node("bad", "qa.assert", json!({
+                    "description": "small amounts", "expression": "amt < 6", "onFail": "continue",
+                })),
+                node("e", "src.runevents", json!({})),
+                node("k", "snk.jsonl", json!({ "path": &out })),
+            ]),
+            json!([
+                main_edge("e1", "s", "good"),
+                main_edge("e2", "good", "bad"),
+                { "id": "o", "source": "bad", "target": "e",
+                  "sourceHandle": "main", "targetHandle": "main",
+                  "data": { "connectionType": "on-component-ok" } },
+                main_edge("e3", "e", "k"),
+            ]),
+        ),
+        None,
+        None,
+        |evt| {
+            if let duckle_duckdb_engine::PipelineEvent::Assertion { node_id, passed, .. } = evt {
+                seen.push((node_id.clone(), passed));
+            }
+        },
+    );
+    assert_eq!(r.status, "ok", "the run carries on past a check told to: {:?}", r.error);
+    assert_eq!(seen, [("good".to_string(), true), ("bad".to_string(), false)]);
+    let rows: Vec<Value> = std::fs::read_to_string(&out)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let row = |id: &str| rows.iter().find(|r| r["node_id"] == id).unwrap_or_else(|| panic!("{id}: {rows:?}"));
+    assert_eq!(row("good")["status"], "ok");
+    assert_eq!(row("bad")["status"], "failed");
+    assert_eq!(row("bad")["kind"], "assert");
+    assert!(row("bad")["message"].as_str().unwrap().contains("small amounts"));
+}

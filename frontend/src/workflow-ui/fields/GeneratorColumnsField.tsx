@@ -107,7 +107,7 @@ export function GeneratorColumnsField({ field, value, onChange }: Props) {
                                 </div>
                                 <div
                                     className="field-agg-row"
-                                    style={{ gridTemplateColumns: `repeat(${params.length}, 1fr) 64px` }}
+                                    style={{ gridTemplateColumns: `${'1fr '.repeat(params.length)}64px` }}
                                 >
                                     {params.map(p => (
                                         <input

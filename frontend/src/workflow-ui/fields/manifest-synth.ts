@@ -9928,6 +9928,28 @@ const GENERATORS: SelectOption[] = [
     { label: 'Other: ISBN', value: 'book.isbn' },
 ];
 
+function synthAssert(comp: ComponentDef): ComponentManifest {
+    return base(comp, [
+        {
+            label: 'Assert',
+            fields: [
+                { key: 'description', label: 'What is being checked', kind: 'text', placeholder: 'Every order has an amount', description: 'Said in the run log and in the error. The expression is used if this is blank.' },
+                { key: 'expression', label: 'Condition', kind: 'expression', required: true, placeholder: 'sum(amount) = 1200', description: 'A SQL condition. With an aggregate it is one statement about all the rows; without one, every row has to meet it. NULL counts as not met.' },
+                {
+                    key: 'onFail',
+                    label: 'If it does not hold',
+                    kind: 'select',
+                    defaultValue: 'fail',
+                    options: [
+                        { label: 'Stop the run', value: 'fail' },
+                        { label: 'Record it and carry on', value: 'continue' },
+                    ],
+                },
+            ],
+        },
+    ], 'upstream');
+}
+
 function synthGenerator(comp: ComponentDef): ComponentManifest {
     return base(comp, [
         {
@@ -9999,6 +10021,7 @@ function dispatchManifest(componentId: string): ComponentManifest | undefined {
     // form; routed by id ahead of the group checks.
     if (comp.id === 'src.postgres.cdc') return synthPostgresCdc(comp);
     if (comp.id === 'src.generate') return synthGenerator(comp);
+    if (comp.id === 'qa.assert') return synthAssert(comp);
     if (comp.id === 'src.model') return synthModelSource(comp);
     if (comp.id === 'snk.model') return synthModelSink(comp);
     if (groupId === 'src.files') return synthFileSource(comp);

@@ -94,8 +94,8 @@ const ALL_STEPS: Step[] = [
     {
         sel: '[data-tour="tabs"]',
         chapter: 'Build',
-        title: 'Canvas, Plan, Run, History',
-        body: 'Four views of the same pipeline. Plan shows the SQL each block compiles to, which is the fastest way to understand what Duckle is actually doing. Run shows the last result with a data preview. History lists every previous run of this pipeline.',
+        title: 'Canvas, Plan, Run, History, Tests',
+        body: 'Five views of the same pipeline. Plan shows the SQL each block compiles to, which is the fastest way to understand what Duckle is actually doing. Run shows the last result with a data preview. History lists every previous run of this pipeline. Tests checks what a node produces from inputs you choose.',
         placement: 'bottom',
         requireAnchor: true,
     },

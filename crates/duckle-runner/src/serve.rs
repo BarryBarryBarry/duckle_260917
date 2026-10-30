@@ -1052,6 +1052,44 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
                 None => respond_err("400 Bad Request", "missing or invalid pipelineId"),
             }
         }
+        // The Tests tab, on the same file `duckle test` runs. The workspace is this
+        // server's, as for every command here.
+        "tests_load" | "tests_save" | "tests_run" => {
+            use duckle_duckdb_engine::testsuite;
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let Some(id) = args.get("pipelineId").and_then(Value::as_str) else {
+                return respond_err("400 Bad Request", "missing pipelineId");
+            };
+            let answer = match cmd {
+                "tests_load" => testsuite::load(&state.workspace, id).map(|s| json!(s)),
+                "tests_save" => testsuite::save(&state.workspace, id, &args["suite"]).map(|()| json!({ "ok": true })),
+                _ => std::env::current_exe().map_err(|e| e.to_string()).and_then(|runner| {
+                    // A test run is a pipeline run, so it waits its turn in that pipeline's
+                    // pool. A pipeline that cannot be read has no pool, and the run below
+                    // says what is wrong with it.
+                    testsuite::path(&state.workspace, id)?;
+                    let file = state.workspace.join("pipelines").join(format!("{id}.json"));
+                    let resource_pool = std::fs::read_to_string(file)
+                        .ok()
+                        .and_then(|t| serde_json::from_str::<PipelineDoc>(strip_bom(&t)).ok())
+                        .map(|doc| doc.resource_pool)
+                        .unwrap_or_default();
+                    let (_guard, _pool, _queued) = state.run_lock.acquire(&resource_pool);
+                    testsuite::run(
+                        &runner,
+                        &state.duckdb,
+                        &state.workspace,
+                        id,
+                        args.get("record").and_then(Value::as_bool).unwrap_or(false),
+                        args.get("caseName").and_then(Value::as_str),
+                    )
+                }),
+            };
+            match answer {
+                Ok(v) => respond_json(&v),
+                Err(e) => respond_err("400 Bad Request", &e),
+            }
+        }
         "watermark_list" => {
             let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
             match editor_state_name(&state.workspace, &args) {

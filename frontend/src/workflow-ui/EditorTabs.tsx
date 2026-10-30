@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
     Connection,
@@ -12,16 +12,20 @@ import Canvas, { type DropPosition, type NodeAction, type PaneAction } from '../
 import PlanView from './PlanView';
 import RunView from './RunView';
 import RunHistoryView from './RunHistoryView';
+import TestsView from './TestsView';
 import type { EngineId } from './EngineSelector';
 import type { DuckleNodeData } from '../pipeline-types';
 import type { ComponentDef } from './palette-data';
 import type { ConnectionType } from '../canvas/connection-types';
 import type { RunResult } from '../tauri-bridge';
 
-type TabId = 'canvas' | 'plan' | 'run' | 'history';
+type TabId = 'canvas' | 'plan' | 'run' | 'history' | 'tests';
 
 // Tab labels resolved per-render via useTranslation; we keep just the IDs here.
-const TAB_IDS: TabId[] = ['canvas', 'plan', 'run', 'history'];
+const TAB_IDS: TabId[] = ['canvas', 'plan', 'run', 'history', 'tests'];
+
+// Newer tabs are not yet in every locale file, so each has a readable fallback.
+const TAB_FALLBACK: Partial<Record<TabId, string>> = { history: 'History', tests: 'Tests' };
 
 type Props = {
     engine: EngineId;
@@ -46,6 +50,7 @@ type Props = {
     onEdgeDelete: (edgeId: string) => void;
     onEdgeEdit: (edgeId: string) => void;
     nodeAutodetectAvailable: (nodeId: string) => boolean;
+    onSaveBeforeTests: () => Promise<void>;
 };
 
 export default function EditorTabs({
@@ -70,9 +75,12 @@ export default function EditorTabs({
     onEdgeDelete,
     onEdgeEdit,
     nodeAutodetectAvailable,
+    onSaveBeforeTests,
 }: Props) {
     const { t } = useTranslation();
     const [active, setActive] = useState<TabId>('canvas');
+    const [testNode, setTestNode] = useState<string | null>(null);
+    const clearTestNode = useCallback(() => setTestNode(null), []);
 
     // Let anything outside this subtree select a tab, the same way the tour and
     // the Dives toggle are driven (a window event rather than lifted state).
@@ -84,6 +92,16 @@ export default function EditorTabs({
         };
         window.addEventListener('duckle:open-tab', onOpenTab);
         return () => window.removeEventListener('duckle:open-tab', onOpenTab);
+    }, []);
+
+    // A node's Create test: open Tests with a new case on that node.
+    useEffect(() => {
+        const onCreateTest = (e: Event) => {
+            setTestNode((e as CustomEvent<string>).detail);
+            setActive('tests');
+        };
+        window.addEventListener('duckle:create-test', onCreateTest);
+        return () => window.removeEventListener('duckle:create-test', onCreateTest);
     }, []);
 
     return (
@@ -98,9 +116,7 @@ export default function EditorTabs({
                         className="tab"
                         onClick={() => setActive(id)}
                     >
-                        {/* `history` is a newer tab not yet in every locale file;
-                            fall back to a readable English label when missing. */}
-                        {t(`editorTabs.${id}`, { defaultValue: id === 'history' ? 'History' : id })}
+                        {t(`editorTabs.${id}`, { defaultValue: TAB_FALLBACK[id] ?? id })}
                     </button>
                 ))}
             </div>
@@ -142,6 +158,20 @@ export default function EditorTabs({
                             workspacePath={workspacePath}
                             pipelineId={pipelineId}
                             runResultKey={runResult?.duration_ms ?? 0}
+                        />
+                    ) : null}
+                </div>
+                <div className={'tab-panel' + (active === 'tests' ? ' tab-panel-active' : '')}>
+                    {active === 'tests' ? (
+                        <TestsView
+                            workspacePath={workspacePath}
+                            pipelineId={pipelineId}
+                            nodes={nodes}
+                            resolvedNodes={planNodes}
+                            edges={edges}
+                            onSaveBeforeRun={onSaveBeforeTests}
+                            newForNode={testNode}
+                            onNewForNodeTaken={clearTestNode}
                         />
                     ) : null}
                 </div>

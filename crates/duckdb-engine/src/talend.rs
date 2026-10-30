@@ -69,6 +69,8 @@ pub enum Warning {
     StatementNotQuery { node: String, verb: String },
     /// A link leaving a multi-output mapper that does not say which output it carries.
     MapperOutputUnnamed { node: String, target: String, outputs: Vec<String> },
+    /// A row generator column filled by Java that has no generator here.
+    GeneratedByJava { node: String, column: String, expression: String },
 }
 
 impl std::fmt::Display for Warning {
@@ -111,6 +113,11 @@ impl std::fmt::Display for Warning {
                 f,
                 "{node}: output column {column} is computed by Java (`{expression}`), which does \
                  not translate. Rewrite it as a SQL expression"
+            ),
+            Warning::GeneratedByJava { node, column, expression } => write!(
+                f,
+                "{node}: column {column} is filled by Java (`{expression}`), which has no generator \
+                 here. The node will not compile until a generator is chosen for it"
             ),
             Warning::ChildReturnsRows { node } => write!(
                 f,
@@ -439,9 +446,14 @@ fn static_map(component: &str) -> Option<(&'static str, &'static str)> {
         // A log-catcher is a SOURCE of error rows, not a sink for them: what it
         // emits is mailed or written to a table downstream.
         "tLogCatcher" => ("src.runevents", "source"),
+        // An assertion and the listener that collects them. The listener's rows are the
+        // same ones: what the run did, read back as a source.
+        "tAssert" => ("qa.assert", "transform"),
+        "tAssertCatcher" => ("src.runevents", "source"),
         // Both turn values into a row: one from constants, the other from the
         // iteration's current item, which ForEach exposes as ${ITER_ITEM_*}.
         "tFixedFlowInput" | "tIterateToFlow" => ("src.inline", "source"),
+        "tRowGenerator" => ("src.generate", "source"),
         "tFileList" => ("src.filelist", "source"),
         // A file-existence check is a listing of one path: one row, or none.
         "tFileExist" => ("src.filelist", "source"),
@@ -1118,6 +1130,42 @@ fn properties_for(
                 props.insert("columns".into(), JsonValue::Object(cols));
             }
         }
+        "qa.assert" => {
+            // Non-blocking in the job, which is what continue means here. Most expressions
+            // read a component's counters rather than rows, so one that does not translate
+            // arrives empty and refuses to compile, where a guess would pass or fail for
+            // the wrong reason.
+            copy_params(raw, &[("DESCRIPTION", "description")], &mut props, warnings);
+            props.insert("onFail".into(), JsonValue::String("continue".into()));
+            let expression = raw.params.get("EXPRESSION").map(String::as_str).unwrap_or_default();
+            match java_expr_to_sql(expression, &ColTypes::new(), &PortMap::new()) {
+                Some(sql) => {
+                    props.insert("expression".into(), JsonValue::String(sql));
+                }
+                None => warnings.push(Warning::JavaExpression {
+                    node: raw.unique.clone(),
+                    column: "the assertion".to_string(),
+                    expression: expression.to_string(),
+                }),
+            }
+        }
+        "src.generate" => {
+            // The columns are a TABLE parameter of column/expression pairs, one Java
+            // expression per column, and the row count is a parameter of its own.
+            let columns: Vec<JsonValue> = raw
+                .tables
+                .get("VALUES")
+                .into_iter()
+                .flatten()
+                .filter_map(|row| Some((row.get("SCHEMA_COLUMN")?, row.get("ARRAY")?)))
+                .filter(|(name, _)| !name.trim().is_empty())
+                .map(|(name, expression)| generated_column(raw, name.trim(), expression, warnings))
+                .collect();
+            if !columns.is_empty() {
+                props.insert("columns".into(), JsonValue::Array(columns));
+            }
+            copy_params(raw, &[("NB_ROWS", "rowCount")], &mut props, warnings);
+        }
         "src.excel" | "snk.excel" => {
             copy_params(raw, &[("FILENAME", "path")], &mut props, warnings);
         }
@@ -1755,6 +1803,77 @@ fn balanced(s: &str) -> bool {
         }
     }
     depth == 0
+}
+
+/// One column of a Data Generator, from the Java a row generator holds for it.
+///
+/// The functions the job's editor offers become generators. A list of literals is a pick
+/// from that list, which is how the component reads one. A lone literal or context value is
+/// fixed. Anything else is somebody's own Java, and arrives as a generator that does not
+/// exist: the node then refuses to compile and names the expression, where a stand-in would
+/// run and produce the wrong rows.
+fn generated_column(
+    raw: &RawNode,
+    name: &str,
+    expression: &str,
+    warnings: &mut Vec<Warning>,
+) -> JsonValue {
+    const FUNCTIONS: &[(&str, &str)] = &[
+        ("TalendDataGenerator.getFirstName", "person.firstName"),
+        ("TalendDataGenerator.getLastName", "person.lastName"),
+        ("TalendDataGenerator.getUsStreet", "address.street"),
+        ("TalendDataGenerator.getUsCity", "address.city"),
+        ("TalendDataGenerator.getUsState", "address.state"),
+        ("TalendDataGenerator.getUsStateId", "address.stateAbbr"),
+    ];
+    let e = expression.trim();
+    let value = |arg: &str| rewrite_context(arg).unwrap_or_else(|| unquote(arg));
+    let args = |call: &str| call_args(e, call).map(|a| a.into_iter().map(value).collect::<Vec<_>>());
+    let mut column = JsonMap::new();
+    column.insert("name".into(), JsonValue::String(name.to_string()));
+    let mut set = |key: &str, v: &str| {
+        column.insert(key.to_string(), JsonValue::String(v.to_string()));
+    };
+    if let Some((_, generator)) = FUNCTIONS.iter().find(|(f, _)| call_args(e, f).is_some()) {
+        set("generator", generator);
+    } else if let Some([_, start, step]) = args("Numeric.sequence").as_deref() {
+        set("generator", "sequence");
+        set("start", start);
+        set("step", step);
+    } else if let Some([min, max]) = args("Numeric.random").as_deref() {
+        set("generator", "integer");
+        set("min", min);
+        set("max", max);
+    } else if let Some([min, max]) = args("TalendDate.getRandomDate").as_deref() {
+        set("generator", "date");
+        set("min", min);
+        set("max", max);
+    } else if let Some(length) = args("TalendString.getAsciiRandomString")
+        .as_deref()
+        .and_then(|a| a.first()?.trim().parse::<usize>().ok())
+    {
+        set("generator", "pattern");
+        set("pattern", &"*".repeat(length));
+    } else if e.contains('(') {
+        warnings.push(Warning::GeneratedByJava {
+            node: raw.unique.clone(),
+            column: name.to_string(),
+            expression: e.to_string(),
+        });
+        set("generator", &format!("java: {e}"));
+    } else if e.contains(',') {
+        let wrapped = format!("list({e})");
+        let values = call_args(&wrapped, "list").unwrap_or_default();
+        set("generator", "pick");
+        column.insert(
+            "values".into(),
+            JsonValue::Array(values.into_iter().map(|v| JsonValue::String(value(v))).collect()),
+        );
+    } else {
+        set("generator", "constant");
+        set("value", &value(e));
+    }
+    JsonValue::Object(column)
 }
 
 /// The arguments of `name(...)`, split on top-level commas, when the whole expression is
@@ -5868,6 +5987,108 @@ mod tests {
             schema.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
             vec!["record_type", "amount"]
         );
+    }
+
+    #[test]
+    fn an_assertion_and_its_catcher_arrive_as_a_check_and_run_events() {
+        let xml = r#"<talendfile:ProcessType xmlns:talendfile="x">
+          <node componentName="tAssert" posX="10" posY="10">
+            <elementParameter name="UNIQUE_NAME" value="tAssert_1"/>
+            <elementParameter field="TEXT" name="DESCRIPTION" value="&quot;row count&quot;"/>
+            <elementParameter field="MEMO_JAVA" name="EXPRESSION" value="((Integer)globalMap.get(&quot;tFileInputDelimited_1_NB_LINE&quot;)) == 3"/>
+          </node>
+          <node componentName="tAssertCatcher" posX="10" posY="60">
+            <elementParameter name="UNIQUE_NAME" value="tAssertCatcher_1"/>
+          </node></talendfile:ProcessType>"#;
+        let im = import_item(xml, "j").unwrap();
+        let assert = &im.nodes[0].data;
+        assert_eq!(assert.component_id.as_deref(), Some("qa.assert"));
+        let p = assert.properties.as_ref().unwrap();
+        assert_eq!(p["description"], serde_json::json!("row count"));
+        assert_eq!(p["onFail"], serde_json::json!("continue"), "tAssert does not stop a job");
+        assert!(p.get("expression").is_none(), "a counter read is not guessed at: {p:?}");
+        assert!(
+            im.warnings.iter().any(|w| w.to_string().contains("NB_LINE")),
+            "the report names what did not translate: {:?}",
+            im.warnings
+        );
+        assert_eq!(im.nodes[1].data.component_id.as_deref(), Some("src.runevents"));
+    }
+
+    #[test]
+    fn a_row_generator_arrives_as_a_data_generator() {
+        // Every shape the component's editor can leave in the table: its own functions, a
+        // list of literals, a fixed value and a context value.
+        let xml = r#"<talendfile:ProcessType xmlns:talendfile="x">
+          <node componentName="tRowGenerator" posX="10" posY="10">
+            <elementParameter name="UNIQUE_NAME" value="tRowGenerator_1"/>
+            <elementParameter field="TEXT" name="NB_ROWS" value="250"/>
+            <elementParameter field="TABLE" name="VALUES">
+              <elementValue elementRef="SCHEMA_COLUMN" value="id"/>
+              <elementValue elementRef="ARRAY" value="Numeric.sequence(&quot;s1&quot;,10,5)"/>
+              <elementValue elementRef="SCHEMA_COLUMN" value="first"/>
+              <elementValue elementRef="ARRAY" value="TalendDataGenerator.getFirstName()"/>
+              <elementValue elementRef="SCHEMA_COLUMN" value="state"/>
+              <elementValue elementRef="ARRAY" value="TalendDataGenerator.getUsStateId()"/>
+              <elementValue elementRef="SCHEMA_COLUMN" value="score"/>
+              <elementValue elementRef="ARRAY" value="Numeric.random(1,100)"/>
+              <elementValue elementRef="SCHEMA_COLUMN" value="joined"/>
+              <elementValue elementRef="ARRAY" value="TalendDate.getRandomDate(&quot;2007-01-01&quot;,&quot;2008-12-31&quot;)"/>
+              <elementValue elementRef="SCHEMA_COLUMN" value="code"/>
+              <elementValue elementRef="ARRAY" value="TalendString.getAsciiRandomString(6)"/>
+              <elementValue elementRef="SCHEMA_COLUMN" value="plan"/>
+              <elementValue elementRef="ARRAY" value="&quot;free&quot;,&quot;pro&quot;,&quot;team&quot;"/>
+              <elementValue elementRef="SCHEMA_COLUMN" value="fixed"/>
+              <elementValue elementRef="ARRAY" value="&quot;EMEA&quot;"/>
+              <elementValue elementRef="SCHEMA_COLUMN" value="batch"/>
+              <elementValue elementRef="ARRAY" value="context.batchID"/>
+            </elementParameter>
+          </node></talendfile:ProcessType>"#;
+        let im = import_item(xml, "j").unwrap();
+        assert_eq!(im.nodes[0].data.component_id.as_deref(), Some("src.generate"));
+        assert!(im.warnings.is_empty(), "{:?}", im.warnings);
+        let p = im.nodes[0].data.properties.as_ref().unwrap();
+        assert_eq!(p["rowCount"], serde_json::json!("250"));
+        assert_eq!(
+            p["columns"],
+            serde_json::json!([
+                { "name": "id", "generator": "sequence", "start": "10", "step": "5" },
+                { "name": "first", "generator": "person.firstName" },
+                { "name": "state", "generator": "address.stateAbbr" },
+                { "name": "score", "generator": "integer", "min": "1", "max": "100" },
+                { "name": "joined", "generator": "date", "min": "2007-01-01", "max": "2008-12-31" },
+                { "name": "code", "generator": "pattern", "pattern": "******" },
+                { "name": "plan", "generator": "pick", "values": ["free", "pro", "team"] },
+                { "name": "fixed", "generator": "constant", "value": "EMEA" },
+                { "name": "batch", "generator": "constant", "value": "${batchID}" },
+            ])
+        );
+        // What came across is what the engine compiles, not just what it was hoped to be.
+        let sql = crate::plan::generate::build_source(p).expect("the imported node compiles");
+        assert!(sql.contains("FROM range(250)"), "{sql}");
+    }
+
+    #[test]
+    fn a_row_generator_column_filled_by_java_is_refused_and_named() {
+        // A stand-in would run and produce rows nobody asked for. The node refuses instead,
+        // and both the report and the compile error name the expression.
+        let xml = r#"<talendfile:ProcessType xmlns:talendfile="x">
+          <node componentName="tRowGenerator" posX="10" posY="10">
+            <elementParameter name="UNIQUE_NAME" value="tRowGenerator_1"/>
+            <elementParameter field="TABLE" name="VALUES">
+              <elementValue elementRef="SCHEMA_COLUMN" value="code"/>
+              <elementValue elementRef="ARRAY" value="routines.MyCodes.next(4)"/>
+            </elementParameter>
+          </node></talendfile:ProcessType>"#;
+        let im = import_item(xml, "j").unwrap();
+        assert!(
+            im.warnings.iter().any(|w| w.to_string().contains("routines.MyCodes.next(4)")),
+            "{:?}",
+            im.warnings
+        );
+        let p = im.nodes[0].data.properties.as_ref().unwrap();
+        let err = crate::plan::generate::build_source(p).expect_err("this must not compile");
+        assert!(err.contains("routines.MyCodes.next(4)"), "{err}");
     }
 
     #[test]

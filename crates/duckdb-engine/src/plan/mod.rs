@@ -397,6 +397,9 @@ pub enum RuntimeSpec {
     /// ctl.die: fail the run with `message` when `condition` holds against
     /// the upstream row count ("always" / "has-rows" / "no-rows").
     Die { message: String, condition: String },
+    /// qa.assert: check `expression` against the upstream rows and report the
+    /// outcome, stopping the run on a failure when `stop` is set.
+    Assert { description: String, expression: String, stop: bool },
     /// xf.incremental: watermark-based incremental load (see IncrementalSpec).
     Incremental(IncrementalSpec),
     /// src.ducklake.changes: DuckLake change-data-feed source (see DuckLakeCdcSpec).
@@ -1973,6 +1976,7 @@ fn build_stage(
     // (level, message) for ctl.log / ctl.warn; (message, condition) for ctl.die.
     let mut log_spec: Option<(String, String)> = None;
     let mut die_spec: Option<(String, String)> = None;
+    let mut assert_spec: Option<(String, String, bool)> = None;
     let mut incremental: Option<IncrementalSpec> = None;
     let mut ducklake_cdc: Option<DuckLakeCdcSpec> = None;
     let mut pg_cdc: Option<PgCdcSpec> = None;
@@ -4173,6 +4177,19 @@ fn build_stage(
             None => (passthrough_placeholder_sql(&node.id, "die"), None),
         };
         (sql, StageKind::View, from)
+    } else if component_id == "qa.assert" {
+        // A statement about the rows that must hold. The rows pass through either way,
+        // so it can sit anywhere in a flow without changing what the flow produces.
+        let expression = string_prop(&props, "expression")
+            .filter(|s| !s.trim().is_empty())
+            .ok_or_else(|| EngineError::Config("qa.assert: an expression is required".into()))?;
+        let description = string_prop(&props, "description")
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| expression.clone());
+        let stop = string_prop(&props, "onFail").as_deref() != Some("continue");
+        assert_spec = Some((description, expression, stop));
+        let from_view = inputs.main().ok_or_else(|| EngineError::Config(missing_input_msg("qa.assert")))?;
+        (passthrough_view_sql(&node.id, from_view), StageKind::View, Some(from_view.to_string()))
     } else if component_id == "src.ducklake.changes" || component_id == "xf.ducklake.cdc" {
         // DuckLake change-data-feed (CDC) source. The executor ATTACHes the
         // catalog, reads the last consumed snapshot id from workspace state,
@@ -7275,6 +7292,9 @@ fn build_stage(
             }))
         .or_else(|| log_spec.map(|(level, message)| RuntimeSpec::Log { level, message }))
         .or_else(|| die_spec.map(|(message, condition)| RuntimeSpec::Die { message, condition }))
+        .or_else(|| {
+            assert_spec.map(|(description, expression, stop)| RuntimeSpec::Assert { description, expression, stop })
+        })
         .or_else(|| incremental.map(RuntimeSpec::Incremental))
         .or_else(|| ducklake_cdc.map(RuntimeSpec::DuckLakeCdc))
         .or_else(|| pg_cdc.map(RuntimeSpec::PgCdc))

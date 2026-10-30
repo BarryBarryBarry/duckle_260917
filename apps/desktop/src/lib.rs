@@ -223,6 +223,9 @@ pub fn run() {
             run_pipeline,
             run_pipeline_partial,
             run_history,
+            tests_load,
+            tests_save,
+            tests_run,
             watermark_list,
             watermark_set,
             watermark_clear,
@@ -666,6 +669,42 @@ fn run_history(workspace_path: String, pipeline_id: String) -> Result<Vec<RunRec
     let mut records = load_run_history(std::path::Path::new(&workspace_path), &pipeline_id);
     records.reverse();
     Ok(records)
+}
+
+// ---- The Tests tab, on the file `duckle test` runs ----------------------
+
+#[tauri::command]
+fn tests_load(workspace_path: String, pipeline_id: String) -> Result<Option<serde_json::Value>, String> {
+    duckle_duckdb_engine::testsuite::load(std::path::Path::new(&workspace_path), &pipeline_id)
+}
+
+#[tauri::command]
+fn tests_save(workspace_path: String, pipeline_id: String, suite: serde_json::Value) -> Result<(), String> {
+    duckle_duckdb_engine::testsuite::save(std::path::Path::new(&workspace_path), &pipeline_id, &suite)
+}
+
+/// Off the async runtime, because a suite runs pipelines and takes as long as they do.
+#[tauri::command]
+async fn tests_run(
+    workspace_path: String,
+    pipeline_id: String,
+    record: bool,
+    case_name: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let runner = staged_stub()?;
+    let duckdb = engine()?.binary().to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        duckle_duckdb_engine::testsuite::run(
+            &runner,
+            &duckdb,
+            std::path::Path::new(&workspace_path),
+            &pipeline_id,
+            record,
+            case_name.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ---- Backfill: xf.incremental / src.ducklake.changes saved state --------

@@ -62,6 +62,7 @@ pub mod fromsql;
 pub mod connection_test;
 pub mod catalog;
 pub mod runlock;
+pub mod testsuite;
 pub mod s3;
 pub mod batch;
 pub mod audit;
@@ -928,6 +929,37 @@ impl DuckdbEngine {
     /// ctl.log / ctl.warn `{rows}` token and ctl.die row-based conditions.
     /// Returns 0 when there's no input or the count can't be read - the
     /// caller treats "couldn't count" the same as empty rather than failing.
+    /// Check a qa.assert expression against a view: None when it holds, or what went wrong.
+    ///
+    /// The expression is selected from the view, so one with an aggregate is a single
+    /// statement about all the rows and one without is asked of each row. Anything but TRUE
+    /// counts against it, because NULL means it could not say.
+    fn check_assertion(
+        &self,
+        db: &Path,
+        view: Option<&str>,
+        expression: &str,
+    ) -> Result<Option<String>, EngineError> {
+        let view = view.ok_or_else(|| EngineError::Query("no input to check".into()))?;
+        let rows = self.run_rows(
+            Some(db),
+            &format!(
+                "SELECT count(*) AS total, count(*) FILTER (WHERE ok IS NOT TRUE) AS failed \
+                 FROM (SELECT ({expression}) AS ok FROM {})",
+                plan::quote_ident(view)
+            ),
+        )?;
+        let count = |key: &str| rows.first().and_then(|r| r.get(key)).and_then(JsonValue::as_u64).unwrap_or(0);
+        let (total, failed) = (count("total"), count("failed"));
+        Ok((failed > 0).then(|| {
+            if total == 1 {
+                format!("{expression} does not hold")
+            } else {
+                format!("{failed} of {total} rows do not meet {expression}")
+            }
+        }))
+    }
+
     fn count_view(&self, db: &Path, view: Option<&str>) -> u64 {
         let Some(view) = view else { return 0 };
         let sql = format!("SELECT count(*) AS c FROM {}", plan::quote_ident(view));
@@ -1820,6 +1852,8 @@ impl DuckdbEngine {
         };
 
         let mut nodes: std::collections::BTreeMap<String, NodeRunStatus> = Default::default();
+        // qa.assert outcomes so far, for src.runevents: (node, description, passed).
+        let mut assertions: Vec<(String, String, bool)> = Vec::new();
         let mut cache_keys: std::collections::BTreeMap<String, String> = Default::default();
         let mut overall_error: Option<String> = None;
         // ctl.try installs a fallback path here. On any subsequent
@@ -2506,6 +2540,36 @@ impl DuckdbEngine {
                         continue;
                     }
                 }
+                // qa.assert: check the rows, report it, and stop if told to. An expression
+                // that cannot be evaluated stops the run whatever onFail says, because a
+                // check that never ran is not a check that passed.
+                if let Some(RuntimeSpec::Assert { description, expression, stop }) = stage.runtime.as_ref() {
+                    match self.check_assertion(&db_path, stage.from.as_deref(), expression) {
+                        Err(e) => {
+                            result = Err(EngineError::Query(format!(
+                                "qa.assert: {description}: could not be evaluated: {e}"
+                            )));
+                            continue;
+                        }
+                        Ok(detail) => {
+                            let passed = detail.is_none();
+                            let detail = detail.unwrap_or_default();
+                            assertions.push((stage.node_id.clone(), description.clone(), passed));
+                            on_event(PipelineEvent::Assertion {
+                                node_id: stage.node_id.clone(),
+                                description: description.clone(),
+                                passed,
+                                detail: detail.clone(),
+                            });
+                            if !passed && *stop {
+                                result = Err(EngineError::Query(format!(
+                                    "qa.assert: {description}: {detail}"
+                                )));
+                                continue;
+                            }
+                        }
+                    }
+                }
                 // #252: an unchanged rerun of a deterministic stage does not
                 // have to do the work again. The key is computed BEFORE the
                 // stage runs, from the relation it is about to read, so a
@@ -2794,6 +2858,16 @@ impl DuckdbEngine {
                                     "duration_ms": n.duration_ms.unwrap_or(0),
                                 })
                             })
+                            .chain(assertions.iter().map(|(id, description, passed)| {
+                                serde_json::json!({
+                                    "node_id": id,
+                                    "kind": "assert",
+                                    "status": if *passed { "ok" } else { "failed" },
+                                    "message": description,
+                                    "category": "assertion",
+                                    "duration_ms": 0,
+                                })
+                            }))
                             .collect();
                         // A run with nothing wrong still has to produce the
                         // columns, or the good path fails to bind downstream.
@@ -7616,6 +7690,13 @@ pub enum PipelineEvent {
         node_id: String,
         level: String,
         message: String,
+    },
+    /// The outcome of a qa.assert, pass or fail. `detail` says what failed.
+    Assertion {
+        node_id: String,
+        description: String,
+        passed: bool,
+        detail: String,
     },
     Finished {
         status: String,
