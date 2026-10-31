@@ -111,9 +111,15 @@ jobs:
   # tool or an agent can target a KNOWN Duckle version rather than asking a
   # binary it may not have. Runs before `checksums`, like the runner asset, so
   # SHA256SUMS covers it.
+  #
+  # Pinned to ubuntu-24.04: on ubuntu-latest (26.04) the duckle-runner link
+  # fails with `undefined symbol: XXH32`. The registry is an informational
+  # asset nothing in the build consumes, so a failure here must not fail the
+  # release; `checksums` still runs (it only skips on cancellation).
   capability-registry:
     needs: prepare-release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    continue-on-error: true
     permissions:
       contents: write
     steps:
@@ -172,7 +178,7 @@ jobs:
           OS_FILTER: ${{ github.event.inputs.os_filter }}
         run: |
           linux='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Otter-ETL-agent-linux-x64","node":"linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Otter-ETL-agent-linux-arm64","node":"linux-arm64"}]'
-          all='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Otter-ETL-agent-linux-x64","node":"linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Otter-ETL-agent-linux-arm64","node":"linux-arm64"},{"os":"macos-14","binary":"duckle","asset":"Otter-ETL-agent-macos-x64","target":"x86_64-apple-darwin","node":"darwin-x64"},{"os":"macos-14","binary":"duckle","asset":"Otter-ETL-agent-macos-arm64","node":"darwin-arm64"},{"os":"windows-latest","binary":"duckle.exe","asset":"Otter-ETL-agent-windows-x64.exe","node":"win-x64"},{"os":"windows-11-arm","binary":"duckle.exe","asset":"Otter-ETL-agent-windows-arm64.exe","node":"win-arm64"}]'
+          all='[{"os":"ubuntu-24.04","binary":"duckle","asset":"Otter-ETL-agent-linux-x64","node":"linux-x64"},{"os":"ubuntu-24.04-arm","binary":"duckle","asset":"Otter-ETL-agent-linux-arm64","node":"linux-arm64"},{"os":"macos-14","binary":"duckle","asset":"Otter-ETL-agent-macos-x64","target":"x86_64-apple-darwin","node":"darwin-x64"},{"os":"macos-14","binary":"duckle","asset":"Otter-ETL-agent-macos-arm64","node":"darwin-arm64"},{"os":"windows-latest","binary":"duckle.exe","asset":"Otter-ETL-agent-windows-x64.exe","node":"win-x64"}]'
           if [ "$OS_FILTER" = "linux" ]; then include="$linux"; else include="$all"; fi
           echo "matrix={\"include\":$include}" >> "$GITHUB_OUTPUT"
 
@@ -292,7 +298,7 @@ jobs:
         # which continue-on-error cannot catch because the runner itself is lost.
         # arm64 Linux desktop then falls back to a duckle-lance on PATH /
         # DUCKLE_LANCE_BIN, the same best-effort path this step already documents.
-        # Every other target (incl. windows-arm64) still bundles it.
+        # Every other target still bundles it.
         if: ${{ !(runner.os == 'Linux' && runner.arch == 'ARM64') }}
         shell: bash
         continue-on-error: true
@@ -435,7 +441,7 @@ jobs:
           REL_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
         run: gh release upload "$REL_TAG" duckle-sbom.cdx.json --clobber
 
-  # Publish SHA256SUMS.txt covering the 6 binaries so the in-app self-updater
+  # Publish SHA256SUMS.txt covering the 5 binaries so the in-app self-updater
   # can verify a downloaded build before swapping it in. Uploads are per-matrix
   # job, so checksums must be a separate job that pulls the finished assets back.
   checksums:
@@ -470,7 +476,7 @@ jobs:
           set -e
           mkdir -p _sums && cd _sums
           gh release download "$REL_TAG" --clobber
-          # Checksum the published binaries (not any prior SHA file): the 6
+          # Checksum the published binaries (not any prior SHA file): the 5
           # desktop apps plus the headless runner, which CI downloads. The
           # in-app self-updater verifies a downloaded build against this file
           # before swapping it in, and looks its own asset up by name, so the
@@ -478,7 +484,7 @@ jobs:
           sha256sum \
             Otter-ETL-agent-linux-x64 Otter-ETL-agent-linux-arm64 \
             Otter-ETL-agent-macos-x64 Otter-ETL-agent-macos-arm64 \
-            Otter-ETL-agent-windows-x64.exe Otter-ETL-agent-windows-arm64.exe \
+            Otter-ETL-agent-windows-x64.exe \
             duckle-runner-linux-x64 \
             > SHA256SUMS.txt
           cat SHA256SUMS.txt
@@ -505,6 +511,5 @@ jobs:
             _sums/Otter-ETL-agent-macos-x64
             _sums/Otter-ETL-agent-macos-arm64
             _sums/Otter-ETL-agent-windows-x64.exe
-            _sums/Otter-ETL-agent-windows-arm64.exe
             _sums/duckle-runner-linux-x64
             _sums/SHA256SUMS.txt

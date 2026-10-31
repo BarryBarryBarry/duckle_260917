@@ -81,11 +81,11 @@ jobs:
   sign:
     # Linux on purpose: the signing happens in SignPath's HSM, so nothing here
     # needs Windows tooling, and this keeps the Node action off the
-    # windows-11-arm runner that the release matrix uses.
+    # Windows runners.
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        asset: [Otter-ETL-agent-windows-x64.exe, Otter-ETL-agent-windows-arm64.exe]
+        asset: [Otter-ETL-agent-windows-x64.exe]
     steps:
       - name: Download the unsigned asset
         env:
