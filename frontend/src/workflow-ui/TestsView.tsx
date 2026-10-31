@@ -296,18 +296,6 @@ export default function TestsView({
                 </div>
             </div>
             {error ? <div className="tests-error">{error}</div> : null}
-            {suite.cases.length === 0 ? (
-                <div className="tests-empty">
-                    <p>{t('tests.emptyIntro')}</p>
-                    <p>
-                        {t('tests.emptyHowBefore')}
-                        <b>{t('tests.newTest')}</b>
-                        {t('tests.emptyHowMiddle')}
-                        <b>{t('tests.createTest')}</b>
-                        {t('tests.emptyHowAfter')}
-                    </p>
-                </div>
-            ) : null}
             <div className="tests-list">
                 {suite.cases.map((c, i) => {
                     const result = results.find(r => r.test === c.name);

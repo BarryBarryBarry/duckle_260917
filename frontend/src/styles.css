@@ -2435,6 +2435,45 @@ textarea:focus-visible {
     border-bottom-color: var(--accent);
 }
 
+.tab[data-tooltip] {
+    position: relative;
+}
+
+.tab[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    transform: translateY(-4px);
+    width: max-content;
+    max-width: min(320px, calc(100vw - 48px));
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    background: var(--bg-1);
+    color: var(--text-1);
+    font-size: 0.8462rem;
+    font-weight: 400;
+    line-height: 1.55;
+    text-align: left;
+    white-space: pre-line;
+    text-wrap: pretty;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: 20;
+    transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+}
+
+.tab[data-tooltip]:hover::after,
+.tab[data-tooltip]:focus-visible::after {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+    transition-delay: 250ms;
+}
+
 .tab-content {
     flex: 1;
     min-height: 0;
@@ -2451,6 +2490,12 @@ textarea:focus-visible {
 .tab-panel-active {
     visibility: visible;
     pointer-events: auto;
+}
+
+/* React Flow nodes set inline visibility:visible, so explicitly hide all
+   children in inactive tabs to prevent canvas nodes bleeding into other views. */
+.tab-panel:not(.tab-panel-active) * {
+    visibility: hidden !important;
 }
 
 /* Empty state ------------------------------------------------------------- */

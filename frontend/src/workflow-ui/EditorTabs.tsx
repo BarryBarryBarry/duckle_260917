@@ -120,6 +120,7 @@ export default function EditorTabs({
                         role="tab"
                         aria-selected={active === id}
                         className="tab"
+                        data-tooltip={id === 'tests' ? t('tests.tabTooltip') : undefined}
                         onClick={() => setActive(id)}
                     >
                         {t(`editorTabs.${id}`, { defaultValue: TAB_FALLBACK[id] ?? id })}
