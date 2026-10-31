@@ -64,23 +64,36 @@ export function cleaned(c: TestCase): TestCase {
  * Why a case cannot be saved as it stands, or null. `duckle test` refuses a case that asserts
  * nothing, and saying so here beats a failure the first time it runs.
  */
-export function caseProblem(c: TestCase): string | null {
+export type CaseProblemCode = 'noName' | 'noNode' | 'noColumns' | 'noAssertion';
+
+const CASE_PROBLEM_TEXT: Record<CaseProblemCode, string> = {
+    noName: 'Give this test a name.',
+    noNode: 'Choose the node whose output this test checks.',
+    noColumns: 'Add columns to the dummy data. Running the source once, or detecting its schema, fills them in.',
+    noAssertion: 'Say what to check: a row count, a column, a SQL check or recorded rows.',
+};
+
+/** Why a case cannot run yet, as a code the UI can translate. */
+export function caseProblemCode(c: TestCase): CaseProblemCode | null {
     const e = c.expect;
-    if (!c.name.trim()) return 'Give this test a name.';
-    if (!e.node) return 'Choose the node whose output this test checks.';
+    if (!c.name.trim()) return 'noName';
+    if (!e.node) return 'noNode';
     const noColumns = Object.values(c.given ?? {}).some(
         g => typeof g !== 'string' && g.generate.columns.length === 0,
     );
-    if (noColumns) {
-        return 'Add columns to the dummy data. Running the source once, or detecting its schema, fills them in.';
-    }
+    if (noColumns) return 'noColumns';
     const asserts =
         e.rows !== undefined ||
         e.rowCount !== undefined ||
         Boolean(e.unique?.length) ||
         Boolean(e.notNull?.length) ||
         Boolean(e.sql?.trim());
-    return asserts ? null : 'Say what to check: a row count, a column, a SQL check or recorded rows.';
+    return asserts ? null : 'noAssertion';
+}
+
+export function caseProblem(c: TestCase): string | null {
+    const code = caseProblemCode(c);
+    return code ? CASE_PROBLEM_TEXT[code] : null;
 }
 
 const BY_NAME: Array<[RegExp, string]> = [

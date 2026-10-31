@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CheckCircle2, FolderOpen, Package, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { isTauri, tauriSavePath } from '../tauri-dialog';
 import { buildBundle, buildCapabilities, type SecretsMode, type TargetOs } from '../tauri-bridge';
 import type { RepoItem } from '../repo-types';
@@ -34,6 +35,7 @@ export default function BuildPipelineModal({
     contexts,
     onClose,
 }: Props) {
+    const { t } = useTranslation();
     const [outFile, setOutFile] = useState('');
     const [targetOs, setTargetOs] = useState<TargetOs>(HOST_OS);
     // Whether this build of Duckle bundled the Linux runner (so it can
@@ -73,10 +75,10 @@ export default function BuildPipelineModal({
         const ext = isWin ? '.exe' : '';
         const defaultName = pipelineName.replace(/[^A-Za-z0-9._-]+/g, '_') + ext;
         const picked = await tauriSavePath({
-            title: 'Save the built pipeline',
+            title: t('buildPipeline.saveDialogTitle'),
             defaultPath: defaultName,
             // An empty-extensions filter is invalid; off-Windows omit filters.
-            filters: isWin ? [{ name: 'Executable', extensions: ['exe'] }] : undefined,
+            filters: isWin ? [{ name: t('buildPipeline.executable'), extensions: ['exe'] }] : undefined,
         });
         if (picked) setOutFile(picked);
     };
@@ -89,10 +91,10 @@ export default function BuildPipelineModal({
 
     const unsupportedNote = !targetSupported
         ? targetOs === 'macos'
-            ? "Building a macOS file requires a Mac. Apple's toolchain and code signing are only available on macOS, so run Otter ETL agent on a Mac to build it."
+            ? t('buildPipeline.unsupportedMac')
             : targetOs === 'windows'
-            ? 'Building a Windows file requires running Otter ETL agent on Windows.'
-            : 'This build cannot target Linux: the Linux runner was not bundled. Rebuild Otter ETL agent after staging it (scripts/build-runner-linux.sh).'
+            ? t('buildPipeline.unsupportedWindows')
+            : t('buildPipeline.unsupportedLinux')
         : null;
 
     const canBuild =
@@ -104,7 +106,7 @@ export default function BuildPipelineModal({
 
     const handleBuild = async () => {
         if (!workspacePath) {
-            setError('Open a workspace first.');
+            setError(t('buildPipeline.openWorkspaceFirst'));
             return;
         }
         setBusy(true);
@@ -143,13 +145,13 @@ export default function BuildPipelineModal({
                     <div className="modal-title-row">
                         <Package size={16} className="modal-title-icon" />
                         <div>
-                            <div className="modal-title">Build pipeline</div>
+                            <div className="modal-title">{t('buildPipeline.title')}</div>
                             <div className="modal-subtitle">
-                                Pipeline: <b>{pipelineName}</b>
+                                {t('buildPipeline.pipeline')} <b>{pipelineName}</b>
                             </div>
                         </div>
                     </div>
-                    <button type="button" className="modal-close" onClick={onClose} aria-label="Close" disabled={busy}>
+                    <button type="button" className="modal-close" onClick={onClose} aria-label={t('buildPipeline.close')} disabled={busy}>
                         <X size={16} />
                     </button>
                 </div>
@@ -158,28 +160,25 @@ export default function BuildPipelineModal({
                     <div className="modal-body">
                         <div className="modal-field" style={{ alignItems: 'center', textAlign: 'center' }}>
                             <CheckCircle2 size={28} color="var(--success)" />
-                            <div className="modal-title" style={{ marginTop: 8 }}>Pipeline built</div>
+                            <div className="modal-title" style={{ marginTop: 8 }}>{t('buildPipeline.built')}</div>
                         </div>
                         <div className="modal-field">
-                            <label className="modal-field-label">Built file</label>
+                            <label className="modal-field-label">{t('buildPipeline.builtFile')}</label>
                             <code className="modal-input" style={{ display: 'block', whiteSpace: 'normal', wordBreak: 'break-all' }}>
                                 {result}
                             </code>
                         </div>
                         <div className="modal-tip">
-                            <span>
-                                This is one self-contained file. Copy this single file to your server and run
-                                it or schedule it (cron / systemd / Task Scheduler). No install needed.
-                            </span>
+                            <span>{t('buildPipeline.builtTip')}</span>
                         </div>
                         <div className="modal-footer">
-                            <button type="button" className="btn btn-primary" onClick={onClose}>Close</button>
+                            <button type="button" className="btn btn-primary" onClick={onClose}>{t('buildPipeline.close')}</button>
                         </div>
                     </div>
                 ) : (
                     <div className="modal-body">
                         <div className="modal-field">
-                            <label className="modal-field-label">Target OS</label>
+                            <label className="modal-field-label">{t('buildPipeline.targetOs')}</label>
                             <select
                                 className="modal-input modal-select"
                                 value={targetOs}
@@ -197,9 +196,9 @@ export default function BuildPipelineModal({
                                 }}
                                 disabled={busy}
                             >
-                                <option value="windows">{OS_LABELS.windows}{HOST_OS === 'windows' ? ' (this machine)' : ''}</option>
-                                <option value="linux">{OS_LABELS.linux}{HOST_OS === 'linux' ? ' (this machine)' : ''}</option>
-                                <option value="macos">{OS_LABELS.macos}{HOST_OS === 'macos' ? ' (this machine)' : ''}</option>
+                                <option value="windows">{OS_LABELS.windows}{HOST_OS === 'windows' ? t('buildPipeline.thisMachine') : ''}</option>
+                                <option value="linux">{OS_LABELS.linux}{HOST_OS === 'linux' ? t('buildPipeline.thisMachine') : ''}</option>
+                                <option value="macos">{OS_LABELS.macos}{HOST_OS === 'macos' ? t('buildPipeline.thisMachine') : ''}</option>
                             </select>
                             {unsupportedNote ? (
                                 <div className="modal-tip">
@@ -208,41 +207,40 @@ export default function BuildPipelineModal({
                             ) : targetOs === 'linux' && HOST_OS !== 'linux' ? (
                                 <div className="modal-tip">
                                     <span>
-                                        A self-contained Linux file is built here. After copying it to
-                                        Linux, make it runnable once with <code>chmod +x</code>. Connectors
-                                        that need DuckDB extensions (Postgres, S3, and similar) download
-                                        them at run time, so the target needs network for those.
+                                        {t('buildPipeline.linuxTipBefore')}
+                                        <code>chmod +x</code>
+                                        {t('buildPipeline.linuxTipAfter')}
                                     </span>
                                 </div>
                             ) : null}
                         </div>
 
                         <div className="modal-field">
-                            <label className="modal-field-label">Output file</label>
+                            <label className="modal-field-label">{t('buildPipeline.outputFile')}</label>
                             <div className="schedule-watch-row">
                                 <input
                                     type="text"
                                     className="modal-input"
                                     value={outFile}
                                     onChange={e => setOutFile(e.target.value)}
-                                    placeholder="Choose where to save the single file"
+                                    placeholder={t('buildPipeline.outputPlaceholder')}
                                     spellCheck={false}
                                 />
                                 <button type="button" className="btn btn-secondary" onClick={pickOutputFile} disabled={busy}>
-                                    <FolderOpen size={13} /> Browse
+                                    <FolderOpen size={13} /> {t('buildPipeline.browse')}
                                 </button>
                             </div>
                         </div>
 
                         <div className="modal-field">
-                            <label className="modal-field-label">Context</label>
+                            <label className="modal-field-label">{t('buildPipeline.context')}</label>
                             <select
                                 className="modal-input modal-select"
                                 value={contextName}
                                 onChange={e => setContextName(e.target.value)}
                                 disabled={busy}
                             >
-                                <option value="">No context</option>
+                                <option value="">{t('buildPipeline.noContext')}</option>
                                 {contexts.map(c => (
                                     <option key={c.id} value={c.name}>{c.name}</option>
                                 ))}
@@ -250,7 +248,7 @@ export default function BuildPipelineModal({
                         </div>
 
                         <div className="modal-field">
-                            <label className="modal-field-label">Secrets</label>
+                            <label className="modal-field-label">{t('buildPipeline.secrets')}</label>
                             <div className="schedule-mode-toggle">
                                 <button
                                     type="button"
@@ -258,7 +256,7 @@ export default function BuildPipelineModal({
                                     onClick={() => setSecretsMode('env')}
                                     disabled={busy}
                                 >
-                                    Environment
+                                    {t('buildPipeline.environment')}
                                 </button>
                                 <button
                                     type="button"
@@ -266,46 +264,39 @@ export default function BuildPipelineModal({
                                     onClick={() => setSecretsMode('passphrase')}
                                     disabled={busy}
                                 >
-                                    Passphrase
+                                    {t('buildPipeline.passphrase')}
                                 </button>
                             </div>
                         </div>
 
                         {secretsMode === 'passphrase' ? (
                             <div className="modal-field">
-                                <label className="modal-field-label">Passphrase</label>
+                                <label className="modal-field-label">{t('buildPipeline.passphrase')}</label>
                                 <input
                                     type="password"
                                     className="modal-input"
                                     value={passphrase}
                                     onChange={e => setPassphrase(e.target.value)}
-                                    placeholder="Used to encrypt the bundled secrets"
+                                    placeholder={t('buildPipeline.passphrasePlaceholder')}
                                     spellCheck={false}
                                 />
                                 <div className="modal-tip">
-                                    <span>
-                                        Secrets are encrypted into secrets.enc. Set DUCKLE_BUNDLE_PASSPHRASE in the
-                                        server environment with this same value before running. The passphrase is
-                                        never written into the file.
-                                    </span>
+                                    <span>{t('buildPipeline.passphraseTip')}</span>
                                 </div>
                             </div>
                         ) : (
                             <div className="modal-tip">
-                                <span>
-                                    Environment mode: set the secret env vars on the server, or place a
-                                    secrets.env next to the file before running.
-                                </span>
+                                <span>{t('buildPipeline.environmentTip')}</span>
                             </div>
                         )}
 
                         {error ? <div className="modal-error">{error}</div> : null}
 
                         <div className="modal-footer">
-                            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+                            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={busy}>{t('buildPipeline.cancel')}</button>
                             <button type="button" className="btn btn-primary" onClick={handleBuild} disabled={!canBuild}>
                                 <Package size={13} />
-                                {busy ? 'Building…' : 'Build'}
+                                {busy ? t('buildPipeline.building') : t('buildPipeline.build')}
                             </button>
                         </div>
                     </div>

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { CheckCircle2, CircleDashed, FlaskConical, Play, Plus, Trash2, XCircle } from 'lucide-react';
 import type { Edge, Node } from '@xyflow/react';
 import type { Column, DuckleNodeData } from '../pipeline-types';
 import { resolveOutputSchema } from '../schema-resolve';
 import { testsLoad, testsRun, testsSave } from '../tauri-bridge';
 import {
-    caseProblem,
+    caseProblemCode,
     cleaned,
     dummyInput,
     listOf,
@@ -84,6 +85,7 @@ function SourceInput({
     generatorField: Field | undefined;
     columns: Column[];
 }) {
+    const { t } = useTranslation();
     const kind = kindOf(given);
     const pick = async (next: InputKind) => {
         if (next === 'real') onChange(undefined);
@@ -98,11 +100,11 @@ function SourceInput({
                     className="schema-input"
                     value={kind}
                     onChange={e => void pick(e.target.value as InputKind)}
-                    aria-label={`What ${label(source)} reads in this test`}
+                    aria-label={t('tests.inputKindLabel', { name: label(source) })}
                 >
-                    <option value="real">The real source</option>
-                    <option value="text">Text I write here</option>
-                    <option value="dummy">Generated dummy data</option>
+                    <option value="real">{t('tests.inputReal')}</option>
+                    <option value="text">{t('tests.inputText')}</option>
+                    <option value="dummy">{t('tests.inputDummy')}</option>
                 </select>
             </div>
             {typeof given === 'string' ? (
@@ -111,14 +113,14 @@ function SourceInput({
                     rows={4}
                     value={given}
                     onChange={e => onChange(e.target.value)}
-                    aria-label={`Text ${label(source)} reads`}
+                    aria-label={t('tests.inputTextLabel', { name: label(source) })}
                     spellCheck={false}
                 />
             ) : null}
             {given !== undefined && typeof given !== 'string' && generatorField ? (
                 <div className="tests-dummy">
                     <label className="tests-field">
-                        <span>Rows</span>
+                        <span>{t('tests.rows')}</span>
                         <input
                             className="schema-input"
                             type="number"
@@ -148,6 +150,7 @@ export default function TestsView({
     newForNode,
     onNewForNodeTaken,
 }: Props) {
+    const { t } = useTranslation();
     const [suite, setSuite] = useState<TestSuite | null>(null);
     const [open, setOpen] = useState(0);
     const [results, setResults] = useState<CaseResult[]>([]);
@@ -237,25 +240,30 @@ export default function TestsView({
     };
 
     if (!workspacePath || !pipelineId) {
-        return <div className="tests-empty">Open a pipeline to write tests for it.</div>;
+        return <div className="tests-empty">{t('tests.openPipeline')}</div>;
     }
     if (!suite) {
-        return <div className="tests-empty">{error ?? 'Loading tests...'}</div>;
+        return <div className="tests-empty">{error ?? t('tests.loading')}</div>;
     }
 
     const failed = results.filter(r => r.status === 'fail').length;
     const passed = results.filter(r => r.status === 'pass').length;
-    const blocked = suite.cases.map(caseProblem).find(Boolean) ?? null;
+    const problemText = (c: TestCase) => {
+        const code = caseProblemCode(c);
+        return code ? t(`tests.problems.${code}`) : null;
+    };
+    const blocked = suite.cases.map(problemText).find(Boolean) ?? null;
     const firstNode = sources.length > 0 ? nodes[nodes.length - 1]?.id : nodes[0]?.id;
 
     return (
         <div className="tests-view">
             <div className="tests-bar">
                 <FlaskConical size={15} />
-                <span className="tests-title">Tests</span>
+                <span className="tests-title">{t('tests.title')}</span>
                 {results.length > 0 ? (
                     <span className={failed ? 'tests-count tests-count-bad' : 'tests-count'}>
-                        {passed} passed{failed ? `, ${failed} failed` : ''}
+                        {t('tests.passed', { count: passed })}
+                        {failed ? t('tests.failed', { count: failed }) : ''}
                     </span>
                 ) : null}
                 <div className="tests-bar-actions">
@@ -265,37 +273,38 @@ export default function TestsView({
                         onClick={() => firstNode && addFor(firstNode)}
                         disabled={!firstNode}
                     >
-                        <Plus size={12} /> New test
+                        <Plus size={12} /> {t('tests.newTest')}
                     </button>
                     <button
                         type="button"
                         className="schema-add"
                         onClick={() => void go(true)}
                         disabled={running || suite.cases.length === 0 || Boolean(blocked)}
-                        title="Run every test and save what each node produced as its expected rows, for the tests that list rows"
+                        title={t('tests.updateExpectedTitle')}
                     >
-                        Update expected rows
+                        {t('tests.updateExpected')}
                     </button>
                     <button
                         type="button"
                         className="tests-run"
                         onClick={() => void go(false)}
                         disabled={running || suite.cases.length === 0 || Boolean(blocked)}
-                        title={blocked ?? 'Save the pipeline and run every test'}
+                        title={blocked ?? t('tests.runAllTitle')}
                     >
-                        <Play size={12} /> {running ? 'Running...' : 'Run all'}
+                        <Play size={12} /> {running ? t('tests.running') : t('tests.runAll')}
                     </button>
                 </div>
             </div>
             {error ? <div className="tests-error">{error}</div> : null}
             {suite.cases.length === 0 ? (
                 <div className="tests-empty">
+                    <p>{t('tests.emptyIntro')}</p>
                     <p>
-                        A test runs this pipeline up to one node on inputs you choose, and checks what comes
-                        out. Nothing after that node runs and no sink writes.
-                    </p>
-                    <p>
-                        Click <b>New test</b>, or right-click a node on the canvas and choose <b>Create test</b>.
+                        {t('tests.emptyHowBefore')}
+                        <b>{t('tests.newTest')}</b>
+                        {t('tests.emptyHowMiddle')}
+                        <b>{t('tests.createTest')}</b>
+                        {t('tests.emptyHowAfter')}
                     </p>
                 </div>
             ) : null}
@@ -305,7 +314,7 @@ export default function TestsView({
                     const expanded = open === i;
                     const put = (patch: Partial<TestCase['expect']>) =>
                         setCase(i, { ...c, expect: { ...c.expect, ...patch } });
-                    const problem = caseProblem(c);
+                    const problem = problemText(c);
                     const recorded = Array.isArray(c.expect.rows) ? c.expect.rows.length : null;
                     return (
                         <div className={'tests-case' + (expanded ? ' tests-case-open' : '')} key={i}>
@@ -317,16 +326,16 @@ export default function TestsView({
                                     aria-expanded={expanded}
                                 >
                                     <ResultIcon result={result} />
-                                    <span>{c.name || 'Untitled test'}</span>
+                                    <span>{c.name || t('tests.untitled')}</span>
                                 </button>
                                 <button
                                     type="button"
                                     className="schema-add"
                                     onClick={() => void go(false, c.name)}
                                     disabled={running || Boolean(problem)}
-                                    title={problem ?? 'Run this test'}
+                                    title={problem ?? t('tests.runThisTitle')}
                                 >
-                                    <Play size={11} /> Run
+                                    <Play size={11} /> {t('tests.run')}
                                 </button>
                                 <button
                                     type="button"
@@ -335,7 +344,7 @@ export default function TestsView({
                                         change({ ...suite, cases: suite.cases.filter((_, n) => n !== i) });
                                         setResults(results.filter(r => r.test !== c.name));
                                     }}
-                                    aria-label={`Delete ${c.name}`}
+                                    aria-label={t('tests.deleteCase', { name: c.name })}
                                 >
                                     <Trash2 size={13} />
                                 </button>
@@ -345,7 +354,7 @@ export default function TestsView({
                                 <div className="tests-case-body">
                                     {problem ? <div className="tests-problem">{problem}</div> : null}
                                     <label className="tests-field">
-                                        <span>Name</span>
+                                        <span>{t('tests.name')}</span>
                                         <input
                                             className="schema-input"
                                             value={c.name}
@@ -353,7 +362,7 @@ export default function TestsView({
                                         />
                                     </label>
                                     <label className="tests-field">
-                                        <span>Check the output of</span>
+                                        <span>{t('tests.checkOutputOf')}</span>
                                         <select
                                             className="schema-input"
                                             value={c.expect.node}
@@ -364,7 +373,7 @@ export default function TestsView({
                                             ))}
                                         </select>
                                     </label>
-                                    <div className="tests-section">Inputs</div>
+                                    <div className="tests-section">{t('tests.inputs')}</div>
                                     {sources.map(s => (
                                         <SourceInput
                                             key={s.id}
@@ -381,9 +390,9 @@ export default function TestsView({
                                             }}
                                         />
                                     ))}
-                                    <div className="tests-section">Expect</div>
+                                    <div className="tests-section">{t('tests.expect')}</div>
                                     <label className="tests-field">
-                                        <span>Exactly this many rows</span>
+                                        <span>{t('tests.rowCount')}</span>
                                         <input
                                             className="schema-input"
                                             type="number"
@@ -395,7 +404,7 @@ export default function TestsView({
                                         />
                                     </label>
                                     <label className="tests-field">
-                                        <span>No repeats in</span>
+                                        <span>{t('tests.unique')}</span>
                                         <input
                                             className="schema-input"
                                             value={(c.expect.unique ?? []).join(', ')}
@@ -405,7 +414,7 @@ export default function TestsView({
                                         />
                                     </label>
                                     <label className="tests-field">
-                                        <span>Never empty</span>
+                                        <span>{t('tests.notNull')}</span>
                                         <input
                                             className="schema-input"
                                             value={(c.expect.notNull ?? []).join(', ')}
@@ -415,7 +424,7 @@ export default function TestsView({
                                         />
                                     </label>
                                     <label className="tests-field">
-                                        <span>SQL check</span>
+                                        <span>{t('tests.sqlCheck')}</span>
                                         <input
                                             className="schema-input"
                                             value={c.expect.sql ?? ''}
@@ -431,10 +440,8 @@ export default function TestsView({
                                             onChange={e => put({ rows: e.target.checked ? [] : undefined })}
                                         />
                                         <span>
-                                            Compare every row
-                                            {recorded !== null
-                                                ? ` (${recorded} recorded; Update expected rows records what the node produces now)`
-                                                : ''}
+                                            {t('tests.compareRows')}
+                                            {recorded !== null ? t('tests.recorded', { count: recorded }) : ''}
                                         </span>
                                     </label>
                                 </div>

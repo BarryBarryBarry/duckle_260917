@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { Edge } from '@xyflow/react';
-import { metaFor, type ConnectionType } from './connection-types';
+import { connectionLabel, metaFor, type ConnectionType } from './connection-types';
 
 type Props = {
     edge: Edge;
@@ -11,6 +12,7 @@ type Props = {
 };
 
 export default function EdgeEditorModal({ edge, onSave, onCancel }: Props) {
+    const { t } = useTranslation();
     const type = ((edge.data as { connectionType?: ConnectionType } | undefined)?.connectionType ??
         'main') as ConnectionType;
     const meta = metaFor(type);
@@ -48,33 +50,33 @@ export default function EdgeEditorModal({ edge, onSave, onCancel }: Props) {
             <div className="modal modal-edge-editor">
                 <div className="modal-header">
                     <div className="modal-title">
-                        Edit{' '}
+                        {t('edgeEditor.titleBefore')}{' '}
                         <span
                             className="edge-label-badge"
                             style={{ display: 'inline-block', marginLeft: 6 }}
                         >
-                            {meta.badge ?? meta.label}
+                            {meta.badge ?? connectionLabel(t, meta)}
                         </span>{' '}
-                        connection
+                        {t('edgeEditor.titleAfter')}
                     </div>
                     <button
                         type="button"
                         className="modal-close"
                         onClick={onCancel}
-                        aria-label="Close"
+                        aria-label={t('edgeEditor.close')}
                     >
                         <X size={16} />
                     </button>
                 </div>
                 <div className="modal-body">
                     <div className="modal-field">
-                        <label className="modal-field-label">Label (optional)</label>
+                        <label className="modal-field-label">{t('edgeEditor.label')}</label>
                         <input
                             ref={ref}
                             type="text"
                             className="modal-input"
                             value={label}
-                            placeholder="e.g. row1, paid_orders"
+                            placeholder={t('edgeEditor.labelPlaceholder')}
                             onChange={e => setLabel(e.target.value)}
                             onKeyDown={e => {
                                 if (e.key === 'Enter' && !showCondition) {
@@ -88,7 +90,7 @@ export default function EdgeEditorModal({ edge, onSave, onCancel }: Props) {
                     {showCondition ? (
                         <div className="modal-field">
                             <label className="modal-field-label">
-                                Condition (boolean expression)
+                                {t('edgeEditor.condition')}
                             </label>
                             <textarea
                                 className="modal-input modal-input-path"
@@ -99,20 +101,20 @@ export default function EdgeEditorModal({ edge, onSave, onCancel }: Props) {
                                 spellCheck={false}
                             />
                             <div className="modal-field-hint">
-                                The trigger fires when this expression evaluates to true at runtime.
+                                {t('edgeEditor.conditionHint')}
                             </div>
                         </div>
                     ) : null}
                     <div className="modal-tip" style={{ marginTop: 8 }}>
-                        <span style={{ flexShrink: 0 }}>{meta.label}</span>
+                        <span style={{ flexShrink: 0 }}>{connectionLabel(t, meta)}</span>
                     </div>
                 </div>
                 <div className="modal-footer">
                     <button type="button" className="btn btn-secondary" onClick={onCancel}>
-                        Cancel
+                        {t('edgeEditor.cancel')}
                     </button>
                     <button type="button" className="btn btn-primary" onClick={handleSave}>
-                        Save
+                        {t('edgeEditor.save')}
                     </button>
                 </div>
             </div>

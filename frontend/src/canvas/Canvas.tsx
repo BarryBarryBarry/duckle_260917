@@ -42,7 +42,7 @@ import DuckleNode from './nodes/DuckleNode';
 import DuckleEdge from './DuckleEdge';
 import ConnectionTypePicker from './ConnectionTypePicker';
 import { QuickAddSearch } from './QuickAddSearch';
-import { CONNECTION_TYPES, type ConnectionType } from './connection-types';
+import { CONNECTION_TYPES, connectionLabel, type ConnectionType } from './connection-types';
 import { loadPersisted } from '../persistence';
 import type { DuckleNodeData } from '../pipeline-types';
 import { readClipboard } from '../clipboard';
@@ -475,7 +475,7 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'rename',
-                    label: 'Rename',
+                    label: t('canvas.menu.rename'),
                     icon: <Pencil size={ICON_SIZE} />,
                     shortcut: 'F2',
                     onClick: () => onNodeAction('rename', node.id),
@@ -483,7 +483,7 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'duplicate',
-                    label: 'Duplicate',
+                    label: t('canvas.menu.duplicate'),
                     icon: <Copy size={ICON_SIZE} />,
                     shortcut: 'Ctrl+D',
                     onClick: () => onNodeAction('duplicate', node.id),
@@ -491,7 +491,7 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'copy',
-                    label: 'Copy',
+                    label: t('canvas.menu.copy'),
                     icon: <ClipboardCopy size={ICON_SIZE} />,
                     shortcut: 'Ctrl+C',
                     onClick: () => onNodeAction('copy', node.id),
@@ -499,7 +499,7 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'toggle-disable',
-                    label: isDisabled ? 'Enable' : 'Disable',
+                    label: isDisabled ? t('canvas.menu.enable') : t('canvas.menu.disable'),
                     icon: <Power size={ICON_SIZE} />,
                     onClick: () => onNodeAction('toggle-disable', node.id),
                 },
@@ -507,7 +507,7 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'run',
-                    label: 'Run to here (this node + all upstream)',
+                    label: t('canvas.menu.runToHere'),
                     icon: <Play size={ICON_SIZE} />,
                     onClick: () => onNodeAction('run-from-here', node.id),
                     disabled: isDisabled,
@@ -515,14 +515,14 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'create-test',
-                    label: 'Create test',
+                    label: t('canvas.menu.createTest'),
                     icon: <FlaskConical size={ICON_SIZE} />,
                     onClick: () => onNodeAction('create-test', node.id),
                 },
                 {
                     kind: 'item',
                     key: 'autodetect',
-                    label: 'Auto-detect schema',
+                    label: t('canvas.menu.autodetectSchema'),
                     icon: <Sparkles size={ICON_SIZE} />,
                     onClick: () => onNodeAction('autodetect', node.id),
                     disabled: !autodetect,
@@ -531,14 +531,14 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'copy-id',
-                    label: 'Copy ID',
+                    label: t('canvas.menu.copyId'),
                     icon: <Hash size={ICON_SIZE} />,
                     onClick: () => onNodeAction('copy-id', node.id),
                 },
                 {
                     kind: 'item',
                     key: 'delete',
-                    label: 'Delete',
+                    label: t('canvas.menu.delete'),
                     icon: <Trash2 size={ICON_SIZE} />,
                     shortcut: 'Del',
                     onClick: () => onNodeAction('delete', node.id),
@@ -547,7 +547,7 @@ function CanvasInner({
             ];
             menu.open(e, items);
         },
-        [menu, onNodeAction, nodeAutodetectAvailable],
+        [menu, onNodeAction, nodeAutodetectAvailable, t],
     );
 
     const handleEdgeContextMenu = useCallback(
@@ -558,29 +558,29 @@ function CanvasInner({
                 {
                     kind: 'header',
                     key: 'header',
-                    label: 'Connection · ' + edge.id.slice(0, 8),
+                    label: t('canvas.menu.connectionHeader', { id: edge.id.slice(0, 8) }),
                 },
                 {
                     kind: 'item',
                     key: 'edit',
-                    label: 'Edit label / condition…',
+                    label: t('canvas.menu.editConnection'),
                     icon: <Pencil size={ICON_SIZE} />,
-                    shortcut: 'Dbl-click',
+                    shortcut: t('canvas.menu.doubleClick'),
                     onClick: () => onEdgeEdit(edge.id),
                 },
                 { kind: 'separator', key: 's0' },
-                ...CONNECTION_TYPES.map((t): MenuItem => ({
+                ...CONNECTION_TYPES.map((ct): MenuItem => ({
                     kind: 'item',
-                    key: 'type-' + t.id,
-                    label: t.label,
-                    icon: currentType === t.id ? <Check size={ICON_SIZE} /> : null,
-                    onClick: () => onEdgeChangeType(edge.id, t.id),
+                    key: 'type-' + ct.id,
+                    label: connectionLabel(t, ct),
+                    icon: currentType === ct.id ? <Check size={ICON_SIZE} /> : null,
+                    onClick: () => onEdgeChangeType(edge.id, ct.id),
                 })),
                 { kind: 'separator', key: 's1' },
                 {
                     kind: 'item',
                     key: 'delete',
-                    label: 'Delete connection',
+                    label: t('canvas.menu.deleteConnection'),
                     icon: <Trash2 size={ICON_SIZE} />,
                     shortcut: 'Del',
                     onClick: () => onEdgeDelete(edge.id),
@@ -589,17 +589,17 @@ function CanvasInner({
             ];
             menu.open(e, items);
         },
-        [menu, onEdgeChangeType, onEdgeDelete, onEdgeEdit],
+        [menu, onEdgeChangeType, onEdgeDelete, onEdgeEdit, t],
     );
 
     const handlePaneContextMenu = useCallback(
         (e: React.MouseEvent | MouseEvent) => {
             const items: MenuItem[] = [
-                { kind: 'header', key: 'header', label: 'Canvas' },
+                { kind: 'header', key: 'header', label: t('canvas.menu.canvasHeader') },
                 {
                     kind: 'item',
                     key: 'undo',
-                    label: 'Undo',
+                    label: t('canvas.menu.undo'),
                     icon: <Undo2 size={ICON_SIZE} />,
                     shortcut: 'Ctrl+Z',
                     onClick: () => onPaneAction('undo'),
@@ -607,7 +607,7 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'redo',
-                    label: 'Redo',
+                    label: t('canvas.menu.redo'),
                     icon: <Redo2 size={ICON_SIZE} />,
                     shortcut: 'Ctrl+Y',
                     onClick: () => onPaneAction('redo'),
@@ -616,7 +616,7 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'fit',
-                    label: 'Fit to view',
+                    label: t('canvas.menu.fitToView'),
                     icon: <Maximize2 size={ICON_SIZE} />,
                     shortcut: 'Ctrl+0',
                     onClick: fitAndRemember,
@@ -624,7 +624,7 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'layout',
-                    label: 'Auto-layout',
+                    label: t('canvas.menu.autoLayout'),
                     icon: <LayoutGrid size={ICON_SIZE} />,
                     onClick: () => onPaneAction('auto-layout'),
                 },
@@ -632,7 +632,7 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'select-all',
-                    label: 'Select all',
+                    label: t('canvas.menu.selectAll'),
                     icon: <MousePointer2 size={ICON_SIZE} />,
                     shortcut: 'Ctrl+A',
                     onClick: () => onPaneAction('select-all'),
@@ -640,7 +640,7 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'paste',
-                    label: 'Paste',
+                    label: t('canvas.menu.paste'),
                     icon: <ClipboardPaste size={ICON_SIZE} />,
                     shortcut: 'Ctrl+V',
                     onClick: () => onPaneAction('paste'),
@@ -650,14 +650,14 @@ function CanvasInner({
                 {
                     kind: 'item',
                     key: 'build',
-                    label: 'Build pipeline…',
+                    label: t('canvas.menu.buildPipeline'),
                     icon: <Package size={ICON_SIZE} />,
                     onClick: () => onPaneAction('build'),
                 },
             ];
             menu.open(e, items);
         },
-        [menu, onPaneAction, fitAndRemember],
+        [menu, onPaneAction, fitAndRemember, t],
     );
 
     return (

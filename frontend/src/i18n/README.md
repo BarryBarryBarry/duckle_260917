@@ -39,10 +39,12 @@ Only the highest-traffic surfaces are wrapped with `useTranslation()` so far:
 - Palette top-level group labels (Sources, Transforms, Sinks, Control Flow, Data Quality, Custom Code)
 - Common dialog buttons (Save, Cancel, Close, Delete, OK)
 - Settings dialog (`settings.*`) and the Connect to Claude / MCP dialog (`mcp.*`), hand-translated for zh-CN, zh-TW, ja and ko
-- Guided tour (`guidedTour.*`, one `steps.<id>` entry per step in `GuidedTour.tsx`), hand-translated for zh-CN, zh-TW, ja and ko. Labels of screens that are not translated yet (Home tiles, context menus) are kept in English inside the translated text so they match what is on screen.
+- Guided tour (`guidedTour.*`, one `steps.<id>` entry per step in `GuidedTour.tsx`), hand-translated for zh-CN, zh-TW, ja and ko. Labels of screens that are not translated yet (Home tiles, Project tree menus) are kept in English inside the translated text so they match what is on screen.
 
 - Palette component summaries (the hover tooltip of each palette entry), see below
 - Hover tooltips (`title`) across the app, including React Flow's canvas controls (via `ariaLabelConfig` in `Canvas.tsx`) and connection-port tooltips (`connection.types.*`)
+- Canvas right-click menus (`canvas.menu.*`): the blank-canvas, node and connection menus in `Canvas.tsx`; connection-type entries reuse `connection.types.*`. Hand-translated for zh-CN only
+- What those menus open: Build pipeline modal (`buildPipeline.*`), connection editor modal (`edgeEditor.*`) and the Tests tab (`tests.*`; case problems come from `caseProblemCode()` in `test-cases.ts`). Hand-translated for zh-CN only
 
 ### Palette component summaries
 
