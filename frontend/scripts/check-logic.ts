@@ -23,7 +23,7 @@ import { gitActionRewritesFiles } from '../src/git-actions';
 import { validatePipeline } from '../src/validation';
 import { deriveNodeSubtitle } from '../src/node-subtitle';
 import { resolveOutputSchema } from '../src/schema-resolve';
-import { layoutByDependency, NODE_WIDTH, nodeSequence, nodesOverlap } from '../src/canvas/layout';
+import { layoutByDependency, NODE_WIDTH, nodesOverlap } from '../src/canvas/layout';
 import { lockReason } from '../src/auth/idle';
 import { pickWorkspace, withWorkspace } from '../src/auth/user-workspace';
 import { authErrorMessage } from '../src/auth/auth-api';
@@ -1502,9 +1502,8 @@ function context(name: string, vars: Record<string, string>): RepoItem {
 // ---------------------------------------------------------------------------
 // Canvas layout. Agent-written pipelines opened with cards piled on each other:
 // positions on a 240px grid while long labels made cards up to 1930px wide.
-// Cards now have a fixed width; auto-layout must leave no two overlapping, keep
-// every edge pointing right, and the run-order numbers on the icons must put
-// each node after everything that feeds it.
+// Cards now have a fixed width; auto-layout must leave no two overlapping and
+// keep every edge pointing right.
 // ---------------------------------------------------------------------------
 {
     const sized = (id: string, height: number, x: number, y: number) =>
@@ -1551,33 +1550,6 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         { id: 'ba', source: 'b', target: 'a' },
     ]);
     check('layout: a cycle is laid out without overlap', !nodesOverlap(boxes(loop)), JSON.stringify(loop.map(n => n.position)));
-
-    const seq = nodeSequence(laid, edges);
-    const numbers = [...seq.values()].sort((a, b) => a - b);
-    check('sequence: every node gets one number from 1 to n', numbers.join() === ids.map((_, i) => i + 1).join(), numbers.join());
-    const early = edges.filter(e => seq.get(e.source)! >= seq.get(e.target)!);
-    check('sequence: a node is numbered after everything that feeds it', early.length === 0, JSON.stringify(early));
-    check('sequence: the source is 1 and the fan-out 2', seq.get('src') === 1 && seq.get('tee') === 2, JSON.stringify([...seq]));
-    const column = [
-        { ...sized('low', 100, 0, 300) },
-        { ...sized('high', 100, 0, 10) },
-        { ...sized('mid', 100, 0, 150) },
-    ];
-    const byHeight = nodeSequence(column, []);
-    check(
-        'sequence: nodes in one column are numbered top to bottom',
-        byHeight.get('high') === 1 && byHeight.get('mid') === 2 && byHeight.get('low') === 3,
-        JSON.stringify([...byHeight]),
-    );
-    const cyc = nodeSequence(
-        [sized('root', 100, 0, 0), sized('x', 100, 0, 0), sized('y', 100, 0, 0)],
-        [
-            { id: 'rx', source: 'root', target: 'x' },
-            { id: 'xy', source: 'x', target: 'y' },
-            { id: 'yx', source: 'y', target: 'x' },
-        ],
-    );
-    check('sequence: nodes in a cycle come after the rest', cyc.get('root') === 1 && cyc.get('x')! > 1 && cyc.get('y')! > 1, JSON.stringify([...cyc]));
 }
 
 // ---------------------------------------------------------------------------

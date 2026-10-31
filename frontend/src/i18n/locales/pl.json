@@ -208,7 +208,6 @@
     "quality": "Jakość",
     "custom": "Zwyczaj",
     "needsConfig": "Brak wymaganych pól — otwórz zakładkę Podstawowe, aby skonfigurować",
-    "sequence": "Step {{n}} in run order",
     "disabled": "wyłączony",
     "running": "Działanie",
     "failed": "Przegrany",

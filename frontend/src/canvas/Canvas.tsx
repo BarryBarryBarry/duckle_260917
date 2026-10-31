@@ -53,11 +53,9 @@ import { useTheme } from '../theme';
 import {
     DEFAULT_LAYOUT_DIRECTION,
     NODE_WIDTH,
-    nodeSequence,
     nodesOverlap,
     type LayoutDirection,
 } from './layout';
-import { NodeSequenceContext } from './node-sequence-context';
 import { LayoutDirectionContext } from './layout-direction-context';
 
 const ICON_SIZE = 14;
@@ -245,10 +243,6 @@ function CanvasInner({
         };
     }, [pipelineId, hasNodes, nodesInitialized, getInternalNode, restoreViewport]);
 
-    const sequence = useMemo(
-        () => nodeSequence(nodes, edges, layoutDirection),
-        [nodes, edges, layoutDirection],
-    );
     const directionToggleLabel =
         layoutDirection === 'TB' ? t('header.layoutLeftToRight') : t('header.layoutTopToBottom');
     // React Flow's own controls take their tooltips from this config.
@@ -669,50 +663,48 @@ function CanvasInner({
             onMouseMove={onMouseMove}
         >
             <LayoutDirectionContext.Provider value={layoutDirection}>
-                <NodeSequenceContext.Provider value={sequence}>
-                    <ReactFlow
-                        nodes={nodes}
-                        edges={edges}
-                        onNodesChange={onNodesChange}
-                        onEdgesChange={onEdgesChange}
-                        onConnect={handleConnect}
-                        onConnectStart={handleConnectStart}
-                        onSelectionChange={onSelectionChange}
-                        onNodeContextMenu={handleNodeContextMenu}
-                        onEdgeContextMenu={handleEdgeContextMenu}
-                        onEdgeDoubleClick={(_, edge) => onEdgeEdit(edge.id)}
-                        onPaneContextMenu={handlePaneContextMenu}
-                        nodeTypes={nodeTypes}
-                        edgeTypes={edgeTypes}
-                        defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
-                        deleteKeyCode={DELETE_KEYS}
-                        proOptions={PRO_OPTIONS}
-                        onMoveEnd={handleMoveEnd}
-                        // Lower than React Flow's 0.5 so a long pipeline fits on screen whole.
-                        minZoom={0.2}
-                        colorMode={theme}
-                        ariaLabelConfig={ariaLabelConfig}
-                    >
-                        <Background gap={16} />
-                        {showMinimap ? <MiniMap pannable zoomable /> : null}
-                        <Controls>
-                            <ControlButton
-                                onClick={() => onPaneAction('auto-layout')}
-                                title={t('header.autoLayout')}
-                                aria-label={t('header.autoLayout')}
-                            >
-                                <LayoutGrid />
-                            </ControlButton>
-                            <ControlButton
-                                onClick={() => onPaneAction('toggle-layout-direction')}
-                                title={directionToggleLabel}
-                                aria-label={directionToggleLabel}
-                            >
-                                {layoutDirection === 'TB' ? <MoveRight /> : <MoveDown />}
-                            </ControlButton>
-                        </Controls>
-                    </ReactFlow>
-                </NodeSequenceContext.Provider>
+                <ReactFlow
+                    nodes={nodes}
+                    edges={edges}
+                    onNodesChange={onNodesChange}
+                    onEdgesChange={onEdgesChange}
+                    onConnect={handleConnect}
+                    onConnectStart={handleConnectStart}
+                    onSelectionChange={onSelectionChange}
+                    onNodeContextMenu={handleNodeContextMenu}
+                    onEdgeContextMenu={handleEdgeContextMenu}
+                    onEdgeDoubleClick={(_, edge) => onEdgeEdit(edge.id)}
+                    onPaneContextMenu={handlePaneContextMenu}
+                    nodeTypes={nodeTypes}
+                    edgeTypes={edgeTypes}
+                    defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+                    deleteKeyCode={DELETE_KEYS}
+                    proOptions={PRO_OPTIONS}
+                    onMoveEnd={handleMoveEnd}
+                    // Lower than React Flow's 0.5 so a long pipeline fits on screen whole.
+                    minZoom={0.2}
+                    colorMode={theme}
+                    ariaLabelConfig={ariaLabelConfig}
+                >
+                    <Background gap={16} />
+                    {showMinimap ? <MiniMap pannable zoomable /> : null}
+                    <Controls>
+                        <ControlButton
+                            onClick={() => onPaneAction('auto-layout')}
+                            title={t('header.autoLayout')}
+                            aria-label={t('header.autoLayout')}
+                        >
+                            <LayoutGrid />
+                        </ControlButton>
+                        <ControlButton
+                            onClick={() => onPaneAction('toggle-layout-direction')}
+                            title={directionToggleLabel}
+                            aria-label={directionToggleLabel}
+                        >
+                            {layoutDirection === 'TB' ? <MoveRight /> : <MoveDown />}
+                        </ControlButton>
+                    </Controls>
+                </ReactFlow>
             </LayoutDirectionContext.Provider>
             {menu.element}
             {pickerPos ? (

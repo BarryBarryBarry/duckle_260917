@@ -1234,33 +1234,6 @@ textarea:focus-visible {
     opacity: 0.92;
 }
 
-.node-icon-wrap {
-    position: relative;
-    display: inline-flex;
-    flex-shrink: 0;
-}
-
-/* Run-order number pinned to the node's icon. */
-.node-seq {
-    position: absolute;
-    top: -8px;
-    left: -9px;
-    min-width: 15px;
-    height: 15px;
-    padding: 0 3px;
-    box-sizing: border-box;
-    border-radius: 8px;
-    background: var(--accent);
-    color: #fff;
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 15px;
-    text-align: center;
-    box-shadow: 0 0 0 1.5px var(--bg-2);
-    font-variant-numeric: tabular-nums;
-    pointer-events: auto;
-}
-
 .node-subtitle {
     margin-top: 2px;
     color: var(--text-3);

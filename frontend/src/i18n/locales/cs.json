@@ -208,7 +208,6 @@
     "quality": "Kvalitní",
     "custom": "Zvyk",
     "needsConfig": "Chybí povinná pole – pro konfiguraci otevřete kartu Základní",
-    "sequence": "Step {{n}} in run order",
     "disabled": "zakázáno",
     "running": "Běh",
     "failed": "Nepodařilo se",

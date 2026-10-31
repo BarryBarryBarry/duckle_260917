@@ -196,7 +196,6 @@
     "quality": "Keyfiyyət",
     "custom": "Xüsusi",
     "needsConfig": "Tələb olunan sahələr yoxdur - konfiqurasiya etmək üçün Əsas sekmesini açın",
-    "sequence": "Step {{n}} in run order",
     "disabled": "əlil",
     "running": "Qaçış",
     "failed": "Uğursuz oldu",

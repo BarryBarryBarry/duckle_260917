@@ -214,7 +214,6 @@
     "quality": "Quality",
     "custom": "Custom",
     "needsConfig": "Required fields missing - open the Basic tab to configure",
-    "sequence": "実行順 {{n}} 番目",
     "disabled": "disabled",
     "running": "Running",
     "failed": "Failed",

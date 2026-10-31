@@ -208,7 +208,6 @@
     "quality": "אֵיכוּת",
     "custom": "מִנְהָג",
     "needsConfig": "שדות חובה חסרים - פתח את הכרטיסייה Basic כדי להגדיר",
-    "sequence": "Step {{n}} in run order",
     "disabled": "נָכֶה",
     "running": "רִיצָה",
     "failed": "נִכשָׁל",
