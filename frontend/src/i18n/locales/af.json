@@ -43,9 +43,9 @@
     "copySqlDesc": "Stel saam na DuckDB SQL, kopieer na knipbord",
     "exportSql": "Voer uit as .sql",
     "exportSqlDesc": "Laai die saamgestelde SQL as 'n lêer af",
-    "exportJson": "Voer uit as .duckle.json",
+    "exportJson": "Voer uit as .etl.json",
     "exportJsonDesc": "Laai nodusse + rande af as draagbare JSON",
-    "importJson": "Voer .duckle.json in...",
+    "importJson": "Voer .etl.json in...",
     "importJsonDesc": "Maak 'n draagbare JSON oop as 'n nuwe pyplyn"
   },
   "palette": {

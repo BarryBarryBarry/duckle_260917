@@ -52,9 +52,9 @@
     "copySqlDesc": "編譯成DuckDB SQL ，複製到剪貼簿",
     "exportSql": "匯出為.sql",
     "exportSqlDesc": "將已編譯的SQL下載為檔案",
-    "exportJson": "匯出為.duckle.json",
+    "exportJson": "匯出為.etl.json",
     "exportJsonDesc": "將節點+邊緣下載為可攜式JSON",
-    "importJson": "匯入.duckle.json...",
+    "importJson": "匯入.etl.json...",
     "importJsonDesc": "開啟可攜式JSON作為新管線",
     "runMetricsDesc": "依時間、pipeline 和狀態檢視所有執行"
   },

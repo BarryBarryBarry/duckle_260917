@@ -44,9 +44,9 @@
     "copySqlDesc": "DuckDB SQL로 컴파일, 클립보드에 복사",
     "exportSql": ".sql로 내보내기",
     "exportSqlDesc": "컴파일된 SQL을 파일로 다운로드",
-    "exportJson": ".duckle.json으로 내보내기",
+    "exportJson": ".etl.json으로 내보내기",
     "exportJsonDesc": "노드 + 에지를 휴대용 JSON으로 다운로드",
-    "importJson": ".duckle.json 가져오기...",
+    "importJson": ".etl.json 가져오기...",
     "importJsonDesc": "휴대용 JSON을 새 파이프라인으로 열기"
   },
   "palette": {

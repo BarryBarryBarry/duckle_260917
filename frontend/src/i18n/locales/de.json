@@ -43,9 +43,9 @@
     "copySqlDesc": "In DuckDB SQL kompilieren, in die Zwischenablage kopieren",
     "exportSql": "Als .sql exportieren",
     "exportSqlDesc": "Kompiliertes SQL als Datei herunterladen",
-    "exportJson": "Als .duckle.json exportieren",
+    "exportJson": "Als .etl.json exportieren",
     "exportJsonDesc": "Knoten + Kanten als portables json herunterladen",
-    "importJson": ".duckle.json importieren...",
+    "importJson": ".etl.json importieren...",
     "importJsonDesc": "Öffnen einer portablen json als neue Pipeline"
   },
   "palette": {

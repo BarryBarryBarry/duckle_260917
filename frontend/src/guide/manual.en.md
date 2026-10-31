@@ -234,5 +234,5 @@ Contact support with:
 
 1. A screenshot of the problem;
 2. The full error from the **Console** in the bottom panel;
-3. The pipeline involved (export it from **…** → **Export as .duckle.json**);
+3. The pipeline involved (export it from **…** → **Export as .etl.json**);
 4. The steps: what you did, what you expected, and what actually happened.

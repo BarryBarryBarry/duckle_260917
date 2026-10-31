@@ -43,9 +43,9 @@
     "copySqlDesc": "Settu saman í DuckDB SQL, afritaðu á klemmuspjald",
     "exportSql": "Flytja út sem .sql",
     "exportSqlDesc": "Sæktu samansetta SQL sem skrá",
-    "exportJson": "Flytja út sem .duckle.json",
+    "exportJson": "Flytja út sem .etl.json",
     "exportJsonDesc": "Sæktu hnúta + brúnir sem flytjanlegt JSON",
-    "importJson": "Flytja inn .duckle.json...",
+    "importJson": "Flytja inn .etl.json...",
     "importJsonDesc": "Opnaðu færanlegan JSON sem nýja leiðslu"
   },
   "palette": {

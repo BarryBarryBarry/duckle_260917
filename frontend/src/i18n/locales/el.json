@@ -132,9 +132,9 @@
     "copySqlDesc": "Μεταγλώττιση στο DuckDB SQL, αντιγραφή στο πρόχειρο",
     "exportSql": "Εξαγωγή ως .sql",
     "exportSqlDesc": "Κάντε λήψη της μεταγλωττισμένης SQL ως αρχείου",
-    "exportJson": "Εξαγωγή ως .duckle.json",
+    "exportJson": "Εξαγωγή ως .etl.json",
     "exportJsonDesc": "Λήψη κόμβων + άκρων ως φορητό JSON",
-    "importJson": "Εισαγωγή .duckle.json...",
+    "importJson": "Εισαγωγή .etl.json...",
     "importJsonDesc": "Ανοίξτε ένα φορητό JSON ως νέο αγωγό"
   },
   "properties": {

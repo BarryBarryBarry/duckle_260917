@@ -43,9 +43,9 @@
     "copySqlDesc": "Unganisha kwa DuckDB SQL, nakili kwenye ubao wa kunakili",
     "exportSql": "Hamisha kama .sql",
     "exportSqlDesc": "Pakua SQL iliyokusanywa kama faili",
-    "exportJson": "Hamisha kama .duckle.json",
+    "exportJson": "Hamisha kama .etl.json",
     "exportJsonDesc": "Pakua nodi + kingo kama JSON inayobebeka",
-    "importJson": "Leta .duckle.json...",
+    "importJson": "Leta .etl.json...",
     "importJsonDesc": "Fungua JSON inayobebeka kama bomba mpya"
   },
   "palette": {

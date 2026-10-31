@@ -132,9 +132,9 @@
     "copySqlDesc": "คอมไพล์เป็น DuckDB SQL คัดลอกไปยังคลิปบอร์ด",
     "exportSql": "ส่งออกเป็น .sql",
     "exportSqlDesc": "ดาวน์โหลด SQL ที่คอมไพล์แล้วเป็นไฟล์",
-    "exportJson": "ส่งออกเป็น .duckle.json",
+    "exportJson": "ส่งออกเป็น .etl.json",
     "exportJsonDesc": "ดาวน์โหลดโหนด + Edge เป็น JSON แบบพกพา",
-    "importJson": "นำเข้า .duckle.json...",
+    "importJson": "นำเข้า .etl.json...",
     "importJsonDesc": "เปิด JSON แบบพกพาเป็นไปป์ไลน์ใหม่"
   },
   "properties": {

@@ -132,9 +132,9 @@
     "copySqlDesc": "Compilați în DuckDB SQL, copiați în clipboard",
     "exportSql": "Exportați ca .sql",
     "exportSqlDesc": "Descărcați SQL-ul compilat ca fișier",
-    "exportJson": "Exportați ca .duckle.json",
+    "exportJson": "Exportați ca .etl.json",
     "exportJsonDesc": "Descărcați noduri + margini ca JSON portabil",
-    "importJson": "Importă .duckle.json...",
+    "importJson": "Importă .etl.json...",
     "importJsonDesc": "Deschideți un JSON portabil ca o conductă nouă"
   },
   "properties": {

@@ -132,9 +132,9 @@
     "copySqlDesc": "הידור ל-DuckDB SQL, העתק ללוח",
     "exportSql": "ייצא כ-‎.sql",
     "exportSqlDesc": "הורד את ה-SQL המהודר כקובץ",
-    "exportJson": "ייצא כ-.duckle.json",
+    "exportJson": "ייצא כ-.etl.json",
     "exportJsonDesc": "הורד צמתים + קצוות כ-JSON נייד",
-    "importJson": "ייבוא ​​‎.duckle.json...",
+    "importJson": "ייבוא ​​‎.etl.json...",
     "importJsonDesc": "פתח JSON נייד כצינור חדש"
   },
   "properties": {

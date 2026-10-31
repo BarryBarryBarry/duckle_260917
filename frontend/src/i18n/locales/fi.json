@@ -43,9 +43,9 @@
     "copySqlDesc": "Kääntää DuckDB SQL:ään, kopioi leikepöydälle",
     "exportSql": "Vie .sql-muodossa",
     "exportSqlDesc": "Lataa käännetty SQL tiedostona",
-    "exportJson": "Vie .duckle.json-muodossa",
+    "exportJson": "Vie .etl.json-muodossa",
     "exportJsonDesc": "Lataa solmut + reunat kannettavana JSON-muodossa",
-    "importJson": "Tuo .duckle.json...",
+    "importJson": "Tuo .etl.json...",
     "importJsonDesc": "Avaa kannettava JSON uutena liukuhihnana"
   },
   "palette": {

@@ -132,9 +132,9 @@
     "copySqlDesc": "Kompilasi ke DuckDB SQL, salin ke clipboard",
     "exportSql": "Ekspor sebagai .sql",
     "exportSqlDesc": "Unduh SQL yang dikompilasi sebagai file",
-    "exportJson": "Ekspor sebagai .duckle.json",
+    "exportJson": "Ekspor sebagai .etl.json",
     "exportJsonDesc": "Unduh node + edge sebagai JSON portabel",
-    "importJson": "Impor .duckle.json...",
+    "importJson": "Impor .etl.json...",
     "importJsonDesc": "Buka JSON portabel sebagai saluran baru"
   },
   "properties": {

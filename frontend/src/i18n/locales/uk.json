@@ -132,9 +132,9 @@
     "copySqlDesc": "Скомпілюйте в DuckDB SQL, скопіюйте в буфер обміну",
     "exportSql": "Експортувати як .sql",
     "exportSqlDesc": "Завантажте скомпільований SQL як файл",
-    "exportJson": "Експортуйте як .duckle.json",
+    "exportJson": "Експортуйте як .etl.json",
     "exportJsonDesc": "Завантажте вузли + ребра як портативний JSON",
-    "importJson": "Імпортувати .duckle.json...",
+    "importJson": "Імпортувати .etl.json...",
     "importJsonDesc": "Відкрийте портативний JSON як новий конвеєр"
   },
   "properties": {

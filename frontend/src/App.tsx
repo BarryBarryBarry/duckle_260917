@@ -1730,7 +1730,7 @@ export default function App() {
             exportedAt: new Date().toISOString(),
         };
         await saveTextFile(
-            `${activeJobName}.duckle.json`,
+            `${activeJobName}.etl.json`,
             JSON.stringify(payload, null, 2),
             [{ name: 'Otter ETL agent pipeline', extensions: ['json'] }],
         );
@@ -1767,7 +1767,7 @@ export default function App() {
             const id = freshId('p');
             const baseName =
                 (typeof parsed.name === 'string' && parsed.name.trim()) ||
-                suggestedName.replace(/\.duckle\.json$|\.json$/, '') ||
+                suggestedName.replace(/\.etl\.json$|\.duckle\.json$|\.json$/, '') ||
                 'imported_pipeline';
             const name = uniquePipelineName(baseName);
             const parent = repo.find(i => i.id === 'pipelines')
@@ -1797,7 +1797,7 @@ export default function App() {
                 const picked = await open({
                     multiple: false,
                     filters: [
-                        { name: 'Otter ETL agent pipeline', extensions: ['json', 'duckle.json'] },
+                        { name: 'Otter ETL agent pipeline', extensions: ['json', 'etl.json', 'duckle.json'] },
                         { name: 'All files', extensions: ['*'] },
                     ],
                 });
@@ -1813,7 +1813,7 @@ export default function App() {
         // Browser fallback - file input.
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = '.json,.duckle.json,application/json';
+        input.accept = '.json,.etl.json,.duckle.json,application/json';
         input.onchange = async () => {
             const file = input.files?.[0];
             if (!file) return;

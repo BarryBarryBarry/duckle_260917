@@ -43,9 +43,9 @@
     "copySqlDesc": "DuckDB SQL рүү хөрвүүлэх, санах ой руу хуулах",
     "exportSql": ".sql болгон экспортлох",
     "exportSqlDesc": "Эмхэтгэсэн SQL-г файл хэлбэрээр татаж авна уу",
-    "exportJson": ".duckle.json хэлбэрээр экспортлох",
+    "exportJson": ".etl.json хэлбэрээр экспортлох",
     "exportJsonDesc": "Зангилаа + ирмэгийг зөөврийн JSON болгон татаж аваарай",
-    "importJson": ".duckle.json импортлох...",
+    "importJson": ".etl.json импортлох...",
     "importJsonDesc": "Зөөврийн JSON-г шинэ шугам хэлбэрээр нээнэ үү"
   },
   "palette": {

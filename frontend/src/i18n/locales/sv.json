@@ -132,9 +132,9 @@
     "copySqlDesc": "Kompilera till DuckDB SQL, kopiera till urklipp",
     "exportSql": "Exportera som .sql",
     "exportSqlDesc": "Ladda ner den kompilerade SQL-filen som en fil",
-    "exportJson": "Exportera som .duckle.json",
+    "exportJson": "Exportera som .etl.json",
     "exportJsonDesc": "Ladda ner noder + kanter som bärbar JSON",
-    "importJson": "Importera .duckle.json...",
+    "importJson": "Importera .etl.json...",
     "importJsonDesc": "Öppna en bärbar JSON som en ny pipeline"
   },
   "properties": {

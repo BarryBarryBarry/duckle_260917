@@ -43,9 +43,9 @@
     "copySqlDesc": "التحويل البرمجي إلى DuckDB SQL، والنسخ إلى الحافظة",
     "exportSql": "تصدير بتنسيق .sql",
     "exportSqlDesc": "تنزيل SQL المترجمة كملف",
-    "exportJson": "تصدير باسم .duckle.json",
+    "exportJson": "تصدير باسم .etl.json",
     "exportJsonDesc": "قم بتنزيل العقد + الحواف كجسون محمول",
-    "importJson": "استيراد .duckle.json...",
+    "importJson": "استيراد .etl.json...",
     "importJsonDesc": "فتح JSON محمول كخط أنابيب جديد"
   },
   "palette": {

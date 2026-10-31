@@ -132,9 +132,9 @@
     "copySqlDesc": "کامپایل در DuckDB SQL، کپی کردن در کلیپ بورد",
     "exportSql": "صادرات به عنوان sql",
     "exportSqlDesc": "SQL کامپایل شده را به صورت فایل دانلود کنید",
-    "exportJson": "صادرات به عنوان duckle.json",
+    "exportJson": "صادرات به عنوان .etl.json",
     "exportJsonDesc": "گره ها + لبه ها را به عنوان JSON قابل حمل بارگیری کنید",
-    "importJson": "وارد کردن .duckle.json...",
+    "importJson": "وارد کردن .etl.json...",
     "importJsonDesc": "یک JSON قابل حمل را به عنوان خط لوله جدید باز کنید"
   },
   "properties": {

@@ -46,9 +46,9 @@
     "copySqlDesc": "DuckDB SQLにコンパイルし、クリップボードにコピー",
     "exportSql": ".sqlとしてエクスポート",
     "exportSqlDesc": "コンパイルされたSQLをファイルとしてダウンロードする",
-    "exportJson": ".duckle.jsonとしてエクスポート",
+    "exportJson": ".etl.jsonとしてエクスポート",
     "exportJsonDesc": "ノード+エッジをポータブルJSONとしてダウンロード",
-    "importJson": ".duckle.jsonをインポート...",
+    "importJson": ".etl.jsonをインポート...",
     "importJsonDesc": "新しいパイプラインとしてポータブルJSONを開く"
   },
   "palette": {

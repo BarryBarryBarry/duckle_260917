@@ -132,9 +132,9 @@
     "copySqlDesc": "Compila in DuckDB SQL, copia negli appunti",
     "exportSql": "Esporta come .sql",
     "exportSqlDesc": "Scarica l'SQL compilato come file",
-    "exportJson": "Esporta come .duckle.json",
+    "exportJson": "Esporta come .etl.json",
     "exportJsonDesc": "Scarica nodi e bordi come JSON portatile",
-    "importJson": "Importa .duckle.json...",
+    "importJson": "Importa .etl.json...",
     "importJsonDesc": "Apri un JSON portatile come nuova pipeline"
   },
   "properties": {

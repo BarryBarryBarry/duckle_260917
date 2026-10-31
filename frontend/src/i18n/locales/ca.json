@@ -43,9 +43,9 @@
     "copySqlDesc": "Compilar a DuckDB SQL, copiar al porta-retalls",
     "exportSql": "Exporta com a .sql",
     "exportSqlDesc": "Baixeu l'SQL compilat com a fitxer",
-    "exportJson": "Exporta com a .duckle.json",
+    "exportJson": "Exporta com a .etl.json",
     "exportJsonDesc": "Baixeu nodes + vores com a JSON portàtil",
-    "importJson": "Importa .duckle.json...",
+    "importJson": "Importa .etl.json...",
     "importJsonDesc": "Obriu un JSON portàtil com a canalització nova"
   },
   "palette": {
