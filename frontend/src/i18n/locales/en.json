@@ -585,11 +585,12 @@
           "step2": "Run the container, giving it a folder for the workspace.",
           "step3": "Wait for the line that says NOT SET UP."
         },
-        "gcp": {
-          "blurb": "Compute Engine, Cloud Run, or GKE",
-          "runsOn": "Compute Engine is the straightforward one",
-          "step1": "Create an instance from the container image.",
-          "step2": "Allow yourself through the firewall on port 8080.",
+        "aliyun": {
+          "name": "Alibaba Cloud",
+          "blurb": "ECS, ACK, or Serverless App Engine",
+          "runsOn": "ECS is the straightforward one",
+          "step1": "Create an ECS instance with Docker and run the command below.",
+          "step2": "Allow yourself through the security group on port 8080.",
           "step3": "Wait for the line that says NOT SET UP."
         },
         "azure": {

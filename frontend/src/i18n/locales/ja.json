@@ -427,11 +427,12 @@
           "step2": "ワークスペース用のフォルダーを指定してコンテナーを実行します。",
           "step3": "NOT SET UP という行が出るまで待ちます。"
         },
-        "gcp": {
-          "blurb": "Compute Engine、Cloud Run、または GKE",
-          "runsOn": "Compute Engine がいちばん簡単です",
-          "step1": "コンテナーイメージからインスタンスを作成します。",
-          "step2": "ファイアウォールでポート 8080 を自分にだけ許可します。",
+        "aliyun": {
+          "name": "Alibaba Cloud",
+          "blurb": "ECS、ACK、または Serverless App Engine",
+          "runsOn": "ECS がいちばん簡単です",
+          "step1": "Docker 入りの ECS インスタンスを作成し、下のコマンドを実行します。",
+          "step2": "セキュリティグループでポート 8080 を自分にだけ許可します。",
           "step3": "NOT SET UP という行が出るまで待ちます。"
         },
         "azure": {

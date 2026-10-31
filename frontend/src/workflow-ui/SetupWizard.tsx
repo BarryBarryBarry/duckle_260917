@@ -5,7 +5,6 @@ import {
     Check,
     Cloud,
     Copy,
-    ExternalLink,
     HardDrive,
     Laptop,
     Loader2,
@@ -19,7 +18,7 @@ import {
     runnerStage,
     type StagedRunner,
 } from '../tauri-bridge';
-import { copyText, openExternal } from '../tauri-io';
+import { copyText } from '../tauri-io';
 
 /**
  * The one question asked on a first run, and the setup that follows if the answer is
@@ -43,9 +42,7 @@ type Props = {
 
 type Step = 'choose' | 'where' | 'standup' | 'address' | 'claim' | 'key' | 'done';
 
-type Provider = 'custom' | 'aws' | 'gcp' | 'azure';
-
-const DEPLOY_GUIDE = 'https://duckle.org/deploy.html';
+type Provider = 'custom' | 'aws' | 'aliyun' | 'azure';
 
 /**
  * How to get a Duckle server running, per place it might run.
@@ -70,15 +67,12 @@ const PROVIDERS: Record<Provider, { brand?: string; command: string }> = {
             '  -v /srv/duckle:/workspace ghcr.io/slothflowlabs/duckle-web:latest \\\n' +
             '  duckle-runner serve --host 0.0.0.0 --port 8080 --workspace /workspace',
     },
-    gcp: {
-        brand: 'Google Cloud',
+    // No brand: the name is localized (阿里云 / Alibaba Cloud).
+    aliyun: {
         command:
-            'gcloud compute instances create-with-container duckle \\\n' +
-            '  --machine-type=c3-standard-8 \\\n' +
-            '  --container-image=ghcr.io/slothflowlabs/duckle-web:latest \\\n' +
-            '  --container-command=duckle-runner \\\n' +
-            '  --container-arg=serve --container-arg=--host --container-arg=0.0.0.0 \\\n' +
-            '  --container-arg=--port --container-arg=8080',
+            'docker run -d --restart=always --name duckle -p 8080:8080 \\\n' +
+            '  -v /srv/duckle:/workspace ghcr.io/slothflowlabs/duckle-web:latest \\\n' +
+            '  duckle-runner serve --host 0.0.0.0 --port 8080 --workspace /workspace',
     },
     azure: {
         brand: 'Azure',
@@ -312,13 +306,6 @@ export default function SetupWizard({ workspacePath, onDone }: Props) {
                         <div className="setup-actions">
                             <button className="setup-back" onClick={() => setStep('where')}>
                                 {t('firstRun.wizard.back')}
-                            </button>
-                            <button
-                                className="setup-alt"
-                                type="button"
-                                onClick={() => void openExternal(DEPLOY_GUIDE)}
-                            >
-                                <ExternalLink size={13} /> {t('firstRun.wizard.fullGuide')}
                             </button>
                             <button className="setup-next" onClick={() => setStep('address')}>
                                 {t('firstRun.wizard.running')}
