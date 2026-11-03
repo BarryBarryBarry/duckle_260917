@@ -1358,7 +1358,7 @@ mod agent_e2e {
     use std::net::TcpListener;
     use std::time::Instant;
 
-    const CHECKER_MARK: &str = "You are a Duckle pipeline checker";
+    const CHECKER_MARK: &str = "You are an Otter ETL agent pipeline checker";
 
     fn system_text(body: &JsonValue) -> String {
         body["messages"]
@@ -1597,6 +1597,8 @@ mod agent_e2e {
         let app_data = std::env::var("DUCKLE_AGENT_E2E_APPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(|_| tmp_app.path().to_path_buf());
+        // A build with the runtime embedded tests that one; otherwise download.
+        engine_manager::ensure_bundled_agent_runtime(&app_data).expect("unpack bundled runtime");
         if !engine_manager::nodejs_installed(&app_data) {
             engine_manager::install_nodejs(&app_data, |_| {}).expect("install Node.js");
         }

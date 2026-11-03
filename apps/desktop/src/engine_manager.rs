@@ -19,9 +19,9 @@ pub const SLOTHDB_VERSION: &str = "0.2.7";
 /// universal variant.
 pub const LLAMACPP_BUILD: &str = "b9305";
 pub const NODE_VERSION: &str = "22.23.3";
-/// Keep equal to the version in apps/desktop/agent-runtime/package.json (and
-/// its lockfile), which is what release builds embed.
-pub const PI_VERSION: &str = "1.4.0";
+/// The pinned Pi Agent version, read by build.rs from
+/// apps/desktop/agent-runtime/package.json, the one place it is written.
+pub const PI_VERSION: &str = env!("DUCKLE_PI_VERSION");
 /// A GGUF chat model the assistant can be installed with.
 ///
 /// The catalogue is curated rather than a live Hugging Face search: every

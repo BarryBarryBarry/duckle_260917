@@ -104,6 +104,25 @@ updates:
         patterns: ["*"]
         update-types: ["major"]
 
+  # The Pi Agent bundled into the desktop binary. Its version is written only in
+  # apps/desktop/agent-runtime/package.json, so this PR is the whole upgrade:
+  # build.rs reads PI_VERSION from that file, and the CI desktop-release-build
+  # job installs the new lockfile, checks it is still portable, and runs
+  # `pi --version` before anything can merge. Weekly and on its own, because Pi
+  # ships often and an Agent upgrade should be reviewed apart from the frontend.
+  # Read Pi's CHANGELOG "Breaking Changes" against agent_manager.rs (CLI flags)
+  # and agent_assets/duckle-bridge.ts (extension API) before merging a major.
+  - package-ecosystem: "npm"
+    directory: "/apps/desktop/agent-runtime"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 1
+    commit-message:
+      prefix: "feat(agent)"
+    groups:
+      pi-agent:
+        patterns: ["*"]
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

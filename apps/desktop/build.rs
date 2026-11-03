@@ -39,6 +39,32 @@ fn embed_agent_runtime() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
+    // agent-runtime/package.json is the one place the Pi version is written;
+    // dependabot bumps it with its lockfile, and engine_manager::PI_VERSION
+    // and the staging script both read it from there.
+    let runtime_manifest = std::path::Path::new(&manifest_dir)
+        .join("agent-runtime")
+        .join("package.json");
+    let text = std::fs::read_to_string(&runtime_manifest)
+        .unwrap_or_else(|e| panic!("read {}: {e}", runtime_manifest.display()));
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("parse {}: {e}", runtime_manifest.display()));
+    let pi_version = json["dependencies"]["@earendil-works/pi-coding-agent"]
+        .as_str()
+        .filter(|v| {
+            !v.is_empty()
+                && v.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "{} must pin @earendil-works/pi-coding-agent to an exact version",
+                runtime_manifest.display()
+            )
+        });
+    println!("cargo:rustc-env=DUCKLE_PI_VERSION={pi_version}");
+    println!("cargo:rerun-if-changed={}", runtime_manifest.display());
     let node_name = if target_os == "windows" {
         "pi-node.exe"
     } else {

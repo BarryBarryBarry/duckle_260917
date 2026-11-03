@@ -15,8 +15,10 @@ Usage:
   python3 scripts/stage-agent-runtime.py node                # this machine
   python3 scripts/stage-agent-runtime.py node darwin-x64     # a cross target
 
-The versions come from apps/desktop/src/engine_manager.rs (PI_VERSION,
-NODE_VERSION and expected_node_sha256), so there is one place to bump them.
+The Pi version comes from apps/desktop/agent-runtime/package.json, the one
+place it is written (dependabot bumps it with its lockfile); build.rs reads the
+same file for PI_VERSION. NODE_VERSION and expected_node_sha256 come from
+apps/desktop/src/engine_manager.rs.
 """
 
 import hashlib
@@ -180,11 +182,10 @@ def smoke_test(work, pi_dir, manifest, version):
 
 
 def stage_pi():
-    version = rust_const("PI_VERSION")
     manifest = json.loads((RUNTIME_DIR / "package.json").read_text(encoding="utf-8"))
-    pinned = manifest.get("dependencies", {}).get(PI_PACKAGE)
-    if pinned != version:
-        fail(f"agent-runtime/package.json pins {PI_PACKAGE}@{pinned}, but PI_VERSION is {version}")
+    version = manifest.get("dependencies", {}).get(PI_PACKAGE)
+    if not version or not re.fullmatch(r"[0-9A-Za-z.+-]+", version) or not version[0].isdigit():
+        fail(f"agent-runtime/package.json must pin {PI_PACKAGE} to an exact version, not {version!r}")
     lock = RUNTIME_DIR / "package-lock.json"
     if not lock.exists():
         fail(
@@ -193,7 +194,7 @@ def stage_pi():
         )
     locked = json.loads(lock.read_text(encoding="utf-8")).get("packages", {}).get(f"node_modules/{PI_PACKAGE}", {})
     if locked.get("version") != version:
-        fail(f"package-lock.json locks {PI_PACKAGE}@{locked.get('version')}, but PI_VERSION is {version}; regenerate it")
+        fail(f"package-lock.json locks {PI_PACKAGE}@{locked.get('version')}, but package.json pins {version}; regenerate it")
 
     npm = shutil.which("npm")
     if not npm:

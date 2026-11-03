@@ -4338,7 +4338,7 @@ python3 scripts/stage-agent-runtime.py pi     # npm ci from apps/desktop/agent-r
 python3 scripts/stage-agent-runtime.py node   # or a platform: darwin-x64, linux-arm64, win-x64, ...
 ```
 
-To upgrade Pi, change `PI_VERSION` in `apps/desktop/src/engine_manager.rs` and the version in `apps/desktop/agent-runtime/package.json`, then regenerate the lockfile with `npm --prefix apps/desktop/agent-runtime install --package-lock-only --ignore-scripts`.
+The Pi version is written in one place, `apps/desktop/agent-runtime/package.json`; `build.rs` reads it for `PI_VERSION`. Dependabot opens a weekly PR when Pi publishes a new version, updating that file and its lockfile together, and CI stages and smoke-tests the new runtime on that PR. To upgrade by hand, change the version there and regenerate the lockfile with `npm --prefix apps/desktop/agent-runtime install --package-lock-only --ignore-scripts`.
 
 **Run the tests:**
 
