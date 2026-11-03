@@ -1132,6 +1132,16 @@ fn dispatch_cmd(state: &WebState, who: &console_auth::Identity, cmd: &str, body:
                 None => respond_err("400 Bad Request", "missing or invalid pipelineId"),
             }
         }
+        // The workspace's own user guide, when it has one; the app falls back to
+        // its bundled manual otherwise.
+        "guide_load" => {
+            let args: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let lang = args.get("lang").and_then(Value::as_str);
+            match duckle_duckdb_engine::workspace_guide::load(&state.workspace, lang) {
+                Ok(v) => respond_json(&v.unwrap_or(Value::Null)),
+                Err(e) => respond_err("400 Bad Request", &e),
+            }
+        }
         // The Tests tab, on the same file `duckle test` runs. The workspace is this
         // server's, as for every command here.
         "tests_load" | "tests_save" | "tests_run" => {

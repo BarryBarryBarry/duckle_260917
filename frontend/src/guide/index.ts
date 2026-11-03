@@ -1,7 +1,11 @@
 // The user guide shipped inside the app. Markdown and images under this folder
 // are bundled at build time, so updating the guide means rebuilding the app.
+// A workspace may carry its own guide in `<workspace>/guide/`, which is read
+// first and needs no rebuild.
 // A UI language with its own `manual.<lang>.md` gets that manual; any other
 // Chinese variant gets Simplified Chinese, and everything else gets English.
+
+import { guideLoad } from '../tauri-bridge';
 
 const CHINESE_LANG = 'zh-CN';
 const DEFAULT_LANG = 'en';
@@ -31,13 +35,41 @@ export async function loadManual(lang: string | undefined): Promise<string> {
     return load();
 }
 
-/** Maps a manual's `./images/x.png` (or `images/x.png`) to its bundled URL;
- *  anything else (http links, data URLs) passes through unchanged. */
-export function resolveGuideImage(src: string | undefined): string | undefined {
+export type LoadedGuide = {
+    markdown: string;
+    /** Pictures that came with a workspace guide, by their `images/...` path. */
+    images: Record<string, string>;
+    source: 'workspace' | 'bundled';
+};
+
+/** The workspace's own guide (`<workspace>/guide/manual.<lang>.md`) when it has
+ *  one, otherwise the manual bundled with the app. */
+export async function loadGuide(workspacePath: string | null, lang: string | undefined): Promise<LoadedGuide> {
+    if (workspacePath) {
+        try {
+            const own = await guideLoad(workspacePath, lang);
+            if (own) return { markdown: own.markdown, images: own.images ?? {}, source: 'workspace' };
+        } catch (e) {
+            console.warn('workspace guide unavailable, using the bundled one', e);
+        }
+    }
+    return { markdown: await loadManual(lang), images: {}, source: 'bundled' };
+}
+
+/** Maps a manual's `./images/x.png` (or `images/x.png`) to its URL: a picture
+ *  shipped with the workspace guide first, then the bundled one; anything else
+ *  (http links, data URLs) passes through unchanged. */
+export function resolveGuideImage(src: string | undefined, workspaceImages: Record<string, string> = {}): string | undefined {
     if (!src) return src;
     const rel = src.replace(/^\.\//, '');
     if (!rel.startsWith('images/')) return src;
-    return IMAGES[`./${decodeURI(rel)}`] ?? src;
+    let decoded = rel;
+    try {
+        decoded = decodeURIComponent(rel);
+    } catch {
+        // keep it as written
+    }
+    return workspaceImages[decoded] ?? IMAGES[`./${decodeURI(rel)}`] ?? src;
 }
 
 /** GitHub-style heading anchor: `## 4. 排错指南` -> `4-排错指南`. */

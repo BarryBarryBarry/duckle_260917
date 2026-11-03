@@ -1,4 +1,5 @@
-// The user guide as a right-hand tool window: the bundled Markdown manual with
+// The user guide as a right-hand tool window: the workspace's own manual (or
+// the bundled one when the workspace has none) with
 // a table of contents, in-guide anchor links, and click-to-enlarge images.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
@@ -6,7 +7,7 @@ import { useTranslation } from 'react-i18next';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ArrowUp, BookOpen, Loader2, Maximize2, Minimize2, X } from 'lucide-react';
-import { loadManual, resolveGuideImage, slugifyHeading } from '../guide';
+import { loadGuide, resolveGuideImage, slugifyHeading } from '../guide';
 import { openExternal } from '../tauri-io';
 import { useMaximized } from './maximize';
 
@@ -22,9 +23,18 @@ export const GUIDE_WIDTH = {
 type TocEntry = { id: string; text: string; level: number };
 type ZoomedImage = { src: string; alt: string };
 
-export default function GuidePanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+export default function GuidePanel({
+    open,
+    onClose,
+    workspacePath,
+}: {
+    open: boolean;
+    onClose: () => void;
+    workspacePath: string | null;
+}) {
     const { t, i18n } = useTranslation();
     const [content, setContent] = useState<string | null>(null);
+    const [images, setImages] = useState<Record<string, string>>({});
     const [error, setError] = useState<string | null>(null);
     const [toc, setToc] = useState<TocEntry[]>([]);
     const [zoomed, setZoomed] = useState<ZoomedImage | null>(null);
@@ -32,12 +42,17 @@ export default function GuidePanel({ open, onClose }: { open: boolean; onClose: 
     const scrollRef = useRef<HTMLDivElement>(null);
     const bodyRef = useRef<HTMLDivElement>(null);
 
+    // Read again each time the panel opens, so edits to a workspace guide show
+    // without restarting the app.
     useEffect(() => {
+        if (!open) return;
         let cancelled = false;
         setError(null);
-        loadManual(i18n.language)
-            .then(text => {
-                if (!cancelled) setContent(text);
+        loadGuide(workspacePath, i18n.language)
+            .then(guide => {
+                if (cancelled) return;
+                setImages(guide.images);
+                setContent(guide.markdown);
             })
             .catch(e => {
                 if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -45,7 +60,7 @@ export default function GuidePanel({ open, onClose }: { open: boolean; onClose: 
         return () => {
             cancelled = true;
         };
-    }, [i18n.language]);
+    }, [open, workspacePath, i18n.language]);
 
     // Heading ids are assigned from the rendered DOM, so the table of contents
     // and in-guide `#anchor` links agree on one slug per heading.
@@ -106,7 +121,7 @@ export default function GuidePanel({ open, onClose }: { open: boolean; onClose: 
                 </a>
             ),
             img: ({ src, alt, title }) => {
-                const url = resolveGuideImage(typeof src === 'string' ? src : undefined);
+                const url = resolveGuideImage(typeof src === 'string' ? src : undefined, images);
                 if (!url) return null;
                 return (
                     <img
@@ -120,7 +135,7 @@ export default function GuidePanel({ open, onClose }: { open: boolean; onClose: 
                 );
             },
         }),
-        [handleLink, t],
+        [handleLink, images, t],
     );
 
     const maximizeLabel = maximized

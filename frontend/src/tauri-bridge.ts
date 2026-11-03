@@ -607,6 +607,19 @@ export async function workspaceCatalogInspect(
     return await invoke<string[]>('workspace_catalog_inspect', { workspace, asset });
 }
 
+// ---- The workspace's own user guide: guide/manual.<lang>.md --------------
+
+export type WorkspaceGuide = {
+    lang: string;
+    markdown: string;
+    /** `images/...` as the manual references it -> a data URL. */
+    images: Record<string, string>;
+};
+
+export async function guideLoad(workspacePath: string, lang: string | undefined): Promise<WorkspaceGuide | null> {
+    return await invoke<WorkspaceGuide | null>('guide_load', { workspacePath, lang: lang ?? null });
+}
+
 // ---- Pipeline tests: tests/<id>.test.json, the file `duckle test` runs ---
 
 export type TestReport = {

@@ -69,6 +69,7 @@ pub mod connection_test;
 pub mod catalog;
 pub mod runlock;
 pub mod testsuite;
+pub mod workspace_guide;
 pub mod s3;
 pub mod batch;
 pub mod audit;

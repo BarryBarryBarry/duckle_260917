@@ -3017,7 +3017,7 @@ export default function App() {
                 ) : null}
                 {guidePanelMounted ? (
                     <SideToolWindow {...GUIDE_WIDTH} hidden={!showGuidePanel}>
-                        <GuidePanel open={showGuidePanel} onClose={() => setRightTool(null)} />
+                        <GuidePanel open={showGuidePanel} onClose={() => setRightTool(null)} workspacePath={workspacePathState} />
                     </SideToolWindow>
                 ) : null}
                 <RightToolStrip

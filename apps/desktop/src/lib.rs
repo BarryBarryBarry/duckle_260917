@@ -256,6 +256,7 @@ pub fn run() {
             tests_load,
             tests_save,
             tests_run,
+            guide_load,
             watermark_list,
             watermark_set,
             watermark_clear,
@@ -847,6 +848,13 @@ fn run_history(workspace_path: String, pipeline_id: String) -> Result<Vec<RunRec
     let mut records = load_run_history(std::path::Path::new(&workspace_path), &pipeline_id);
     records.reverse();
     Ok(records)
+}
+
+// ---- The workspace's own user guide (guide/manual.<lang>.md) ------------
+
+#[tauri::command]
+fn guide_load(workspace_path: String, lang: Option<String>) -> Result<Option<serde_json::Value>, String> {
+    duckle_duckdb_engine::workspace_guide::load(std::path::Path::new(&workspace_path), lang.as_deref())
 }
 
 // ---- The Tests tab, on the file `duckle test` runs ----------------------
