@@ -15,9 +15,10 @@ Usage:
   python3 scripts/stage-agent-runtime.py node                # this machine
   python3 scripts/stage-agent-runtime.py node darwin-x64     # a cross target
 
-The Pi version comes from apps/desktop/agent-runtime/package.json, the one
-place it is written (dependabot bumps it with its lockfile); build.rs reads the
-same file for PI_VERSION. NODE_VERSION and expected_node_sha256 come from
+The Pi version range is declared in apps/desktop/agent-runtime/package.json
+(^1.x) and the exact version comes from its lockfile, which `npm update` there
+or dependabot moves to the newest Pi in range; build.rs reads the same lockfile
+for PI_VERSION. NODE_VERSION and expected_node_sha256 come from
 apps/desktop/src/engine_manager.rs.
 """
 
@@ -183,18 +184,23 @@ def smoke_test(work, pi_dir, manifest, version):
 
 def stage_pi():
     manifest = json.loads((RUNTIME_DIR / "package.json").read_text(encoding="utf-8"))
-    version = manifest.get("dependencies", {}).get(PI_PACKAGE)
-    if not version or not re.fullmatch(r"[0-9A-Za-z.+-]+", version) or not version[0].isdigit():
-        fail(f"agent-runtime/package.json must pin {PI_PACKAGE} to an exact version, not {version!r}")
+    declared = manifest.get("dependencies", {}).get(PI_PACKAGE)
+    if not declared:
+        fail(f"agent-runtime/package.json does not depend on {PI_PACKAGE}")
     lock = RUNTIME_DIR / "package-lock.json"
     if not lock.exists():
         fail(
             f"{lock.relative_to(ROOT)} is missing. Create and commit it:\n"
             "  npm --prefix apps/desktop/agent-runtime install --package-lock-only --ignore-scripts"
         )
-    locked = json.loads(lock.read_text(encoding="utf-8")).get("packages", {}).get(f"node_modules/{PI_PACKAGE}", {})
-    if locked.get("version") != version:
-        fail(f"package-lock.json locks {PI_PACKAGE}@{locked.get('version')}, but package.json pins {version}; regenerate it")
+    packages = json.loads(lock.read_text(encoding="utf-8")).get("packages", {})
+    if packages.get("", {}).get("dependencies", {}).get(PI_PACKAGE) != declared:
+        fail("package-lock.json is out of step with package.json; regenerate it")
+    # The range in package.json says what may be taken; the lockfile says what is.
+    version = packages.get(f"node_modules/{PI_PACKAGE}", {}).get("version")
+    if not version:
+        fail(f"package-lock.json has no version for {PI_PACKAGE}")
+    print(f"{PI_PACKAGE}: {declared} resolves to {version} in the lockfile")
 
     npm = shutil.which("npm")
     if not npm:

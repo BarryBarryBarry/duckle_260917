@@ -40,17 +40,28 @@ fn embed_agent_runtime() {
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
 
-    // agent-runtime/package.json is the one place the Pi version is written;
-    // dependabot bumps it with its lockfile, and engine_manager::PI_VERSION
-    // and the staging script both read it from there.
-    let runtime_manifest = std::path::Path::new(&manifest_dir)
-        .join("agent-runtime")
-        .join("package.json");
-    let text = std::fs::read_to_string(&runtime_manifest)
-        .unwrap_or_else(|e| panic!("read {}: {e}", runtime_manifest.display()));
-    let json: serde_json::Value = serde_json::from_str(&text)
-        .unwrap_or_else(|e| panic!("parse {}: {e}", runtime_manifest.display()));
-    let pi_version = json["dependencies"]["@earendil-works/pi-coding-agent"]
+    // agent-runtime/package.json declares the Pi range (^1.x) and its lockfile
+    // holds the exact version it resolved to, which is what gets embedded.
+    // `npm update` there, or dependabot, moves the lockfile to the newest Pi in
+    // range; engine_manager::PI_VERSION and the staging script both read it.
+    let runtime_dir = std::path::Path::new(&manifest_dir).join("agent-runtime");
+    let read_json = |name: &str| -> serde_json::Value {
+        let path = runtime_dir.join(name);
+        println!("cargo:rerun-if-changed={}", path.display());
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+    };
+    const PI_PACKAGE: &str = "@earendil-works/pi-coding-agent";
+    let manifest = read_json("package.json");
+    let lock = read_json("package-lock.json");
+    let declared = manifest["dependencies"][PI_PACKAGE].as_str();
+    if declared.is_none() || lock["packages"][""]["dependencies"][PI_PACKAGE].as_str() != declared {
+        panic!(
+            "agent-runtime/package-lock.json is out of step with package.json; regenerate it: npm --prefix apps/desktop/agent-runtime install --package-lock-only --ignore-scripts"
+        );
+    }
+    let pi_version = lock["packages"][format!("node_modules/{PI_PACKAGE}")]["version"]
         .as_str()
         .filter(|v| {
             !v.is_empty()
@@ -58,13 +69,9 @@ fn embed_agent_runtime() {
                     .all(|c| c.is_ascii_alphanumeric() || ".-+".contains(c))
         })
         .unwrap_or_else(|| {
-            panic!(
-                "{} must pin @earendil-works/pi-coding-agent to an exact version",
-                runtime_manifest.display()
-            )
+            panic!("agent-runtime/package-lock.json has no version for {PI_PACKAGE}")
         });
     println!("cargo:rustc-env=DUCKLE_PI_VERSION={pi_version}");
-    println!("cargo:rerun-if-changed={}", runtime_manifest.display());
     let node_name = if target_os == "windows" {
         "pi-node.exe"
     } else {

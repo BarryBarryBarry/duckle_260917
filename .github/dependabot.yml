@@ -104,18 +104,22 @@ updates:
         patterns: ["*"]
         update-types: ["major"]
 
-  # The Pi Agent bundled into the desktop binary. Its version is written only in
-  # apps/desktop/agent-runtime/package.json, so this PR is the whole upgrade:
-  # build.rs reads PI_VERSION from that file, and the CI desktop-release-build
-  # job installs the new lockfile, checks it is still portable, and runs
-  # `pi --version` before anything can merge. Weekly and on its own, because Pi
-  # ships often and an Agent upgrade should be reviewed apart from the frontend.
-  # Read Pi's CHANGELOG "Breaking Changes" against agent_manager.rs (CLI flags)
-  # and agent_assets/duckle-bridge.ts (extension API) before merging a major.
+  # The Pi Agent bundled into the desktop binary. package.json declares ^1.x;
+  # the lockfile holds the exact version, and build.rs reads PI_VERSION from
+  # it. lockfile-only makes this PR what `npm update` there would do: the
+  # newest Pi inside the range, with package.json untouched, so a major (2.0)
+  # is never proposed and stays a deliberate edit of the range. The CI
+  # desktop-release-build job installs the new lockfile, checks it is still
+  # portable and runs `pi --version` before anything can merge. Weekly and on
+  # its own, because Pi ships often and an Agent upgrade should be reviewed
+  # apart from the frontend. Pi has breaking changes inside 1.x too: read its
+  # CHANGELOG "Breaking Changes" against agent_manager.rs (CLI flags) and
+  # agent_assets/duckle-bridge.ts (extension API) before merging.
   - package-ecosystem: "npm"
     directory: "/apps/desktop/agent-runtime"
     schedule:
       interval: "weekly"
+    versioning-strategy: "lockfile-only"
     open-pull-requests-limit: 1
     commit-message:
       prefix: "feat(agent)"

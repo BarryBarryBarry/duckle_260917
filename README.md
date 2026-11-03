@@ -4338,7 +4338,7 @@ python3 scripts/stage-agent-runtime.py pi     # npm ci from apps/desktop/agent-r
 python3 scripts/stage-agent-runtime.py node   # or a platform: darwin-x64, linux-arm64, win-x64, ...
 ```
 
-The Pi version is written in one place, `apps/desktop/agent-runtime/package.json`; `build.rs` reads it for `PI_VERSION`. Dependabot opens a weekly PR when Pi publishes a new version, updating that file and its lockfile together, and CI stages and smoke-tests the new runtime on that PR. To upgrade by hand, change the version there and regenerate the lockfile with `npm --prefix apps/desktop/agent-runtime install --package-lock-only --ignore-scripts`.
+`apps/desktop/agent-runtime/package.json` declares the Pi range (`^1.5.0`, any 1.x from 1.5.0 on) and its lockfile pins the exact version; `build.rs` reads `PI_VERSION` from the lockfile. To upgrade to the newest Pi in range, without naming a version, run `npm --prefix apps/desktop/agent-runtime update --package-lock-only --ignore-scripts` and commit the lockfile. Dependabot opens the same lockfile update as a weekly PR, and CI stages and smoke-tests the new runtime on it. Moving to a new major (2.x) is a deliberate change of the range in `package.json`.
 
 **Run the tests:**
 

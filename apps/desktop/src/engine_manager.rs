@@ -19,8 +19,9 @@ pub const SLOTHDB_VERSION: &str = "0.2.7";
 /// universal variant.
 pub const LLAMACPP_BUILD: &str = "b9305";
 pub const NODE_VERSION: &str = "22.23.3";
-/// The pinned Pi Agent version, read by build.rs from
-/// apps/desktop/agent-runtime/package.json, the one place it is written.
+/// The Pi Agent version embedded and installed: what
+/// apps/desktop/agent-runtime/package-lock.json resolved package.json's range
+/// to, read by build.rs.
 pub const PI_VERSION: &str = env!("DUCKLE_PI_VERSION");
 /// A GGUF chat model the assistant can be installed with.
 ///
