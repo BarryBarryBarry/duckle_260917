@@ -256,13 +256,17 @@ fn reporting_changes_nothing_about_the_run() {
     // Run ids are unique in life; tests running side by side must not share one.
     let key = "run-reporting_changes_nothing_about_the_run";
     let shape = |e: &PipelineEvent| match e {
-        PipelineEvent::Started { total_stages } => format!("started {total_stages}"),
+        PipelineEvent::Started { total_stages, plan, skipped } => {
+            let steps: Vec<String> = plan.iter().map(|s| format!("{}:{}", s.step, s.node_id)).collect();
+            format!("started {total_stages} {steps:?} {}", skipped.len())
+        }
         PipelineEvent::StageStarted { node_id, kind, .. } => format!("start {node_id} {kind}"),
         PipelineEvent::StageFinished { node_id, status, rows, .. } => format!("finish {node_id} {status} {rows:?}"),
+        PipelineEvent::StageSkipped { node_id, reason, .. } => format!("skipped {node_id} {reason}"),
         PipelineEvent::Log { node_id, message, .. } => format!("log {node_id} {message}"),
         PipelineEvent::Assertion { node_id, passed, .. } => format!("assert {node_id} {passed}"),
         PipelineEvent::Cancelled => "cancelled".into(),
-        PipelineEvent::Finished { status, .. } => format!("finished {status}"),
+        PipelineEvent::Finished { status, not_run, .. } => format!("finished {status} {not_run:?}"),
     };
     let ws = tempfile::tempdir().unwrap();
     let d = three_nodes(ws.path(), "id > 1");

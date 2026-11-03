@@ -230,7 +230,29 @@
     "pipelineFinished": "管道已完成",
     "pipelineLabel": "商機漏斗",
     "askAgent": "讓 Agent 診斷",
-    "askAgentTitle": "把這次失敗的執行傳給 Agent 診斷"
+    "askAgentTitle": "把這次失敗的執行傳給 Agent 診斷",
+    "trace": {
+      "runStarted": "執行開始 · 共 {{count}} 步",
+      "skippedDisabled": "{{label}} 已略過：已停用",
+      "skippedReused": "{{label}} 已略過：沿用上次執行的輸出",
+      "skippedBudget": "{{label}} 已略過：先前的步驟已達預算上限",
+      "skippedOther": "{{label}} 已略過（{{reason}}）",
+      "omitted": "已省略先前的 {{count}} 行",
+      "inBranch": "位於分支 {{label}}",
+      "rows": "{{formatted}} 列",
+      "assertionHeld": "{{label}}：斷言通過：{{description}}",
+      "assertionFailed": "{{label}}：斷言失敗：{{description}}：{{detail}}",
+      "cancelled": "執行已取消",
+      "runFinished": "執行 {{status}} · {{duration}} ms",
+      "notRun": "未執行：{{labels}}",
+      "copy": "複製日誌",
+      "copied": "已複製",
+      "failingSql": "失敗的 SQL",
+      "reasonSkipped": "已略過",
+      "reasonDisabled": "已停用",
+      "reasonReused": "沿用輸出",
+      "reasonNotRun": "未執行"
+    }
   },
   "status": {
     "pipelineLabel": "商機漏斗",
@@ -261,7 +283,9 @@
     "failed": "失敗",
     "ok": "OK",
     "colsSingular": "欄",
-    "colsPlural": "行欄位(Columns)"
+    "colsPlural": "行欄位(Columns)",
+    "runStep": "上次執行第 {{n}} 步（共 {{total}} 步）",
+    "runStepStale": "上次執行第 {{n}} 步（共 {{total}} 步）· 之後已修改，下次執行後更新"
   },
   "common": {
     "save": "Submit",

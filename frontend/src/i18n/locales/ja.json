@@ -188,7 +188,29 @@
     "ready": "[ready]",
     "consoleDesc": "The execution log. Run a pipeline and each stage's status, row count, and timing - plus any errors - appears here.",
     "pipelineFinished": "Pipeline finished",
-    "pipelineLabel": "Pipeline"
+    "pipelineLabel": "Pipeline",
+    "trace": {
+      "runStarted": "実行開始 · 全 {{count}} ステップ",
+      "skippedDisabled": "{{label}} をスキップ：無効化されています",
+      "skippedReused": "{{label}} をスキップ：前回の実行結果を再利用",
+      "skippedBudget": "{{label}} をスキップ：前のステップが予算上限に達しました",
+      "skippedOther": "{{label}} をスキップ（{{reason}}）",
+      "omitted": "以前の {{count}} 行を省略しました",
+      "inBranch": "ブランチ {{label}} 内",
+      "rows": "{{formatted}} 行",
+      "assertionHeld": "{{label}}：アサーション成功：{{description}}",
+      "assertionFailed": "{{label}}：アサーション失敗：{{description}}：{{detail}}",
+      "cancelled": "実行をキャンセルしました",
+      "runFinished": "実行 {{status}} · {{duration}} ms",
+      "notRun": "未実行：{{labels}}",
+      "copy": "ログをコピー",
+      "copied": "コピーしました",
+      "failingSql": "失敗した SQL",
+      "reasonSkipped": "スキップ",
+      "reasonDisabled": "無効",
+      "reasonReused": "再利用",
+      "reasonNotRun": "未実行"
+    }
   },
   "status": {
     "pipelineLabel": "Pipeline:",
@@ -219,7 +241,9 @@
     "failed": "Failed",
     "ok": "OK",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "runStep": "前回の実行でステップ {{n}} / {{total}}",
+    "runStepStale": "前回の実行でステップ {{n}} / {{total}} · その後変更あり、次回の実行で更新されます"
   },
   "common": {
     "save": "保存",

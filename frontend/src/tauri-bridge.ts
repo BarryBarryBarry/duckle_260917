@@ -8,6 +8,7 @@ import type { Edge, Node } from '@xyflow/react';
 import type { DuckleNodeData } from './pipeline-types';
 import type { PipelineRunFields } from './run-resolve';
 import type { CaseResult, TestSuite } from './test-cases';
+import type { TimelineEntry } from './run-timeline';
 
 /**
  * #317: what a run carries besides its graph - the pipeline's own top-level
@@ -103,7 +104,7 @@ export async function testConnection(payload: unknown): Promise<ConnectionTestRe
 // ---- Pipeline execution ------------------------------------------------
 
 export type NodeRunStatus = {
-    status: 'ok' | 'error' | 'running';
+    status: 'ok' | 'error' | 'running' | 'skipped';
     kind?: 'view' | 'sink';
     rows?: number;
     duration_ms?: number;
@@ -139,10 +140,26 @@ export type RunResult = {
     /** Diagnostic lines from ctl.log / ctl.warn nodes, accumulated live
      *  from streamed `log` events (not part of the engine's RunResult). */
     messages?: RunLogLine[];
+    /** Every streamed event of the run, in order, with when it arrived. Built
+     *  by the editor (see run-timeline.ts); not part of the engine's RunResult. */
+    timeline?: TimelineEntry[];
 };
 
+/** One stage of a run's plan, in execution order. `step` counts from 1. */
+export type RunPlanStep = {
+    step: number;
+    node_id: string;
+    label: string;
+    component: string;
+    kind: 'view' | 'sink';
+};
+
+/** A node the run leaves out: `disabled`, or `retry_reused` (a retry reads
+ *  its verified output instead of running it). */
+export type SkippedNode = { node_id: string; label: string; reason: string };
+
 export type PipelineEvent =
-    | { type: 'started'; total_stages: number }
+    | { type: 'started'; total_stages: number; plan?: RunPlanStep[]; skipped?: SkippedNode[] }
     | { type: 'stage_started'; node_id: string; label: string; kind: 'view' | 'sink' }
     | {
           type: 'stage_finished';
@@ -153,11 +170,20 @@ export type PipelineEvent =
           duration_ms: number;
           error?: string;
           sql?: string;
+          /** The ctl.parallelize node whose branch ran this node. */
+          branch_of?: string;
       }
+    | { type: 'stage_skipped'; node_id: string; label: string; reason: string }
     | { type: 'cancelled' }
     | { type: 'log'; node_id: string; level: 'info' | 'warn' | 'error'; message: string }
     | { type: 'assertion'; node_id: string; description: string; passed: boolean; detail: string }
-    | { type: 'finished'; status: 'ok' | 'error' | 'cancelled'; duration_ms: number };
+    | {
+          type: 'finished';
+          status: 'ok' | 'error' | 'cancelled';
+          duration_ms: number;
+          /** Planned stages that never ran: what an error or a cancel left undone. */
+          not_run?: string[];
+      };
 
 /**
  * Web edition run transport: POST the pipeline to /api/run_stream and read the

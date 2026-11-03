@@ -695,6 +695,15 @@ impl StageTap {
                     error: error.as_deref().map(|e| e.chars().take(STAGE_ERROR_MAX_CHARS).collect()),
                 })
             }
+            crate::PipelineEvent::StageSkipped { node_id, .. } => Some(MetricsEvent::StageFinished {
+                workspace,
+                run_key,
+                node_id: node_id.clone(),
+                status: NodeStatus::Skipped,
+                rows: None,
+                duration_ms: None,
+                error: None,
+            }),
             // How the run ended reaches the store from the ledger, which also
             // closes the stages it never got to. An assertion's node still
             // reports through StageFinished.

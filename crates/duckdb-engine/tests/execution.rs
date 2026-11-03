@@ -14493,7 +14493,8 @@ fn an_inference_budget_stops_the_run_before_a_partial_dataset_is_published() {
     let in_csv = write_file(tmp.path(), "in.csv", "id,name\n1,a\n2,b\n3,c\n4,d\n5,e\n");
     let out = out_path(tmp.path(), "out.csv");
     let base_url = format!("http://127.0.0.1:{}", port);
-    let r = engine.execute_pipeline(&doc(
+    let mut events = Vec::new();
+    let r = engine.execute_pipeline_with_events(&doc(
         json!([
             node("s", "src.csv", json!({ "path": in_csv, "hasHeader": true })),
             node("l", "xf.ai.llm", json!({
@@ -14508,7 +14509,7 @@ fn an_inference_budget_stops_the_run_before_a_partial_dataset_is_published() {
             node("k", "snk.csv", json!({ "path": out, "hasHeader": true })),
         ]),
         json!([main_edge("e1", "s", "l"), main_edge("e2", "l", "k")]),
-    ));
+    ), None, None, |e| events.push(e));
     drop(handle);
 
     assert_eq!(r.status, "ok", "a budget stop is not a failure: {:?}", r.error);
@@ -14527,6 +14528,12 @@ fn an_inference_budget_stops_the_run_before_a_partial_dataset_is_published() {
     assert_eq!(
         sink.status, "skipped",
         "the sink must not run: publishing 2 of 5 rows as the answer is the damage"
+    );
+    assert!(
+        events.iter().any(|e| matches!(e,
+            duckle_duckdb_engine::PipelineEvent::StageSkipped { node_id, reason, .. }
+                if node_id == "k" && reason == "budget_stop")),
+        "the skip must be streamed, not only in the result"
     );
     assert!(
         !std::path::Path::new(&out).exists(),
@@ -16533,6 +16540,12 @@ fn run_log_writes_per_pipeline_ndjson() {
     assert!(body.contains("\"event\":\"stage_finished\""), "no stage_finished line: {}", body);
     assert!(body.contains("saw 2 rows"), "ctl.log message missing: {}", body);
     assert!(body.contains("\"component\":\"ctl.log\""), "component name missing: {}", body);
+    assert!(body.contains("\"plan\":[{"), "run_started carries no plan: {}", body);
+    assert!(
+        body.lines().any(|l| l.contains("\"event\":\"stage_finished\"") && l.contains("\"step\":3") && l.contains("\"total\":3")),
+        "stage lines carry no step of total: {}",
+        body
+    );
     // Every non-empty line must be valid JSON (NDJSON contract).
     for line in body.lines().filter(|l| !l.trim().is_empty()) {
         serde_json::from_str::<serde_json::Value>(line)
@@ -27003,4 +27016,105 @@ fn run_events_catch_assertions_the_run_carried_on_past() {
     assert_eq!(row("bad")["status"], "failed");
     assert_eq!(row("bad")["kind"], "assert");
     assert!(row("bad")["message"].as_str().unwrap().contains("small amounts"));
+}
+
+/// What a run streams about its plan: every stage in `Started.plan`, numbered
+/// from 1 in the order the stages then start, and the disabled node listed as
+/// skipped rather than silently missing.
+fn plan_events(engine: &DuckdbEngine, d: &PipelineDoc, target: Option<&str>) -> (Vec<duckle_duckdb_engine::PipelineEvent>, String) {
+    let mut events = Vec::new();
+    let r = engine.execute_pipeline_with_events(d, target, None, |e| events.push(e));
+    (events, r.status)
+}
+
+fn two_branches_and_a_disabled_node(dir: &Path, predicate: &str) -> PipelineDoc {
+    let csv = write_file(dir, "in.csv", "id\n1\n2\n");
+    let mut off = node("z_off", "src.csv", json!({ "path": csv, "hasHeader": true }));
+    off["data"]["disabled"] = json!(true);
+    doc(
+        json!([
+            node("a_src", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("a_f", "xf.filter", json!({ "predicate": predicate })),
+            node("a_snk", "snk.csv", json!({ "path": out_path(dir, "a.csv"), "hasHeader": true })),
+            node("b_src", "src.csv", json!({ "path": csv, "hasHeader": true })),
+            node("b_snk", "snk.csv", json!({ "path": out_path(dir, "b.csv"), "hasHeader": true })),
+            off,
+        ]),
+        json!([
+            main_edge("e1", "a_src", "a_f"),
+            main_edge("e2", "a_f", "a_snk"),
+            main_edge("e3", "b_src", "b_snk"),
+        ]),
+    )
+}
+
+#[test]
+fn a_run_announces_its_plan_in_execution_order() {
+    use duckle_duckdb_engine::PipelineEvent as E;
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let d = two_branches_and_a_disabled_node(tmp.path(), "id > 0");
+    for target in [None, Some("a_snk")] {
+        let (events, status) = plan_events(&engine, &d, target);
+        assert_eq!(status, "ok", "{target:?}");
+        let (plan, skipped) = match &events[0] {
+            E::Started { total_stages, plan, skipped } => {
+                assert_eq!(*total_stages as usize, plan.len());
+                (plan.clone(), skipped.clone())
+            }
+            other => panic!("first event is not Started: {other:?}"),
+        };
+        let steps: Vec<u32> = plan.iter().map(|s| s.step).collect();
+        assert_eq!(steps, (1..=plan.len() as u32).collect::<Vec<_>>(), "{target:?}: steps count from 1");
+        let started: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                E::StageStarted { node_id, .. } => Some(node_id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let planned: Vec<&str> = plan.iter().map(|s| s.node_id.as_str()).collect();
+        assert_eq!(started, planned, "{target:?}: stages start in plan order");
+        assert!(!planned.contains(&"z_off"), "{target:?}");
+        assert_eq!(
+            skipped.iter().map(|s| (s.node_id.as_str(), s.reason.as_str())).collect::<Vec<_>>(),
+            [("z_off", "disabled")],
+            "{target:?}"
+        );
+        match events.last() {
+            Some(E::Finished { not_run, .. }) => assert!(not_run.is_empty(), "{target:?}: {not_run:?}"),
+            other => panic!("last event is not Finished: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_failed_run_names_the_stages_it_never_reached() {
+    use duckle_duckdb_engine::PipelineEvent as E;
+    let engine = engine_or_skip!();
+    let tmp = tempfile::tempdir().unwrap();
+    let d = two_branches_and_a_disabled_node(tmp.path(), "no_such_column > 1");
+    for target in [None, Some("a_snk")] {
+        let (events, status) = plan_events(&engine, &d, target);
+        assert_eq!(status, "error", "{target:?}");
+        let reported: std::collections::HashSet<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                E::StageStarted { node_id, .. } | E::StageFinished { node_id, .. } | E::StageSkipped { node_id, .. } => {
+                    Some(node_id.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        let Some(E::Started { plan, .. }) = events.first() else { panic!("no Started") };
+        let expected: Vec<String> =
+            plan.iter().filter(|s| !reported.contains(s.node_id.as_str())).map(|s| s.node_id.clone()).collect();
+        match events.last() {
+            Some(E::Finished { not_run, .. }) => {
+                assert_eq!(not_run, &expected, "{target:?}");
+                assert!(not_run.iter().any(|id| id == "a_snk"), "{target:?}: the sink after the failure ran? {not_run:?}");
+            }
+            other => panic!("last event is not Finished: {other:?}"),
+        }
+    }
 }

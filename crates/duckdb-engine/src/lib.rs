@@ -1822,7 +1822,18 @@ impl DuckdbEngine {
             .unwrap_or_else(|| format!("run-{}-{}", std::process::id(), now_nanos()));
         let mut runlog = run_log::RunLog::open(pipeline_name, run_id, node_meta);
         let mut metrics_tap = self.metrics_tap(&compiled.stages);
-        let mut on_event = |evt: PipelineEvent| {
+        let plan = plan_steps(&compiled.stages);
+        // Planned stages nothing has reported on yet; what is left when the run
+        // finishes is its `not_run`.
+        let mut unreported: Vec<String> = plan.iter().map(|s| s.node_id.clone()).collect();
+        let mut on_event = |mut evt: PipelineEvent| {
+            match &mut evt {
+                PipelineEvent::StageStarted { node_id, .. }
+                | PipelineEvent::StageFinished { node_id, .. }
+                | PipelineEvent::StageSkipped { node_id, .. } => unreported.retain(|id| id != node_id),
+                PipelineEvent::Finished { not_run, .. } => *not_run = std::mem::take(&mut unreported),
+                _ => {}
+            }
             if runlog.enabled() {
                 runlog.record(&evt);
             }
@@ -1834,6 +1845,8 @@ impl DuckdbEngine {
 
         on_event(PipelineEvent::Started {
             total_stages: compiled.stages.len() as u32,
+            skipped: skipped_nodes(doc, &compiled.stages, &self.skip_nodes),
+            plan,
         });
 
         // Temp on-disk DB for this run. The atomic counter guarantees a
@@ -2175,6 +2188,7 @@ impl DuckdbEngine {
                     duration_ms: 0,
                     error: None,
                     sql: None,
+                    branch_of: None,
                 });
                 continue;
             }
@@ -2531,6 +2545,7 @@ impl DuckdbEngine {
                                         duration_ms: st.duration_ms.unwrap_or(0),
                                         error: st.error.clone(),
                                         sql: st.sql.clone(),
+                                        branch_of: Some(stage.node_id.clone()),
                                     });
                                     nodes.insert(
                                         nid.clone(),
@@ -3174,6 +3189,7 @@ impl DuckdbEngine {
                         duration_ms: elapsed_ms,
                         error: None,
                         sql: None,
+                        branch_of: None,
                     });
                     if let Some(p) = view_preview {
                         preview.push(p);
@@ -3207,6 +3223,7 @@ impl DuckdbEngine {
                             duration_ms,
                             error: None,
                             sql: None,
+                            branch_of: None,
                         });
                     }
                 }
@@ -3251,6 +3268,7 @@ impl DuckdbEngine {
                         duration_ms: elapsed_ms,
                         error: Some(msg.clone()),
                         sql: failing_sql.clone(),
+                        branch_of: None,
                     });
                     // ctl.try fallback: if an upstream ctl.try installed
                     // a recovery pipeline, run it as a side effect before
@@ -3315,6 +3333,11 @@ impl DuckdbEngine {
                         rejected_rows: None,
                     },
                 );
+                on_event(PipelineEvent::StageSkipped {
+                    node_id: stage.node_id.clone(),
+                    label: stage.label.clone(),
+                    reason: "budget_stop".into(),
+                });
             }
         }
 
@@ -3421,6 +3444,7 @@ impl DuckdbEngine {
         on_event(PipelineEvent::Finished {
             status: final_status.into(),
             duration_ms: total_start.elapsed().as_millis() as u64,
+            not_run: Vec::new(),
         });
 
         let category = overall_error
@@ -3964,6 +3988,7 @@ impl DuckdbEngine {
                         duration_ms: n.duration_ms.unwrap_or(0),
                         error: None,
                         sql: None,
+                        branch_of: None,
                     });
                 }
             }
@@ -4013,6 +4038,7 @@ impl DuckdbEngine {
                     duration_ms: elapsed,
                     error: Some(msg.clone()),
                     sql: failing_sql.clone(),
+                    branch_of: None,
                 });
                 overall_error.get_or_insert(format!("{}: {}", stage.label, msg));
             } else {
@@ -4065,6 +4091,7 @@ impl DuckdbEngine {
         on_event(PipelineEvent::Finished {
             status: final_status.into(),
             duration_ms,
+            not_run: Vec::new(),
         });
 
         let category = overall_error
@@ -4873,6 +4900,7 @@ fn drain_batched_markers(
             duration_ms: elapsed,
             error: None,
             sql: None,
+            branch_of: None,
         });
         // A view whose rows this sink wrote had its own COUNT(*) skipped, so it
         // reported "ok" with no figure. The sink has just counted the file it
@@ -4902,6 +4930,7 @@ fn drain_batched_markers(
                 duration_ms,
                 error: None,
                 sql: None,
+                branch_of: None,
             });
         }
         *completed += 1;
@@ -7731,6 +7760,12 @@ pub(crate) fn collect_pipeline_secrets(doc: &PipelineDoc) -> Vec<String> {
 pub enum PipelineEvent {
     Started {
         total_stages: u32,
+        /// The stages this run executes, in the order it executes them.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        plan: Vec<PlanStep>,
+        /// Nodes in the pipeline that this run will not execute, and why.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        skipped: Vec<SkippedNode>,
     },
     StageStarted {
         node_id: String,
@@ -7750,6 +7785,17 @@ pub enum PipelineEvent {
         /// every component's failure carries the exact statement for tracebacks.
         #[serde(skip_serializing_if = "Option::is_none")]
         sql: Option<String>,
+        /// The ctl.parallelize node whose branch ran this node. Such a node
+        /// runs in a sub-pipeline, so it has no step in this run's plan.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        branch_of: Option<String>,
+    },
+    /// A planned stage that was not run, e.g. after an earlier stage stopped at
+    /// its budget. `reason` is a short machine-readable code.
+    StageSkipped {
+        node_id: String,
+        label: String,
+        reason: String,
     },
     Cancelled,
     /// A diagnostic line from a ctl.log / ctl.warn node (and, on failure,
@@ -7769,7 +7815,72 @@ pub enum PipelineEvent {
     Finished {
         status: String,
         duration_ms: u64,
+        /// Planned stages that neither started nor were reported skipped -
+        /// what an error or a cancel left undone. Filled in by the executor's
+        /// event wrapper, so emitters pass it empty.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        not_run: Vec<String>,
     },
+}
+
+/// One stage of a run's plan. `step` is 1-based, for people; the run metrics
+/// store keeps its own 0-based `ordinal` for the same position.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct PlanStep {
+    pub step: u32,
+    pub node_id: String,
+    pub label: String,
+    pub component: String,
+    /// `"view"` or `"sink"`, as in `StageStarted.kind`.
+    pub kind: String,
+}
+
+/// A node the run leaves out. `reason` is `"disabled"` or `"retry_reused"`
+/// (a retry reads that node's verified output instead of re-running it).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct SkippedNode {
+    pub node_id: String,
+    pub label: String,
+    pub reason: String,
+}
+
+fn plan_steps(stages: &[plan::Stage]) -> Vec<PlanStep> {
+    stages
+        .iter()
+        .enumerate()
+        .map(|(i, st)| PlanStep {
+            step: u32::try_from(i + 1).unwrap_or(u32::MAX),
+            node_id: st.node_id.clone(),
+            label: st.label.clone(),
+            component: st.component_id.clone(),
+            kind: match st.kind {
+                StageKind::Sink => "sink".into(),
+                StageKind::View => "view".into(),
+            },
+        })
+        .collect()
+}
+
+fn skipped_nodes(
+    doc: &PipelineDoc,
+    stages: &[plan::Stage],
+    skip: &std::collections::BTreeSet<String>,
+) -> Vec<SkippedNode> {
+    let planned: std::collections::HashSet<&str> = stages.iter().map(|s| s.node_id.as_str()).collect();
+    doc.nodes
+        .iter()
+        .filter(|n| !planned.contains(n.id.as_str()))
+        .filter_map(|n| {
+            let reason = if n.data.disabled.unwrap_or(false) {
+                "disabled"
+            } else if skip.contains(&n.id) {
+                "retry_reused"
+            } else {
+                return None;
+            };
+            Some(SkippedNode { node_id: n.id.clone(), label: n.data.label.clone(), reason: reason.into() })
+        })
+        .collect()
 }
 
 /// Prefix a runtime stage's message with this to report that node as

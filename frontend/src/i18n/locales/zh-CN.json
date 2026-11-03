@@ -245,7 +245,29 @@
     "pipelineLabel": "管道",
     "dismissError": "关闭错误提示",
     "askAgent": "Agent 诊断",
-    "askAgentTitle": "把这次失败的运行发给 Agent 诊断"
+    "askAgentTitle": "把这次失败的运行发给 Agent 诊断",
+    "trace": {
+      "runStarted": "运行开始 · 共 {{count}} 步",
+      "skippedDisabled": "{{label}} 已跳过：已禁用",
+      "skippedReused": "{{label}} 已跳过：复用上次运行的输出",
+      "skippedBudget": "{{label}} 已跳过：前面的步骤已达到预算上限",
+      "skippedOther": "{{label}} 已跳过（{{reason}}）",
+      "omitted": "已省略之前的 {{count}} 行",
+      "inBranch": "位于分支 {{label}}",
+      "rows": "{{formatted}} 行",
+      "assertionHeld": "{{label}}：断言通过：{{description}}",
+      "assertionFailed": "{{label}}：断言失败：{{description}}：{{detail}}",
+      "cancelled": "运行已取消",
+      "runFinished": "运行 {{status}} · {{duration}} ms",
+      "notRun": "未执行：{{labels}}",
+      "copy": "复制日志",
+      "copied": "已复制",
+      "failingSql": "失败的 SQL",
+      "reasonSkipped": "已跳过",
+      "reasonDisabled": "已禁用",
+      "reasonReused": "复用输出",
+      "reasonNotRun": "未执行"
+    }
   },
   "status": {
     "pipelineLabel": "管道：",
@@ -276,7 +298,9 @@
     "failed": "失败",
     "ok": "正常",
     "colsSingular": "单列",
-    "colsPlural": "多列"
+    "colsPlural": "多列",
+    "runStep": "上次运行第 {{n}} 步（共 {{total}} 步）",
+    "runStepStale": "上次运行第 {{n}} 步（共 {{total}} 步）· 此后已修改，下次运行后更新"
   },
   "common": {
     "save": "保存",

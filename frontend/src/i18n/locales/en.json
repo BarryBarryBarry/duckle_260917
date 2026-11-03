@@ -252,7 +252,29 @@
     "pipelineLabel": "Pipeline",
     "dismissError": "Dismiss error",
     "askAgent": "Diagnose with Agent",
-    "askAgentTitle": "Send this failed run to the Agent to diagnose"
+    "askAgentTitle": "Send this failed run to the Agent to diagnose",
+    "trace": {
+      "runStarted": "Run started · {{count}} steps",
+      "skippedDisabled": "{{label}} skipped: disabled",
+      "skippedReused": "{{label}} skipped: reusing the previous run's output",
+      "skippedBudget": "{{label}} skipped: an earlier step stopped at its budget",
+      "skippedOther": "{{label}} skipped ({{reason}})",
+      "omitted": "{{count}} earlier lines omitted",
+      "inBranch": "in branch {{label}}",
+      "rows": "{{formatted}} rows",
+      "assertionHeld": "{{label}}: assertion held: {{description}}",
+      "assertionFailed": "{{label}}: assertion failed: {{description}}: {{detail}}",
+      "cancelled": "Run cancelled",
+      "runFinished": "Run {{status}} · {{duration}} ms",
+      "notRun": "Not run: {{labels}}",
+      "copy": "Copy log",
+      "copied": "Copied",
+      "failingSql": "Failing SQL",
+      "reasonSkipped": "skipped",
+      "reasonDisabled": "disabled",
+      "reasonReused": "reused",
+      "reasonNotRun": "not run"
+    }
   },
   "status": {
     "pipelineLabel": "Pipeline:",
@@ -283,7 +305,9 @@
     "failed": "Failed",
     "ok": "OK",
     "colsSingular": "col",
-    "colsPlural": "cols"
+    "colsPlural": "cols",
+    "runStep": "Step {{n}} of {{total}} in the last run",
+    "runStepStale": "Step {{n}} of {{total}} in the last run - changed since; the next run updates it"
   },
   "common": {
     "save": "Save",

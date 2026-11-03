@@ -365,7 +365,7 @@ fn the_stage_tap_places_once_and_reports_only_what_a_stage_stream_can_know() {
     let planned = vec![PlannedStage { node_id: "a".into(), label: "Extract".into(), component: None, kind: None, ordinal: 0 }];
     let mut tap = StageTap::new(ws, "r1".into(), planned);
     let now = chrono::Utc::now();
-    let started = crate::PipelineEvent::Started { total_stages: 1 };
+    let started = crate::PipelineEvent::Started { total_stages: 1, plan: Vec::new(), skipped: Vec::new() };
     assert!(matches!(tap.translate(&started, now), Some(MetricsEvent::StagesPlanned { stages, .. }) if stages.len() == 1));
     assert!(tap.translate(&started, now).is_none(), "placed once per run");
 
@@ -377,6 +377,7 @@ fn the_stage_tap_places_once_and_reports_only_what_a_stage_stream_can_know() {
         duration_ms: 7,
         error,
         sql: None,
+        branch_of: None,
     };
     let status_of = |e: Option<MetricsEvent>| match e {
         Some(MetricsEvent::StageFinished { status, .. }) => Some(status),
@@ -394,5 +395,7 @@ fn the_stage_tap_places_once_and_reports_only_what_a_stage_stream_can_know() {
     }
     let start = crate::PipelineEvent::StageStarted { node_id: "a".into(), label: "a".into(), kind: "view".into() };
     assert!(matches!(tap.translate(&start, now), Some(MetricsEvent::StageStarted { at, .. }) if at == now.to_rfc3339()));
+    let skipped = crate::PipelineEvent::StageSkipped { node_id: "a".into(), label: "a".into(), reason: "budget_stop".into() };
+    assert_eq!(status_of(tap.translate(&skipped, now)), Some(NodeStatus::Skipped));
     assert!(tap.translate(&crate::PipelineEvent::Cancelled, now).is_none(), "the ledger reports how a run ended");
 }

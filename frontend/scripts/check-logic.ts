@@ -24,6 +24,9 @@ import { validatePipeline } from '../src/validation';
 import { deriveNodeSubtitle } from '../src/node-subtitle';
 import { resolveOutputSchema } from '../src/schema-resolve';
 import { layoutByDependency, NODE_WIDTH, nodesOverlap } from '../src/canvas/layout';
+import { appendEvent, consoleLines, consoleText, runPlan, TIMELINE_LIMIT, type TimelineEntry } from '../src/run-timeline';
+import type { PipelineEvent } from '../src/tauri-bridge';
+import { nodePrints, nodeSteps, snapshotSteps } from '../src/canvas/run-steps';
 import { lockReason } from '../src/auth/idle';
 import { pickWorkspace, withWorkspace } from '../src/auth/user-workspace';
 import { authErrorMessage } from '../src/auth/auth-api';
@@ -1673,6 +1676,124 @@ function context(name: string, vars: Record<string, string>): RepoItem {
         empty.some(i => i.code === 'missing-required-field' && i.message.includes('Columns')),
         JSON.stringify(empty),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Run timeline. The Console reads the run's real order from the plan the engine
+// streams first, numbers each stage from it, and says what was skipped and
+// what an error left undone - none of which the per-node result can tell.
+// ---------------------------------------------------------------------------
+{
+    const tt = (k: string, o?: Record<string, unknown>) => (o ? `${k} ${JSON.stringify(o)}` : k);
+    const plan = ['a', 'b', 'c'].map((id, i) => ({ step: i + 1, node_id: id, label: id.toUpperCase(), component: 'xf.filter', kind: 'view' as const }));
+    const events: PipelineEvent[] = [
+        { type: 'log', node_id: 'b', level: 'warn', message: 'unread property' },
+        { type: 'started', total_stages: 3, plan, skipped: [{ node_id: 'z', label: 'Z', reason: 'disabled' }] },
+        { type: 'stage_started', node_id: 'a', label: 'A', kind: 'view' },
+        { type: 'stage_finished', node_id: 'a', kind: 'view', status: 'ok', rows: 1200, duration_ms: 5 },
+        { type: 'stage_finished', node_id: 'br', kind: 'sink', status: 'ok', rows: 2, duration_ms: 1, branch_of: 'a' },
+        { type: 'stage_started', node_id: 'b', label: 'B', kind: 'view' },
+        { type: 'stage_finished', node_id: 'b', kind: 'view', status: 'error', duration_ms: 3, error: 'boom', sql: 'SELECT 1' },
+        { type: 'finished', status: 'error', duration_ms: 20, not_run: ['c'] },
+    ];
+    let tl: TimelineEntry[] | undefined;
+    events.forEach((e, i) => (tl = appendEvent(tl, e, 1000 + i * 10)));
+    const timeline = tl!;
+    check('timeline: a run opens with its plan', timeline[0].t === 'run-start', JSON.stringify(timeline[0]));
+    check(
+        'timeline: a warning sent before the run started stays with the run',
+        timeline[1].t === 'log' && timeline[1].message === 'unread property',
+        JSON.stringify(timeline.slice(0, 2)),
+    );
+    const rp = runPlan(timeline)!;
+    check('timeline: the plan numbers each stage', rp.steps.get('a') === 1 && rp.steps.get('c') === 3 && rp.total === 3, JSON.stringify([...rp.steps]));
+    check('timeline: what the error left undone is known', rp.notRun.join() === 'c', JSON.stringify(rp.notRun));
+    check('timeline: no plan without a start', runPlan([]) === null && runPlan(undefined) === null, 'a plan was invented');
+
+    const lines = consoleLines(timeline, { a: 'Read A' }, tt);
+    const byNode = (id: string, symbol: string) => lines.find(l => l.nodeId === id && l.symbol === symbol);
+    check('console: a stage start carries its step of the total', byNode('a', '▶')?.step === '[1/3]', JSON.stringify(lines));
+    check('console: the canvas name is preferred to the engine label', byNode('a', '▶')?.text === 'Read A', JSON.stringify(byNode('a', '▶')));
+    check('console: a finished stage says its rows', !!byNode('a', '✓')?.text.includes('"formatted":"1,200"'), JSON.stringify(byNode('a', '✓')));
+    check(
+        'console: a node run by a parallelize branch has no step and names its branch',
+        byNode('br', '✓')?.step === '[ - ]' && !!byNode('br', '✓')?.text.includes('bottom.trace.inBranch'),
+        JSON.stringify(byNode('br', '✓')),
+    );
+    const failed = byNode('b', '✗');
+    check('console: a failure keeps its error and SQL', failed?.level === 'error' && failed.error === 'boom' && failed.sql === 'SELECT 1', JSON.stringify(failed));
+    check(
+        'console: a disabled node is listed as skipped',
+        lines.some(l => l.nodeId === 'z' && l.symbol === '⏭' && l.text.startsWith('bottom.trace.skippedDisabled')),
+        JSON.stringify(lines),
+    );
+    check(
+        'console: the stages never reached are named at the end',
+        !!lines[lines.length - 1].text.includes('bottom.trace.notRun') && lines[lines.length - 1].text.includes('"labels":"c"'),
+        JSON.stringify(lines[lines.length - 1]),
+    );
+    check('console: times count from the run start', byNode('a', '▶')?.offset === 10, JSON.stringify(byNode('a', '▶')));
+    const text = consoleText(lines);
+    check('console: the copied log keeps step, symbol and SQL', text.includes('+0.010s [1/3] ▶ Read A') && text.includes('\n    SELECT 1'), text);
+
+    let long = appendEvent(undefined, { type: 'started', total_stages: 0 }, 0);
+    for (let i = 0; i < TIMELINE_LIMIT + 10; i++) long = appendEvent(long, { type: 'log', node_id: '', level: 'info', message: String(i) }, i);
+    const head = long[0];
+    check(
+        'timeline: a long run keeps its start and the newest lines, and says how many it dropped',
+        long.length === TIMELINE_LIMIT && head.t === 'run-start' && head.omitted === 11 && long[long.length - 1].t === 'log',
+        `${long.length} ${JSON.stringify(head)}`,
+    );
+    const again = appendEvent(timeline, { type: 'started', total_stages: 1 }, 5000);
+    check('timeline: the next run starts clean', again.length === 1 && again[0].t === 'run-start', JSON.stringify(again));
+    const filled = appendEvent(timeline, { type: 'stage_finished', node_id: 'a', kind: 'view', status: 'ok', rows: 7, duration_ms: 5 }, 9999);
+    const aEnds = filled.filter(e => e.t === 'stage-end' && e.nodeId === 'a');
+    check(
+        'timeline: a row count filled in later updates the stage line in place',
+        filled.length === timeline.length && aEnds.length === 1 && aEnds[0].t === 'stage-end' && aEnds[0].rows === 7 && aEnds[0].at === 1030,
+        JSON.stringify(aEnds),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Step numbers on the nodes. They come from the last finished run and stay put
+// through edits; only the next run replaces them. A node changed since that
+// run keeps its number but says it is stale.
+// ---------------------------------------------------------------------------
+{
+    const plan = ['s', 'f', 'k'].map((id, i) => ({ step: i + 1, node_id: id, label: id, component: 'xf.filter', kind: 'view' as const }));
+    let tl: TimelineEntry[] | undefined;
+    const evs: PipelineEvent[] = [
+        { type: 'started', total_stages: 3, plan },
+        { type: 'stage_started', node_id: 's', label: 's', kind: 'view' },
+        { type: 'stage_finished', node_id: 's', kind: 'view', status: 'ok', duration_ms: 1 },
+        { type: 'stage_started', node_id: 'f', label: 'f', kind: 'view' },
+        { type: 'stage_finished', node_id: 'f', kind: 'view', status: 'error', duration_ms: 1, error: 'x' },
+        { type: 'stage_finished', node_id: 'br', kind: 'sink', status: 'ok', duration_ms: 1, branch_of: 's' },
+        { type: 'finished', status: 'error', duration_ms: 3, not_run: ['k'] },
+    ];
+    evs.forEach((e, i) => (tl = appendEvent(tl, e, i)));
+    const ns = [node('s', 'src.csv', { path: 'a.csv' }), node('f', 'xf.filter', { predicate: 'id > 1' }), node('k', 'snk.csv', {}), node('br', 'snk.csv', {})];
+    const es: Edge[] = [{ id: 'e1', source: 's', target: 'f' }, { id: 'e2', source: 'f', target: 'k' }];
+    const snap = snapshotSteps(tl, 0, nodePrints(ns, es));
+    const badges = nodeSteps(snap, ns, es);
+    check(
+        'steps: only nodes the run started are numbered, from the plan',
+        JSON.stringify(badges) === JSON.stringify({ s: { step: 1, total: 3, stale: false }, f: { step: 2, total: 3, stale: false } }),
+        JSON.stringify(badges),
+    );
+    const tidied = ns.map(n => (n.id === 's' ? { ...n, position: { x: 999, y: 5 }, data: { ...n.data, label: 'Renamed', schema: [], sampleRows: [] } } : n));
+    check('steps: moving, renaming or a run writing back a schema is not a change', nodeSteps(snap, tidied, es).s?.stale === false, JSON.stringify(nodeSteps(snap, tidied, es)));
+    const edited = ns.map(n => (n.id === 'f' ? { ...n, data: { ...n.data, properties: { predicate: 'id > 2' } } } : n));
+    const after = nodeSteps(snap, edited, es);
+    check('steps: an edited node keeps its number and is marked stale', after.f?.step === 2 && after.f.stale && !after.s.stale, JSON.stringify(after));
+    const rewired = nodeSteps(snap, ns, [{ id: 'e9', source: 'k', target: 'f' }]);
+    check('steps: rewiring what feeds a node marks it stale', rewired.f?.stale === true && rewired.s?.stale === false, JSON.stringify(rewired));
+    const added = nodeSteps(snap, [...ns, node('new', 'xf.filter', {})], es);
+    check('steps: a node added after the run has no number', !('new' in added) && added.f?.step === 2, JSON.stringify(added));
+    const removed = nodeSteps(snap, ns.filter(n => n.id !== 's'), es);
+    check('steps: deleting a node leaves the others their numbers', !('s' in removed) && removed.f?.step === 2, JSON.stringify(removed));
+    check('steps: a run that executed nothing leaves no numbers', Object.keys(snapshotSteps(undefined, 0, {}).steps).length === 0, 'numbers invented');
 }
 
 if (failures.length) {

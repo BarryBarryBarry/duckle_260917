@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
     AlertCircle,
     Bot,
+    Check,
     CheckCircle2,
     ChevronDown,
     ChevronUp,
+    Copy,
     PlayCircle,
     Terminal,
     X,
@@ -13,6 +15,7 @@ import {
 import type { RunResult } from '../tauri-bridge';
 import type { ValidationResult } from '../validation';
 import { friendlyError } from '../errors';
+import { consoleLines, consoleText, formatOffset, runPlan, stepTag, type RunPlan } from '../run-timeline';
 
 type TabId = 'problems' | 'output' | 'console';
 
@@ -306,6 +309,8 @@ function OutputTab({
     }
 
     const totals = runStats(runResult);
+    const plan = runPlan(runResult.timeline);
+    const leftOut = leftOutRows(plan, runResult, t);
     // Show only the pipeline's terminal results, not a stacked table per
     // intermediate stage. Fall back to all previews if we can't tell.
     const terminalSet = new Set(terminalNodeIds);
@@ -338,9 +343,16 @@ function OutputTab({
                     <div className={'bottom-output-row status-' + st.status} key={nodeId}>
                         <span className="bottom-output-dot" />
                         <span className="bottom-output-label">
+                            {plan ? (
+                                <span className="bottom-output-step">
+                                    {stepTag(plan.steps.get(nodeId), plan.total)}
+                                </span>
+                            ) : null}
                             {nodeLabels[nodeId] ?? nodeId}
                         </span>
-                        <span className="bottom-output-kind">{st.kind ?? ''}</span>
+                        <span className="bottom-output-kind">
+                            {st.status === 'skipped' ? t('bottom.trace.reasonSkipped') : (st.kind ?? '')}
+                        </span>
                         {st.rows !== undefined ? (
                             <span className="bottom-output-rows-stat">
                                 {st.rows.toLocaleString()} rows
@@ -356,6 +368,20 @@ function OutputTab({
                                 {friendlyError(st.error)}
                             </span>
                         ) : null}
+                    </div>
+                ))}
+                {leftOut.map(r => (
+                    <div className="bottom-output-row status-skipped" key={'left-' + r.nodeId}>
+                        <span className="bottom-output-dot" />
+                        <span className="bottom-output-label">
+                            {r.step !== undefined && plan ? (
+                                <span className="bottom-output-step">{stepTag(r.step, plan.total)}</span>
+                            ) : null}
+                            {nodeLabels[r.nodeId] ?? r.label}
+                        </span>
+                        <span className="bottom-output-kind">{r.reason}</span>
+                        <span className="bottom-output-rows-stat" />
+                        <span className="bottom-output-time" />
                     </div>
                 ))}
             </div>
@@ -442,6 +468,26 @@ function ConsoleTab({
     nodeLabels: Record<string, string>;
 }) {
     const { t } = useTranslation();
+    const timeline = runResult?.timeline;
+    const lines = useMemo(
+        () => (timeline && timeline.length > 0 ? consoleLines(timeline, nodeLabels, t) : null),
+        [timeline, nodeLabels, t],
+    );
+    // Follow the run as it streams, unless the reader has scrolled up to look
+    // at something; coming back to the bottom follows again.
+    const scrollRef = useRef<HTMLDivElement | null>(null);
+    const following = useRef(true);
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (el && following.current) el.scrollTop = el.scrollHeight;
+    }, [lines]);
+    const [copied, setCopied] = useState(false);
+    useEffect(() => {
+        if (!copied) return;
+        const id = window.setTimeout(() => setCopied(false), 1500);
+        return () => window.clearTimeout(id);
+    }, [copied]);
+
     if (!runResult) {
         return (
             <div className="bottom-empty bottom-console">
@@ -455,6 +501,63 @@ function ConsoleTab({
             </div>
         );
     }
+    if (!lines) return <ConsoleSummary runResult={runResult} nodeLabels={nodeLabels} />;
+
+    const copy = () => {
+        void navigator.clipboard?.writeText(consoleText(lines)).then(() => setCopied(true));
+    };
+    return (
+        <div
+            className="bottom-console bottom-trace"
+            ref={scrollRef}
+            onScroll={e => {
+                const el = e.currentTarget;
+                following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+            }}
+        >
+            <div className="bottom-trace-toolbar">
+                <button type="button" className="bottom-trace-copy" onClick={copy}>
+                    {copied ? <Check size={12} /> : <Copy size={12} />}
+                    {copied ? t('bottom.trace.copied') : t('bottom.trace.copy')}
+                </button>
+            </div>
+            {lines.map(l => (
+                <div className={'bottom-trace-line level-' + l.level} key={l.key}>
+                    <span className="bottom-trace-time" title={absoluteTime(l.at)}>
+                        {formatOffset(l.offset)}
+                    </span>
+                    <span className="bottom-trace-step">{l.step}</span>
+                    <span className="bottom-trace-symbol">{l.symbol}</span>
+                    <span className="bottom-trace-text">
+                        {l.text}
+                        {l.error ? <span className="bottom-trace-error"> · {friendlyError(l.error)}</span> : null}
+                        {l.sql ? (
+                            <details className="bottom-trace-sql">
+                                <summary>{t('bottom.trace.failingSql')}</summary>
+                                <pre>{l.sql}</pre>
+                            </details>
+                        ) : null}
+                    </span>
+                </div>
+            ))}
+        </div>
+    );
+}
+
+function absoluteTime(at: number): string {
+    const d = new Date(at);
+    return d.toLocaleTimeString() + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+
+/** The per-node summary, for a result that carries no timeline. */
+function ConsoleSummary({
+    runResult,
+    nodeLabels,
+}: {
+    runResult: RunResult;
+    nodeLabels: Record<string, string>;
+}) {
+    const { t } = useTranslation();
     const lines = Object.entries(runResult.nodes).map(([id, st]) => {
         const label = nodeLabels[id] ?? id;
         const tag = st.status === 'ok' ? 'ok' : st.status;
@@ -489,6 +592,28 @@ function ConsoleTab({
             ))}
         </div>
     );
+}
+
+/** Planned or pipeline nodes the run did not execute and has no row for. */
+function leftOutRows(
+    plan: RunPlan | null,
+    runResult: RunResult,
+    t: (key: string) => string,
+): { nodeId: string; label: string; step?: number; reason: string }[] {
+    if (!plan) return [];
+    const reasons: Record<string, string> = {
+        disabled: t('bottom.trace.reasonDisabled'),
+        retry_reused: t('bottom.trace.reasonReused'),
+    };
+    const labelOf = new Map(plan.plan.map(s => [s.node_id, s.label]));
+    return [
+        ...plan.notRun
+            .filter(id => !(id in runResult.nodes))
+            .map(id => ({ nodeId: id, label: labelOf.get(id) ?? id, step: plan.steps.get(id), reason: t('bottom.trace.reasonNotRun') })),
+        ...plan.skipped
+            .filter(s => !(s.node_id in runResult.nodes))
+            .map(s => ({ nodeId: s.node_id, label: s.label, reason: reasons[s.reason] ?? s.reason })),
+    ];
 }
 
 /** A run the Agent can be asked about: it failed, or one of its nodes did. */

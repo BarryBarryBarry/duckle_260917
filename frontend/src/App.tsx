@@ -61,6 +61,7 @@ import HomeLauncher from './workflow-ui/HomeLauncher';
 import { copyText, saveTextFile } from './tauri-io';
 import { writeClipboard, readClipboard, instantiateClipboard } from './clipboard';
 import { RunStatusContext } from './canvas/run-status-context';
+import { nodePrints, nodeSteps, RunStepContext, snapshotSteps, type StepSnapshot } from './canvas/run-steps';
 import {
     layoutByDependency,
     normalizeLayoutDirection,
@@ -71,6 +72,7 @@ import { loadRecentComponents, recordRecentComponent } from './recent-components
 import { buildRunDiagnosis, type AgentRequest } from './agent-diagnosis';
 import { friendlyError } from './errors';
 import { resolveForRun, discoverParams, builtinVars, buildContextVars, pipelineRunFields } from './run-resolve';
+import { appendEvent } from './run-timeline';
 import type { ParamSpec } from './run-resolve';
 import { livePreviewable } from './live-preview';
 import WorkspacePickerModal from './workflow-ui/WorkspacePickerModal';
@@ -1333,9 +1335,47 @@ export default function App() {
     const [runResultFor, setRunResultFor] = useState<string | null>(null);
     const shownRunResult = runResultFor === activeJobId ? runResult : null;
 
+    // Each pipeline's step numbers from its last finished run. Kept per
+    // pipeline, so running another one does not wipe them, and frozen until
+    // that pipeline runs again.
+    const [stepSnapshots, setStepSnapshots] = useState<Record<string, StepSnapshot>>({});
+    // What the nodes were when the run began, to tell later edits apart.
+    const runStartPrints = useRef<{ pipelineId: string; prints: Record<string, string>; preview: boolean } | null>(null);
+    // A Live-mode preview runs on every edit; letting it renumber would make
+    // the numbers follow edits, which is what they must not do.
+    const livePreviewRun = useRef(false);
+    useEffect(() => {
+        if (!isRunning || !runResultFor) return;
+        runStartPrints.current = { pipelineId: runResultFor, prints: nodePrints(nodes, edges), preview: livePreviewRun.current };
+        livePreviewRun.current = false;
+        // Only the moment a run starts matters; later edits must not move the baseline.
+    }, [isRunning, runResultFor]);
+    const snapshotFor = useRef<unknown>(null);
+    useEffect(() => {
+        if (isRunning || !runResult || !runResultFor) return;
+        const start = runResult.timeline?.[0];
+        const token = start?.t === 'run-start' ? start.at : runResult;
+        if (snapshotFor.current === token) return;
+        snapshotFor.current = token;
+        if (runStartPrints.current?.preview) return;
+        const base = runStartPrints.current?.pipelineId === runResultFor ? runStartPrints.current.prints : {};
+        const snap = snapshotSteps(runResult.timeline, typeof token === 'number' ? token : Date.now(), base);
+        setStepSnapshots(prev => ({ ...prev, [runResultFor]: snap }));
+    }, [isRunning, runResult, runResultFor]);
+    const stepBadges = useMemo(
+        () => nodeSteps(stepSnapshots[activeJobId], nodes, edges),
+        [stepSnapshots, activeJobId, nodes, edges],
+    );
+    // A new object on every drag would re-render every node; only hand out a
+    // new one when a badge actually changed.
+    const stepBadgesKey = JSON.stringify(stepBadges);
+    const shownStepBadges = useMemo(() => stepBadges, [stepBadgesKey]);
+
     const handleEvent = useCallback(
         (evt: PipelineEvent) => {
+            const at = Date.now();
             setRunResult(prev => {
+                const timeline = appendEvent(prev?.timeline, evt, at);
                 const next: RunResult = prev
                     ? { ...prev, nodes: { ...prev.nodes } }
                     : {
@@ -1344,9 +1384,10 @@ export default function App() {
                           nodes: {},
                           preview: [],
                       };
+                next.timeline = timeline;
                 switch (evt.type) {
                     case 'started':
-                        return { status: 'ok', duration_ms: 0, nodes: {}, preview: [], messages: [] };
+                        return { status: 'ok', duration_ms: 0, nodes: {}, preview: [], messages: [], timeline };
                     case 'stage_started':
                         next.nodes[evt.node_id] = { status: 'running', kind: evt.kind };
                         break;
@@ -1358,6 +1399,9 @@ export default function App() {
                             duration_ms: evt.duration_ms,
                             error: evt.error,
                         };
+                        break;
+                    case 'stage_skipped':
+                        next.nodes[evt.node_id] = { status: 'skipped' };
                         break;
                     case 'cancelled':
                         next.status = 'cancelled';
@@ -1412,10 +1456,10 @@ export default function App() {
                     for (const id of Object.keys(result.nodes)) {
                         if (!(id in orderedNodes)) orderedNodes[id] = result.nodes[id];
                     }
-                    const ordered = { ...result, nodes: orderedNodes };
-                    return prev?.messages?.length
-                        ? { ...ordered, messages: prev.messages }
-                        : ordered;
+                    const ordered: RunResult = { ...result, nodes: orderedNodes };
+                    if (prev?.messages?.length) ordered.messages = prev.messages;
+                    if (prev?.timeline?.length) ordered.timeline = prev.timeline;
+                    return ordered;
                 });
                 // Merge the previews back into each node's data so the
                 // Preview tab and the inline schema badge stay in sync
@@ -1577,6 +1621,7 @@ export default function App() {
             if (validation.errorCount > 0) return;
             if (isRunningRef.current) return;
             isRunningRef.current = true;
+            livePreviewRun.current = true;
             setIsRunning(true);
             setRunResult(null);
             setRunResultFor(activeJobId);
@@ -2580,6 +2625,7 @@ export default function App() {
 
     return (
         <RunStatusContext.Provider value={shownRunResult?.nodes ?? {}}>
+        <RunStepContext.Provider value={shownStepBadges}>
         <div className="app">
             <WindowResizeHandles />
             <header
@@ -3317,6 +3363,7 @@ export default function App() {
                 />
             ) : null}
         </div>
+        </RunStepContext.Provider>
         </RunStatusContext.Provider>
     );
 }

@@ -16,6 +16,7 @@ import { connectionDescription, connectionLabel, metaFor } from '../connection-t
 import type { PortDef } from '../../workflow-ui/fields/types';
 import { resolveOutputSchema } from '../../schema-resolve';
 import { useRunStatus } from '../run-status-context';
+import { useRunStep } from '../run-steps';
 import { useLayoutDirection } from '../layout-direction-context';
 import { deriveNodeSubtitle } from '../../node-subtitle';
 import ComponentIcon from '../../workflow-ui/ComponentIcon';
@@ -94,6 +95,7 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
     }, [manifest, data.properties]);
 
     const runStatus = useRunStatus(id);
+    const runStep = useRunStep(id);
 
     const classes =
         'node node-' + kind +
@@ -107,7 +109,7 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
             <div className="node-header">
                 <div className="node-header-row">
                     <div className="node-kind">{t(`node.${kind}`, { defaultValue: kind })}</div>
-                    {runStatus ? <RunStatusBadge status={runStatus.status} /> : null}
+                    {runStatus && runStatus.status !== 'skipped' ? <RunStatusBadge status={runStatus.status} /> : null}
                     {needsConfig ? (
                         <span
                             className="node-needs-config"
@@ -118,12 +120,25 @@ export default function DuckleNode({ id, data, selected, type }: NodeProps<Duckl
                     ) : null}
                 </div>
                 <div className="node-label-row">
-                    <ComponentIcon
-                        componentId={data.componentId ?? ''}
-                        kind={kind as NodeKind}
-                        size={16}
-                        className="node-icon"
-                    />
+                    <span className="node-icon-wrap">
+                        <ComponentIcon
+                            componentId={data.componentId ?? ''}
+                            kind={kind as NodeKind}
+                            size={16}
+                            className="node-icon"
+                        />
+                        {runStep ? (
+                            <span
+                                className={'node-seq' + (runStep.stale ? ' is-stale' : '')}
+                                title={t(runStep.stale ? 'node.runStepStale' : 'node.runStep', {
+                                    n: runStep.step,
+                                    total: runStep.total,
+                                })}
+                            >
+                                {runStep.step}
+                            </span>
+                        ) : null}
+                    </span>
                     <div className="node-label" title={data.label}>{data.label}</div>
                 </div>
                 {(() => {

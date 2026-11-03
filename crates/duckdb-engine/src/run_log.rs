@@ -39,6 +39,9 @@ pub(crate) struct RunLog {
     file: Option<File>,
     run_id: String,
     nodes: HashMap<String, NodeMeta>,
+    /// node id -> 1-based step, from the run's `Started` plan.
+    steps: HashMap<String, u32>,
+    total: u32,
 }
 
 impl RunLog {
@@ -65,7 +68,7 @@ impl RunLog {
                     .open(dir.join(LOG_FILE))
                     .ok()
             });
-        RunLog { file, run_id, nodes }
+        RunLog { file, run_id, nodes, steps: HashMap::new(), total: 0 }
     }
 
     /// Whether this logger is actually writing (env configured).
@@ -77,6 +80,10 @@ impl RunLog {
     pub(crate) fn record(&mut self, event: &PipelineEvent) {
         if self.file.is_none() {
             return;
+        }
+        if let PipelineEvent::Started { total_stages, plan, .. } = event {
+            self.total = *total_stages;
+            self.steps = plan.iter().map(|s| (s.node_id.clone(), s.step)).collect();
         }
         let mut obj = self.event_fields(event);
         obj.insert("ts".into(), Value::String(now_rfc3339()));
@@ -97,10 +104,16 @@ impl RunLog {
             m.insert(k.to_string(), v);
         };
         match event {
-            PipelineEvent::Started { total_stages } => {
+            PipelineEvent::Started { total_stages, plan, skipped } => {
                 set("event", json!("run_started"));
                 set("level", json!("info"));
                 set("total_stages", json!(total_stages));
+                if !plan.is_empty() {
+                    set("plan", json!(plan));
+                }
+                if !skipped.is_empty() {
+                    set("skipped", json!(skipped));
+                }
             }
             PipelineEvent::StageStarted { node_id, label, kind } => {
                 set("event", json!("stage_started"));
@@ -109,9 +122,10 @@ impl RunLog {
                 set("label", json!(label));
                 set("kind", json!(kind));
                 self.enrich(&mut m, node_id);
+                self.step_fields(&mut m, node_id);
             }
             PipelineEvent::StageFinished {
-                node_id, kind, status, rows, duration_ms, error, sql,
+                node_id, kind, status, rows, duration_ms, error, sql, branch_of,
             } => {
                 set("event", json!("stage_finished"));
                 set("level", json!(if status == "error" { "error" } else { "info" }));
@@ -132,7 +146,20 @@ impl RunLog {
                 if let Some(s) = sql {
                     set("sql", json!(s));
                 }
+                if let Some(b) = branch_of {
+                    set("branch_of", json!(b));
+                }
                 self.enrich(&mut m, node_id);
+                self.step_fields(&mut m, node_id);
+            }
+            PipelineEvent::StageSkipped { node_id, label, reason } => {
+                set("event", json!("stage_skipped"));
+                set("level", json!("warn"));
+                set("node_id", json!(node_id));
+                set("label", json!(label));
+                set("reason", json!(reason));
+                self.enrich(&mut m, node_id);
+                self.step_fields(&mut m, node_id);
             }
             PipelineEvent::Cancelled => {
                 set("event", json!("cancelled"));
@@ -154,14 +181,25 @@ impl RunLog {
                 set("detail", json!(detail));
                 self.enrich(&mut m, node_id);
             }
-            PipelineEvent::Finished { status, duration_ms } => {
+            PipelineEvent::Finished { status, duration_ms, not_run } => {
                 set("event", json!("run_finished"));
                 set("level", json!(if status == "error" { "error" } else { "info" }));
                 set("status", json!(status));
                 set("duration_ms", json!(duration_ms));
+                if !not_run.is_empty() {
+                    set("not_run", json!(not_run));
+                }
             }
         }
         m
+    }
+
+    /// Add the node's place in the run's plan: `step` of `total`. `step` is
+    /// null for a node outside the plan, e.g. one run by a ctl.parallelize
+    /// branch.
+    fn step_fields(&self, m: &mut Map<String, Value>, node_id: &str) {
+        m.insert("step".into(), json!(self.steps.get(node_id)));
+        m.insert("total".into(), json!(self.total));
     }
 
     /// Add the component id + label for a node, when known. `component` is

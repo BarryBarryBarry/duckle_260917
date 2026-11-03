@@ -1234,6 +1234,39 @@ textarea:focus-visible {
     opacity: 0.92;
 }
 
+.node-icon-wrap {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+}
+
+/* The step this node ran at in the pipeline's last run. */
+.node-seq {
+    position: absolute;
+    top: -8px;
+    left: -9px;
+    min-width: 15px;
+    height: 15px;
+    padding: 0 3px;
+    box-sizing: border-box;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 15px;
+    text-align: center;
+    box-shadow: 0 0 0 1.5px var(--bg-2);
+    font-variant-numeric: tabular-nums;
+    pointer-events: auto;
+}
+
+/* Changed since that run: the number stands until the next run. */
+.node-seq.is-stale {
+    background: var(--text-3);
+    opacity: 0.6;
+}
+
 .node-subtitle {
     margin-top: 2px;
     color: var(--text-3);
@@ -3132,6 +3165,106 @@ select.schema-input {
 
 .bottom-console-msg {
     color: var(--text-2);
+}
+
+/* Console run timeline: one line per engine event. */
+/* Fills the panel so it scrolls itself and can follow the run. */
+.bottom-trace {
+    height: 100%;
+    box-sizing: border-box;
+    padding-top: 0;
+}
+
+.bottom-trace-toolbar {
+    position: sticky;
+    top: 0;
+    display: flex;
+    justify-content: flex-end;
+    padding: 6px 0 4px;
+    background: var(--bg-0);
+    z-index: 1;
+}
+
+.bottom-trace-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 0.7692rem;
+    cursor: pointer;
+}
+
+.bottom-trace-copy:hover {
+    color: var(--text-1);
+    border-color: var(--text-3);
+}
+
+.bottom-trace-line {
+    display: grid;
+    grid-template-columns: 72px 56px 14px 1fr;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 0.8462rem;
+    padding: 2px 0;
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+}
+
+.bottom-trace-time,
+.bottom-trace-step {
+    color: var(--text-3);
+    white-space: nowrap;
+}
+
+.bottom-trace-symbol {
+    text-align: center;
+}
+
+.bottom-trace-text {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.bottom-trace-line.level-ok .bottom-trace-symbol {
+    color: var(--success);
+}
+
+.bottom-trace-line.level-error,
+.bottom-trace-line.level-error .bottom-trace-symbol {
+    color: var(--danger);
+}
+
+.bottom-trace-line.level-warn .bottom-trace-symbol,
+.bottom-trace-line.level-warn .bottom-trace-text {
+    color: var(--warn);
+}
+
+.bottom-trace-line.level-muted .bottom-trace-text,
+.bottom-trace-line.level-muted .bottom-trace-symbol {
+    color: var(--text-3);
+}
+
+.bottom-trace-error {
+    color: var(--danger);
+}
+
+.bottom-trace-sql summary {
+    cursor: pointer;
+    color: var(--text-3);
+}
+
+.bottom-trace-sql pre {
+    margin: 4px 0;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--bg-2);
+    color: var(--text-1);
+    white-space: pre-wrap;
 }
 
 /* Status bar -------------------------------------------------------------- */
@@ -6214,6 +6347,22 @@ select.modal-select:focus {
 
 .bottom-output-row.status-error .bottom-output-dot {
     background: var(--danger);
+}
+
+.bottom-output-row.status-skipped .bottom-output-dot {
+    background: var(--text-3);
+}
+
+.bottom-output-row.status-skipped .bottom-output-label {
+    color: var(--text-3);
+    font-weight: 500;
+}
+
+.bottom-output-step {
+    margin-right: 8px;
+    color: var(--text-3);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
 }
 
 .bottom-ask-agent {
