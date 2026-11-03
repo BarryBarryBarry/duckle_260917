@@ -23,7 +23,8 @@ import type { RunResult } from '../tauri-bridge';
 type TabId = 'canvas' | 'plan' | 'run' | 'history' | 'tests';
 
 // Tab labels resolved per-render via useTranslation; we keep just the IDs here.
-const TAB_IDS: TabId[] = ['canvas', 'plan', 'run', 'history', 'tests'];
+// 'tests' is hidden for now; add it back here to re-enable the Tests tab.
+const TAB_IDS: TabId[] = ['canvas', 'plan', 'run', 'history'];
 
 // Newer tabs are not yet in every locale file, so each has a readable fallback.
 const TAB_FALLBACK: Partial<Record<TabId, string>> = { history: 'History', tests: 'Tests' };

@@ -36,7 +36,6 @@ import {
     Sparkles,
     Trash2,
     Undo2,
-    FlaskConical,
 } from 'lucide-react';
 import DuckleNode from './nodes/DuckleNode';
 import DuckleEdge from './DuckleEdge';
@@ -505,13 +504,6 @@ function CanvasInner({
                     icon: <Play size={ICON_SIZE} />,
                     onClick: () => onNodeAction('run-from-here', node.id),
                     disabled: isDisabled,
-                },
-                {
-                    kind: 'item',
-                    key: 'create-test',
-                    label: t('canvas.menu.createTest'),
-                    icon: <FlaskConical size={ICON_SIZE} />,
-                    onClick: () => onNodeAction('create-test', node.id),
                 },
                 {
                     kind: 'item',
